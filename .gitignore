@@ -1,0 +1,3 @@
+# data files — regenerate via REFRESH_PARQET_DATA.md / update_data_series.py, never commit
+*.csv
+data_series/
