@@ -96,14 +96,18 @@
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    padding: 32px 20px 64px;
+    padding: 20px 20px 64px;
     background: var(--surface-0);
     color: var(--text-primary);
     font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
   .wrap { width: 100%; max-width: 1560px; margin: 0 auto; }   /* 1040 → +50%, capped by the viewport */
-  h1 { font-size: 1.45rem; font-weight: 600; margin: 0 0 20px; letter-spacing: -0.01em; }
+  .verttitle {
+    position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
+    writing-mode: vertical-rl; font-size: 3.45rem; font-weight: 600; letter-spacing: 0.1em;
+    color: var(--text-muted); pointer-events: none; user-select: none; z-index: 1;
+  }
   .card {
     background: var(--surface-1);
     border: 1px solid var(--border);
@@ -114,14 +118,11 @@
   .totals { display: flex; flex-wrap: wrap; gap: 28px; }
   .tile .k { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
   .tile .v { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #totalsCard { position: relative; }
+  .curtile { cursor: help; }
+  .curtile .k { text-decoration: underline dotted; text-underline-offset: 3px; }
 
-  .bypf { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
-  .bypf .p { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--text-secondary); }
-  .bypf .toggle { margin-left: auto; display: flex; align-items: center; gap: 7px; cursor: pointer;
-                  user-select: none; }
-  .bypf .toggle input { accent-color: var(--series-1); margin: 0; cursor: pointer; }
-  .bypf .asof { color: var(--text-muted); }
-  .bypf .p b { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .datastamp { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
 
   .chartwrap { position: relative; overflow: visible; }
   .chartbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: -4px 0 4px; }
@@ -136,6 +137,17 @@
     color: var(--text-secondary); cursor: pointer; width: 22px; height: 22px; line-height: 1;
     font-size: 0.78rem; padding: 0;
   }
+  .asof-step {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden;
+  }
+  .asof-step:focus-visible { outline: 2px solid var(--series-1); outline-offset: 1px; }
+  .asof-step button {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    color: var(--text-secondary); width: 22px; height: 22px; line-height: 1; font-size: 0.68rem;
+    padding: 0;
+  }
+  .asof-step button:first-child { border-right: 1px solid var(--border); }
+  .asof-step button:hover { color: var(--text-primary); }
   .asofnote { font-size: 0.8rem; color: var(--text-secondary); margin: 8px 0 -2px; }
   .asofnote b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
   .modeswitch { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none;
@@ -150,9 +162,11 @@
   .seg button + button { border-left: 1px solid var(--border); }
   .seg button.on { background: color-mix(in srgb, var(--text-primary) 8%, transparent); color: var(--text-primary); font-weight: 600; }
   .seg button:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
-  .maplbl { font-size: 9px; fill: #ffffff; font-weight: 600; paint-order: stroke; }
+  /* --map-scale is set on #pie when the as-of map shrinks (area = value, throughout this page);
+     dividing by it keeps label text at a constant on-screen size instead of shrinking with the tiles */
+  .maplbl { font-size: calc(9px / var(--map-scale, 1)); fill: #ffffff; font-weight: 600; paint-order: stroke; }
   .maplbl.dark { fill: #12120f; }        /* funds and cash */
-  .mapsub { font-size: 8px; font-variant-numeric: tabular-nums; }
+  .mapsub { font-size: calc(8px / var(--map-scale, 1)); font-variant-numeric: tabular-nums; }
   .closedhead { display: flex; justify-content: flex-start; align-items: baseline;
                 margin: 14px 0 2px; font-size: 0.82rem; color: var(--text-secondary); }
   .closedhead b { font-variant-numeric: tabular-nums; }
@@ -249,9 +263,8 @@
 </style>
 </head>
 <body>
+<div class="verttitle" aria-hidden="true">Portfolio</div>
 <div class="wrap">
-  <h1>Parqet portfolios</h1>
-
   <div id="loader" class="loader" hidden>
     <div>Could not read <code>parqet_all_port.csv</code> automatically (browsers block local file reads from <code>file://</code>).</div>
     <div>Pick the file, or serve the folder with <code>python3 -m http.server</code>.</div>
@@ -260,15 +273,15 @@
   </div>
 
   <div id="app" hidden>
-    <div class="card">
+    <div class="card" id="totalsCard">
       <div class="totals">
-        <div class="tile"><div class="k">Current value</div><div class="v" id="tCur">–</div></div>
+        <div class="tile curtile" id="tileCur"><div class="k">Current value</div><div class="v" id="tCur">–</div></div>
         <div class="tile"><div class="k" id="kPur">Invested (ex cash)</div><div class="v" id="tPur">–</div></div>
         <div class="tile"><div class="k" id="kGain">Unrealised gain</div><div class="v" id="tGain">–</div></div>
         <div class="tile"><div class="k">Realised pre-tax (incl. closed)</div><div class="v" id="tRel">–</div></div>
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
       </div>
-      <div class="bypf" id="bypf"></div>
+      <div class="tip" id="curTip"></div>
     </div>
 
     <div class="card chartwrap">
@@ -277,16 +290,26 @@
           <label class="asof">As of
             <input type="date" id="asOfDate" min="2019-01-01">
           </label>
+          <div class="asof-step" id="asOfStep" tabindex="0"
+               title="Scrub the date: ← → a day · ↑ ↓ a month · PgUp/PgDn a year (back on ←/↑/PgUp, forward on →/↓/PgDn)">
+            <button type="button" id="asOfDayBack" aria-label="Previous day">◀</button>
+            <button type="button" id="asOfDayFwd" aria-label="Next day">▶</button>
+          </div>
           <button type="button" id="asOfClear" class="asof-clear" title="Back to today" hidden>✕</button>
+          <span class="datastamp" id="dataStamp"></span>
         </div>
         <div class="chartbar-right">
+          <span id="showEuroSlot"></span>
           <label class="modeswitch"><input type="checkbox" id="relMode"><span>Performance vs. MSCI World</span></label>
           <div class="seg" role="group" aria-label="Chart type">
             <button type="button" id="btnMap" class="on" aria-pressed="true">Map</button>
             <button type="button" id="btnPie" aria-pressed="false">Pie</button>
+            <button type="button" id="btnPositions" aria-pressed="false">Positions</button>
+            <button type="button" id="btnTrades" aria-pressed="false">Trades</button>
           </div>
         </div>
       </div>
+      <div id="chartBody">
       <svg id="pie" viewBox="0 0 900 560" role="img" aria-label="Portfolio chart"></svg>
       <div class="asofnote" id="asOfNote" hidden></div>
       <div id="closedWrap" hidden>
@@ -329,8 +352,9 @@
         loss. Cash rows carry no realised band — Parqet books deposits and withdrawals there.
       </div>
       <div class="key" id="keyMap">
-        Each tile is one position, its <em>area</em> proportional to the position's <b>current value</b>,
-        grouped by portfolio. Colour is the <b>unrealised return</b> — green for a gain, red for a loss,
+        Each tile is one position, its <em>area</em> proportional to the position's <b>current value</b> —
+        which portfolio it sits in plays no part in the layout — hover a tile for that.
+        Colour is the <b>unrealised return</b> — green for a gain, red for a loss,
         grey at zero, saturating at +300% and −100% along a hyperbolic curve — it spends its contrast where
         the returns actually live, so 10% → 20% shifts the colour as far as 50% → 150% does. The bar across the foot sits flush against the body —
         no divider — and its height is the result measured against the tile it sits in: gain ÷ current
@@ -342,9 +366,10 @@
         per-trade cash flows, so it approximates IRR and understates positions bought in several
         tranches. Cash sits at neutral grey. Hover a tile for the exact figures.
       </div>
+      </div>
     </div>
 
-    <div class="card tablescroll">
+    <div class="card tablescroll" id="positionsCard" hidden>
       <table id="tbl">
         <thead><tr>
           <th>Portfolio</th><th>Position</th><th>Shares</th><th>Purchase value</th>
@@ -353,15 +378,37 @@
         <tbody></tbody>
       </table>
     </div>
+
+    <div class="card tablescroll" id="closedPositionsCard" hidden>
+      <div class="closedhead"><b>Closed positions</b></div>
+      <table id="tblClosedPositions">
+        <thead><tr>
+          <th>Portfolio</th><th>Position</th><th>Purchase value</th><th>Return</th>
+          <th>Realised (pre-tax)</th><th>XIRR</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card tablescroll" id="tradesCard" hidden>
+      <div class="closedhead"><b id="tradesHead"></b></div>
+      <table id="tblTrades">
+        <thead><tr>
+          <th>Date</th><th>Portfolio</th><th>Position</th><th>Type</th><th>Shares</th>
+          <th>Price</th><th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
 <script>
-const CSV_PATH = 'parqet_all_port.csv';
-const TRADES_PATH = 'parqet_trades.csv';
-const NAMES_PATH = 'parqet_names.csv';   // ISIN (or exact name) → short display name
+const CSV_PATH = 'parqet/parqet_all_port.csv';
+const TRADES_PATH = 'parqet/parqet_trades.csv';
+const NAMES_PATH = 'parqet/parqet_names.csv';   // ISIN (or exact name) → short display name
 const BENCH_PATH = 'data_series/benchmark.csv';   // daily closes of the benchmark fund
-const PRICES_PATH = 'parqet_prices.csv';     // fresh prices where Parqet has none (closed positions)
+const PRICES_PATH = 'parqet/parqet_prices.csv';     // fresh prices where Parqet has none (closed positions)
 const LABEL_MIN_SHARE = 0.003;   // label wedges worth at least 0.3% of the total…
 const LABEL_GAP = 14;            // …as long as they still fit this far apart
 
@@ -498,14 +545,70 @@ function seriesCloseAt(rows, date) {
   return found >= 0 ? rows[found].close : null;
 }
 
+// A split mid-way through a *closed* position's own trade history — buys at the old scale,
+// sells at the new one (State Street SPDR ACWI IMI did this: ~€185–232 buys through 2025, then
+// both sells in 2026 at ~€10.3, a 25:1 split with nothing in between to flag it). splitFactor()
+// only looks at positions still open, so this needs its own detector.
+//
+// The ratio comes from share-count reconciliation, not price: a fully closed position's total
+// bought and total sold shares must be equal once both are on the same scale, so any clean
+// multiple between them (2266.7 sold vs 90.7 bought here — exactly 25.0) is the split ratio,
+// full stop. Comparing prices instead (the first version of this) got fooled: the ~10-month gap
+// between the last buy and the first sell let real market movement masquerade as part of the
+// split, snapping to 20 instead of the true 25. Boundary — which trades need rescaling — is
+// still found from price, but only to place a already-known-correct ratio, not to derive it.
+function detectMidHistorySplit(trades) {
+  const buys = trades.filter(t => t.type === 'buy'), sells = trades.filter(t => t.type === 'sell');
+  const bought = buys.reduce((s, t) => s + num(t.shares), 0);
+  const sold = sells.reduce((s, t) => s + num(t.shares), 0);
+  if (!buys.length || !sells.length || !bought || !sold) return null;
+  const ratio = sold / bought;
+  const snap = SPLIT_RATIOS.reduce((best, c) => Math.abs(ratio - c) < Math.abs(ratio - best) ? c : best, 1);
+  if (snap === 1 || Math.abs(ratio - snap) / snap > 0.08) return null;
+
+  const preAvg = buys.reduce((s, t) => s + num(t.price), 0) / buys.length;
+  const postAvg = preAvg / snap;
+  const at = trades.findIndex(t => Math.abs(num(t.price) - postAvg) < Math.abs(num(t.price) - preAvg));
+  return { at: at === -1 ? trades.length : at, ratio: snap };
+}
+
 // The portfolio as it stood on a past date: replay each position's trades up to that day (FIFO,
 // same logic as the split/dividend helpers) to get shares actually held, price them from that
 // position's own data_series file, and value the remaining cost at what was actually paid. Cash
 // and any position lacking a series that day are left out and named in the result, since neither
 // can be honestly reconstructed from what this page has on hand.
+// What the same lots' money would be worth had it gone into the benchmark instead, valued as of
+// dateStr rather than today — the as-of counterpart of benchAlternative(), which is always
+// "now". Same FIFO lots computeAsOf already built, just priced through the index at this date.
+function benchValueOfLots(lots, dateStr) {
+  const atDate = benchClose(dateStr);
+  if (!Number.isFinite(atDate)) return NaN;
+  let total = 0;
+  for (const lot of lots) {
+    const buyClose = benchClose(lot.at);
+    if (!Number.isFinite(buyClose) || buyClose <= 0) return NaN;
+    total += lot.shares * lot.price * atDate / buyClose;
+  }
+  return total;
+}
+
+// The as-of counterpart of the live map's per-position IRR: same bisection solver, cash flows
+// built from these lots' buy dates instead of the full trade history, valued at dateStr instead
+// of today. Without this the foot-bar had nothing but d.ret to shade itself with — the same
+// number the tile body already uses — so bar and tile rendered as the same colour and the bar
+// was only findable by hovering for the tooltip's numbers, not by looking at it.
+function asOfIrr(lots, cur, dateStr) {
+  if (!lots.length || !(cur > 0)) return NaN;
+  const flows = lots.map(l => ({ t: Date.parse(l.at), v: -(l.shares * l.price) }));
+  flows.push({ t: Date.parse(dateStr + 'T00:00:00Z'), v: cur });
+  flows.sort((a, b) => a.t - b.t);
+  return xirr(flows);
+}
+
 const AS_OF_CACHE = new Map();
 async function computeAsOf(dateStr) {
-  if (AS_OF_CACHE.has(dateStr)) return AS_OF_CACHE.get(dateStr);
+  const cacheKey = dateStr + '|' + MODE;                // re-picking "vs. World" must not hit a stale cache
+  if (AS_OF_CACHE.has(cacheKey)) return AS_OF_CACHE.get(cacheKey);
 
   const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
 
@@ -513,16 +616,28 @@ async function computeAsOf(dateStr) {
   // this date ever trigger a fetch, then load every needed series in parallel (each cached
   // after the first request, so re-picking a date, or reopening the map later, is instant)
   const held = source.map(d => {
-    const trades = TRADES.filter(t => t.portfolio === d.portfolio && t.identifier &&
-                                       t.identifier === d.identifier &&
-                                       (t.type === 'buy' || t.type === 'sell'))
-                          .sort((a, b) => a.datetime < b.datetime ? -1 : 1);
+    let trades = TRADES.filter(t => t.portfolio === d.portfolio && t.identifier &&
+                                     t.identifier === d.identifier &&
+                                     (t.type === 'buy' || t.type === 'sell'))
+                        .sort((a, b) => a.datetime < b.datetime ? -1 : 1);
+    // data_series prices come from an external provider that split-adjusts its whole history
+    // uniformly, so share counts fed against them must be on that same current-day scale for
+    // every date, not whatever scale they were actually traded at. d.split already carries the
+    // ratio for an open position (detected from today's Parqet-restated cost basis); a closed
+    // one needs its own scan since there's no "today" position left to compare against.
+    if (!d.sold && d.split !== 1) {
+      trades = trades.map(t => ({ ...t, shares: num(t.shares) * d.split }));
+    } else if (d.sold && trades.length > 1) {
+      const split = detectMidHistorySplit(trades);
+      if (split) trades = trades.map((t, i) =>
+        i < split.at ? { ...t, shares: num(t.shares) * split.ratio } : t);
+    }
     const lots = [];
     for (const t of trades) {
       if (t.datetime.slice(0, 10) > dateStr) break;     // sorted — nothing after matters
       let sh = num(t.shares);
       if (!sh) continue;
-      if (t.type === 'buy') { lots.push({ shares: sh, price: num(t.amountNet) / sh }); continue; }
+      if (t.type === 'buy') { lots.push({ shares: sh, price: num(t.amountNet) / sh, at: t.datetime }); continue; }
       while (sh > 1e-9 && lots.length) {
         const take = Math.min(sh, lots[0].shares);
         lots[0].shares -= take; sh -= take;
@@ -531,7 +646,10 @@ async function computeAsOf(dateStr) {
     }
     const sharesAtD = lots.reduce((t, l) => t + l.shares, 0);
     const costAtD = lots.reduce((t, l) => t + l.shares * l.price, 0);
-    return { d, sharesAtD, costAtD };
+    // "Performance vs. MSCI World": the same lots' cost, grown in the index instead, up to this
+    // date — same measure the live map uses, just bounded to dateStr rather than today
+    const benchAtD = MODE === 'rel' && sharesAtD > 1e-9 ? benchValueOfLots(lots, dateStr) : NaN;
+    return { d, sharesAtD, costAtD, benchAtD, lots };
   }).filter(h => h.sharesAtD > 1e-9);                   // not yet bought, or already sold out, by then
 
   const seriesFor = new Map(await Promise.all(
@@ -539,7 +657,7 @@ async function computeAsOf(dateStr) {
 
   const out = [];
   const missing = new Set();
-  for (const { d, sharesAtD, costAtD } of held) {
+  for (const { d, sharesAtD, costAtD, benchAtD, lots } of held) {
     const series = seriesFor.get(d);
     const closeAtD = series && seriesCloseAt(series.rows, dateStr);
     if (!series || closeAtD == null) { missing.add(d.label || d.name); continue; }
@@ -550,13 +668,16 @@ async function computeAsOf(dateStr) {
     const factor = (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
 
     const cur = sharesAtD * closeAtD * factor;
-    const gain = cur - costAtD;
+    // in "vs. World" mode, fall back to actual cost for any lot the benchmark couldn't price —
+    // never silently drop a position just because the index comparison came up short
+    const pur = Number.isFinite(benchAtD) ? benchAtD : costAtD;
+    const gain = cur - pur;
     out.push({
       portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
       core: d.core, cash: false, fund: d.fund, shares: sharesAtD,
-      cur, pur: costAtD, gain, ret: costAtD > 0 ? gain / costAtD * 100 : 0,
-      state: costAtD <= 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss'),
-      irr: NaN, divHeld: 0, firstActivity: d.firstActivity,
+      cur, pur, gain, ret: pur > 0 ? gain / pur * 100 : 0,
+      state: pur <= 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss'),
+      irr: asOfIrr(lots, cur, dateStr), divHeld: 0, firstActivity: d.firstActivity,
       lastPrice: closeAtD * factor, lastPriceDate: dateStr,
     });
   }
@@ -571,7 +692,89 @@ async function computeAsOf(dateStr) {
     ratio: currentTotal > 0 ? grand / currentTotal : 1,
     missing: [...missing],
   };
-  AS_OF_CACHE.set(dateStr, result);
+  AS_OF_CACHE.set(cacheKey, result);
+  return result;
+}
+
+// The realised side of the same as-of pick: every sell (and its dividends/taxes) booked on or
+// before dateStr, split into "open" (some shares still held on that date) and "closed" (fully
+// sold by then) so renderClosed can draw the same open|closed bar it draws for today, just
+// bounded to what had actually happened by dateStr. Unlike computeAsOf, this needs no split
+// rescaling: it never compares against the external price series, only trades' own booked
+// amounts, and those net out correctly on their own historical share scale regardless of any
+// later split.
+const AS_OF_REALIZED_CACHE = new Map();
+async function computeAsOfRealized(dateStr) {
+  const cacheKey = dateStr + '|' + MODE;
+  if (AS_OF_REALIZED_CACHE.has(cacheKey)) return AS_OF_REALIZED_CACHE.get(cacheKey);
+
+  const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
+  const rows = [];
+  for (const d of source) {
+    const trades = TRADES.filter(t => t.portfolio === d.portfolio && t.identifier &&
+                                       t.identifier === d.identifier &&
+                                       (t.type === 'buy' || t.type === 'sell'))
+                          .sort((a, b) => a.datetime < b.datetime ? -1 : 1);
+    const lots = [];
+    let realized = 0, taxSell = 0, costSold = 0, soldShares = 0, grossProceeds = 0;
+    let lastSell = '', sellCount = 0, activityCount = 0, benchProceeds = 0, benchKnown = true;
+    for (const t of trades) {
+      if (t.datetime.slice(0, 10) > dateStr) break;      // sorted — nothing after matters
+      const sh0 = num(t.shares);
+      if (!sh0) continue;
+      activityCount++;
+      if (t.type === 'buy') { lots.push({ shares: sh0, price: num(t.amountNet) / sh0, at: t.datetime }); continue; }
+      let sh = sh0, costOut = 0;
+      while (sh > 1e-9 && lots.length) {
+        const take = Math.min(sh, lots[0].shares);
+        costOut += take * lots[0].price;
+        if (MODE === 'rel') {
+          const bBuy = benchClose(lots[0].at), bSell = benchClose(t.datetime);
+          if (Number.isFinite(bBuy) && bBuy > 0 && Number.isFinite(bSell)) {
+            benchProceeds += take * lots[0].price * bSell / bBuy;
+          } else benchKnown = false;
+        }
+        lots[0].shares -= take; sh -= take;
+        if (lots[0].shares <= 1e-9) lots.shift();
+      }
+      costSold += costOut;
+      realized += (num(t.amount) - num(t.fee)) - costOut;
+      taxSell += num(t.tax);
+      soldShares += sh0;
+      grossProceeds += num(t.amount);
+      sellCount++;
+      if (t.datetime > lastSell) lastSell = t.datetime;
+    }
+    if (!sellCount) continue;                            // nothing realised on this position yet
+
+    rows.push({
+      portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
+      relPre: realized, invested: costSold,
+      alpha: (MODE === 'rel' && benchKnown) ? grossProceeds - benchProceeds : NaN,
+      sold: lots.reduce((t, l) => t + l.shares, 0) <= 1e-9,
+      soldShares, grossProceeds, lastSell, sellCount,
+      sellPrice: soldShares > 0 ? grossProceeds / soldShares : NaN,
+      split: d.split ?? 1, taxSell, divSold: 0, sinceKnown: false, flows: [], activityCount,
+      cash: false,
+    });
+  }
+
+  const cutoffTrades = TRADES.filter(t => t.datetime.slice(0, 10) <= dateStr);
+  const divTotal = cutoffTrades.filter(t => t.type === 'dividend').reduce((t, r) => t + num(r.amountNet), 0);
+  const divRows = cutoffTrades.filter(t => t.type === 'dividend');
+  const taxTotal = cutoffTrades.reduce((t, r) => t + num(r.tax), 0);
+  const taxSplit = {
+    sell: cutoffTrades.filter(t => t.type === 'sell').reduce((t, r) => t + num(r.tax), 0),
+    dividend: cutoffTrades.filter(t => t.type === 'dividend').reduce((t, r) => t + num(r.tax), 0),
+    other: cutoffTrades.filter(t => t.type !== 'sell' && t.type !== 'dividend').reduce((t, r) => t + num(r.tax), 0),
+  };
+
+  const result = {
+    open: rows.filter(d => !d.sold), closed: rows.filter(d => d.sold),
+    divTotal, divRows, taxTotal, taxSplit,
+    realizedTotal: rows.reduce((t, d) => t + d.relPre, 0),
+  };
+  AS_OF_REALIZED_CACHE.set(cacheKey, result);
   return result;
 }
 
@@ -934,7 +1137,7 @@ function splitDividends(d, trades) {
 // is off by the split ratio. Recover it: walk the trades FIFO, take the average price of the lots
 // still held, and compare with the holding's restated basis. Cash amounts (and therefore the
 // realised figures and the XIRR) are unaffected — only share counts need this.
-const SPLIT_RATIOS = [1, 2, 3, 4, 5, 6, 8, 10, 20, 1 / 2, 1 / 3, 1 / 4, 1 / 5, 1 / 10];
+const SPLIT_RATIOS = [1, 2, 3, 4, 5, 6, 8, 10, 20, 25, 50, 100, 1 / 2, 1 / 3, 1 / 4, 1 / 5, 1 / 10];
 function splitFactor(d, trades) {
   if (d.sold || !(d.shares > 0) || !(d.pur > 0)) return 1;
   const rows = trades
@@ -1305,9 +1508,9 @@ function attachTip(items) {
           `<div class="r"><span>${MODE === 'rel' ? 'Ahead by' : 'Unrealised'}</span><b class="${d.gain >= 0 ? 'pos' : 'neg'}">` +
           `${fmtMoney2(d.gain)} (${fmtPct(d.ret)})</b></div>`) +
         (Number.isFinite(d.irr) ? (MODE === 'rel' && Number.isFinite(d.benchIrr)
-          ? `<div class="r"><span>IRR vs. World</span>` +
+          ? `<div class="r"><span>XIRR vs. World</span>` +
             `<b class="${d.irr - d.benchIrr >= 0 ? 'pos' : 'neg'}">${fmtPP(d.irr - d.benchIrr)}</b></div>`
-          : `<div class="r"><span>${d.irrExact ? 'IRR (XIRR)' : 'Annualised (CAGR)'}</span>` +
+          : `<div class="r"><span>${d.irrExact ? 'XIRR' : 'Annualised (CAGR)'}</span>` +
             `<b class="${d.irr >= 0 ? 'pos' : 'neg'}">${fmtPct(d.irr)}</b></div>`) : '') +
         (Math.abs(d.relPre) > 0.005 ?
           (d.soldShares > 0 && d.lastSell
@@ -1384,8 +1587,67 @@ function renderMeta(items, closed = []) {
     trs.push(tr);
   });
   tb.replaceChildren(...trs);
+  renderClosedPositions();
 
-  /* totals */
+  renderHeaderTotals(ITEMS, CLOSED);
+
+  document.getElementById('loader').hidden = true;
+  document.getElementById('app').hidden = false;
+}
+
+// A flat list — deliberately not grouped by portfolio like the open-positions table above, since
+// a closed position's own portfolio is already a column and there's nothing to subtotal that the
+// realised bar doesn't already show. CLOSED is pre-sorted by realised gain (build()), kept as-is.
+function renderClosedPositions() {
+  const tb = document.querySelector('#tblClosedPositions tbody');
+  tb.replaceChildren(...CLOSED.map(d => {
+    const ret = d.invested > 0 ? d.relPre / d.invested * 100 : NaN;
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${d.portfolio}</td>` +
+      `<td><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
+      `<td>${fmtMoney2(d.invested)}</td>` +
+      `<td class="${Number.isFinite(ret) ? (ret >= 0 ? 'pos' : 'neg') : ''}">${Number.isFinite(ret) ? fmtPct(ret) : '–'}</td>` +
+      `<td class="${d.relPre >= 0 ? 'realized' : 'neg'}">${fmtMoney2(d.relPre)}</td>` +
+      `<td class="${Number.isFinite(d.irr) ? (d.irr >= 0 ? 'pos' : 'neg') : ''}">${Number.isFinite(d.irr) ? fmtPct(d.irr) : '–'}</td>`;
+    return tr;
+  }));
+}
+
+const TYPE_LABEL = { buy: 'Buy', sell: 'Sell', dividend: 'Dividend', fees_taxes: 'Fees/Taxes' };
+let TRADES_RENDERED = false;
+// Built once against the raw trade log — TRADES never changes after load(), so unlike the
+// header/table there is nothing here for an as-of pick or the MODE toggle to keep in sync.
+function renderTrades() {
+  if (TRADES_RENDERED) return;
+  TRADES_RENDERED = true;
+  const rows = [...TRADES].sort((a, b) => a.datetime < b.datetime ? 1 : -1);   // newest first
+  const feesTotal = TRADES.reduce((t, r) => t + num(r.fee), 0);
+  document.getElementById('tradesHead').textContent =
+    `${rows.length} Trades (${fmtMoney(feesTotal)} Fees)`;
+  const tb = document.querySelector('#tblTrades tbody');
+  tb.replaceChildren(...rows.map(t => {
+    const tr = document.createElement('tr');
+    const cls = t.type === 'sell' ? 'pos' : t.type === 'dividend' ? 'income' : '';
+    tr.innerHTML =
+      `<td>${t.datetime.slice(0, 10)}</td><td>${t.portfolio}</td>` +
+      `<td>${NAMES.get(t.name) || tidyName(t.name)}</td>` +
+      `<td>${TYPE_LABEL[t.type] || t.type}</td>` +
+      `<td>${num(t.shares) ? num(t.shares).toLocaleString('de-DE') : '–'}</td>` +
+      `<td>${num(t.price) ? fmtMoney2(num(t.price)) : '–'}</td>` +
+      `<td class="${cls}">${fmtMoney2(num(t.amount))}</td>` +
+      `<td class="${cls}">${fmtMoney2(num(t.amountNet))}</td>` +
+      `<td>${num(t.fee) > 0.005 ? fmtMoney2(num(t.fee)) : '–'}</td>` +
+      `<td>${num(t.tax) > 0.005 ? fmtMoney2(num(t.tax)) : '–'}</td>`;
+    return tr;
+  }));
+}
+
+// The stat-tile row + per-portfolio breakdown, split out of renderMeta so an as-of pick can
+// refresh just this part with reconstructed figures without touching the (always-live) table.
+// `opts.realizedTotal`, when given, replaces the live rel/relPre sum for the "Realised pre-tax"
+// tile — as-of items carry no relPre of their own, that figure comes from computeAsOfRealized.
+function renderHeaderTotals(items, closed = [], opts = {}) {
   document.getElementById('kPur').textContent =
     MODE === 'rel' ? 'Same money in MSCI World' : 'Invested (ex cash)';
   document.getElementById('kGain').textContent =
@@ -1396,40 +1658,77 @@ function renderMeta(items, closed = []) {
   const gEl = document.getElementById('tGain');
   gEl.textContent = fmtMoney2(all.gain) + (all.pur > 0 ? ' (' + fmtPct(all.gain / all.pur * 100) + ')' : '');
   gEl.className = 'v ' + (all.gain >= 0 ? 'pos' : 'neg');
-  const closedRel = closed.reduce((t, d) => t + (d.relPre ?? d.rel), 0);
+  const rel = Number.isFinite(opts.realizedTotal)
+    ? opts.realizedTotal
+    : all.rel + closed.reduce((t, d) => t + (d.relPre ?? d.rel), 0);
   const rEl = document.getElementById('tRel');
-  rEl.textContent = fmtMoney2(all.rel + closedRel);
-  rEl.className = 'v ' + (all.rel + closedRel >= 0 ? 'realized' : 'neg');
+  rEl.textContent = fmtMoney2(rel);
+  rEl.className = 'v ' + (rel >= 0 ? 'realized' : 'neg');
   document.getElementById('tN').textContent = items.filter(d => !d.cash).length;
 
-  const asOf = items.reduce((t, d) => d.lastPriceDate > t ? d.lastPriceDate : t, '');
+  // freshness always comes from the live data, never from an as-of pick's synthetic date
+  const asOf = ITEMS.reduce((t, d) => d.lastPriceDate > t ? d.lastPriceDate : t, '');
+  const deDate = s => new Date(s).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const toggle = document.createElement('label');
-  toggle.className = 'p toggle';
+  toggle.className = 'modeswitch';
   toggle.innerHTML = `<input type="checkbox" id="showMoney"${SHOW_MONEY ? ' checked' : ''}><span>Show €</span>`;
   toggle.querySelector('input').addEventListener('change', e => {
     SHOW_MONEY = e.target.checked;
-    renderMeta(ITEMS, CLOSED);
+    refreshHeader();
     show(VIEW);
   });
-  const bypf = document.getElementById('bypf');
-  bypf.replaceChildren(...PF.map(p => {
-    const s = totals(items.filter(d => d.portfolio === p.name));
-    const div = document.createElement('div'); div.className = 'p';
-    div.innerHTML = `<span>${p.name}</span><b>${fmtMoney(s.cur)}</b>` +
-      `<span class="${s.gain >= 0 ? 'pos' : 'neg'}">${s.pur > 0 ? fmtPct(s.gain / s.pur * 100) : ''}</span>`;
-    return div;
-  }));
-  bypf.appendChild(toggle);
-  if (asOf) {
-    const stamp = document.createElement('div');
-    stamp.className = 'p asof';
-    stamp.innerHTML = `<span>Last data update: ${new Date(asOf).toLocaleDateString('de-DE',
-      { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>`;
-    bypf.appendChild(stamp);
-  }
+  attachCurTip(items);
+  document.getElementById('showEuroSlot').replaceChildren(toggle);
 
-  document.getElementById('loader').hidden = true;
-  document.getElementById('app').hidden = false;
+  const stamp = document.getElementById('dataStamp');
+  if (opts.asOfDateStr) {
+    stamp.textContent = `Showing ${deDate(opts.asOfDateStr)}` +
+      `${asOf ? ' · latest data ' + deDate(asOf) : ''}`;
+  } else {
+    stamp.textContent = asOf ? `Last data update: ${deDate(asOf)}` : '';
+  }
+}
+
+// The per-portfolio breakdown, now a hover popup over the Current value tile instead of its own
+// always-visible row — reuses the same #tip element and placeTip() the map/bar tooltips use.
+// Reassigning .onpointer* (rather than addEventListener) is deliberate: this tile is a static
+// DOM node re-rendered against fresh `items` on every header refresh, so a plain addEventListener
+// would stack a new listener — closing over stale `items` — on every as-of pick.
+function attachCurTip(items) {
+  const tile = document.getElementById('tileCur');
+  // its own tip node, a child of totalsCard — #tip lives inside .chartwrap instead, so
+  // placeTip()'s math (relative to totalsCard) and the browser's actual containing block
+  // (whichever positioned ancestor #tip is really inside) would disagree and the popup would
+  // land wherever chartwrap happens to sit on the page, not near the cursor
+  const tip = document.getElementById('curTip');
+  const wrapEl = document.getElementById('totalsCard');
+  const rows = PF.map(p => totals(items.filter(d => d.portfolio === p.name)))
+    .map((s, i) => ({ name: PF[i].name, cur: s.cur, gain: s.gain, pur: s.pur }));
+  tile.onpointerenter = e => {
+    tip.innerHTML = `<div class="t">Current value by portfolio</div>` +
+      rows.map(r => `<div class="r"><span>${r.name}</span>` +
+        `<b class="${r.gain >= 0 ? 'pos' : 'neg'}">${fmtMoney(r.cur)}` +
+        `${r.pur > 0 ? ' · ' + fmtPct(r.gain / r.pur * 100) : ''}</b></div>`).join('');
+    tip.classList.add('on');
+    placeTip(tip, wrapEl, e);
+  };
+  tile.onpointermove = e => placeTip(tip, wrapEl, e);
+  tile.onpointerleave = () => tip.classList.remove('on');
+}
+
+// Picks live vs. as-of totals for the header tiles and the realised bar together, so the two
+// never disagree about which date they're showing. The pie view has no as-of rendering of its
+// own, so it always falls back to live totals even if a date is still picked underneath.
+async function refreshHeader() {
+  if (AS_OF && VIEW === 'map') {
+    const [snap, real] = await Promise.all([computeAsOf(AS_OF), computeAsOfRealized(AS_OF)]);
+    renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal, asOfDateStr: AS_OF });
+    renderClosed({ open: real.open, closed: real.closed, divTotal: real.divTotal,
+                   divRows: real.divRows, taxTotal: real.taxTotal, taxSplit: real.taxSplit });
+  } else {
+    renderHeaderTotals(ITEMS, CLOSED);
+    renderClosed();
+  }
 }
 
 
@@ -1536,101 +1835,98 @@ function renderMap(items, asOf) {
   const svg = document.getElementById('pie');
   const W = 900, H = 560, PAD = 2;
   const note = document.getElementById('asOfNote');
+  let mapScale = 1;                      // set below when the as-of map is shrunk; 1 otherwise
 
   if (asOf) {
-    const pct = Math.max(15, Math.min(100, Math.sqrt(Math.max(0, asOf.ratio)) * 100));
-    svg.style.width = pct + '%';
+    mapScale = Math.max(0.15, Math.min(1, Math.sqrt(Math.max(0, asOf.ratio))));
+    svg.style.width = (mapScale * 100) + '%';
+    svg.style.setProperty('--map-scale', mapScale);
     note.hidden = false;
     note.innerHTML = `As of <b>${asOf.date}</b>: <b>${fmtMoney2(asOf.asOfTotal)}</b>` +
       ` (${(asOf.ratio * 100).toFixed(0)}% of today's ${fmtMoney(asOf.currentTotal)}) — ` +
-      `area scaled to match, since area is value throughout this page.` +
+      `area scaled to match, since area is value throughout this page. Labels stay full size.` +
       (asOf.missing.length
         ? ` ${asOf.missing.length} held then but omitted for lack of price history: ${asOf.missing.join(', ')}.`
         : '');
   } else {
     svg.style.width = '100%';
+    svg.style.setProperty('--map-scale', 1);
     note.hidden = true;
   }
 
-  const groups = PF.map(p => {
-    const rows = items.filter(d => d.portfolio === p.name).sort((a, b) => b.cur - a.cur);
-    return { name: p.name, rows, value: rows.reduce((t, d) => t + d.cur, 0) };
-  }).filter(g => g.rows.length).sort((a, b) => b.value - a.value);
-
   const g = el('g', {});
-  const outlines = el('g', { fill: 'none', stroke: 'var(--rim)', 'stroke-width': 0.8, 'pointer-events': 'none' });
   items.forEach(d => { d.nodes = []; });
 
-  squarify(groups.map(gr => ({ value: gr.value, item: gr })), { x: 0, y: 0, w: W, h: H })
-    .forEach(box => {
-      const gr = box.item;
-      const inner = { x: box.x + PAD, y: box.y + PAD,
-                      w: Math.max(0, box.w - 2 * PAD), h: Math.max(0, box.h - 2 * PAD) };
+  // one flat pool of positions by value — which portfolio a position sits in plays no part
+  // in the layout; that's still in every label, tooltip, and the table
+  squarify(
+    items.filter(d => d.cur > 0).sort((a, b) => b.cur - a.cur).map(d => ({ value: d.cur, item: d })),
+    { x: PAD, y: PAD, w: W - 2 * PAD, h: H - 2 * PAD }
+  ).forEach(t => {
+    const d = t.item;
+    const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
+    const fill = gradeColor(d.state === 'flat' ? NaN : d.ret, d.cash);
+    // no stroke on either layer — the 1px layout gap is the separator, so the bar
+    // can never look wider than the tile it sits in
+    const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
+                              class: 'maprect' });
+    rect.addEventListener('click', () => openDetail(d));
+    g.appendChild(rect); d.nodes.push(rect);
 
-      squarify(gr.rows.map(d => ({ value: d.cur, item: d })), inner).forEach(t => {
-        const d = t.item;
-        const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
-        const fill = gradeColor(d.state === 'flat' ? NaN : d.ret, d.cash);
-        // no stroke on either layer — the 1px layout gap is the separator, so the bar
-        // can never look wider than the tile it sits in
-        const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
-                                  class: 'maprect' });
-        rect.addEventListener('click', () => openDetail(d));
-        g.appendChild(rect); d.nodes.push(rect);
-
-        // income band at the head of the tile: dividends the held shares paid, against tile value
-        if (d.divHeld > 0 && d.cur > 0 && h > 6) {
-          const ih = Math.max(1.5, Math.min(h / 3, h * d.divHeld / d.cur));
-          const band = el('rect', {
-            x: t.x + 0.5, y: t.y + 0.5, width: w, height: ih, fill: 'var(--income)',
-          });
-          g.appendChild(band); d.nodes.push(band);
-        }
-
-        const share = barShare(d);
-        if (share > 0 && h > 4) {
-          const bh = Math.max(1.5, h * share);
-          const bar = el('rect', {
-            x: t.x + 0.5, y: t.y + 0.5 + (h - bh), width: w, height: bh,
-            fill: barColor(d),
-          });
-          g.appendChild(bar); d.nodes.push(bar);
-        }
-
-        if (w > 34 && h > 16) {
-          const dark = d.fund || d.cash;          // funds and cash in black ink, everything else white
-          const cx = t.x + w / 2;
-          const free = h * (1 - barShare(d));                 // headroom above the bar
-          const cy = t.y + (free > 26 ? free / 2 : h / 2);
-          const chars = Math.floor(w / 4.9);
-          const name = el('text', {
-            x: cx, y: h > 28 ? cy - 1 : cy + 3, 'text-anchor': 'middle',
-            class: 'maplbl' + (dark ? ' dark' : ''), 'pointer-events': 'none',
-          });
-          name.textContent = d.label.length > chars ? d.label.slice(0, Math.max(1, chars - 1)) + '…' : d.label;
-          g.appendChild(name);
-          if (h > 28) {
-            const sub = el('text', {
-              x: cx, y: cy + 10, 'text-anchor': 'middle',
-              class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
-            });
-            sub.textContent = d.cash ? fmtMoney(d.cur) : fmtPct(d.ret);
-            g.appendChild(sub);
-          }
-        }
+    // income band at the head of the tile: dividends the held shares paid, against tile value
+    if (d.divHeld > 0 && d.cur > 0 && h > 6) {
+      const ih = Math.max(1.5, Math.min(h / 3, h * d.divHeld / d.cur));
+      const band = el('rect', {
+        x: t.x + 0.5, y: t.y + 0.5, width: w, height: ih, fill: 'var(--income)',
       });
+      g.appendChild(band); d.nodes.push(band);
+    }
 
-      outlines.appendChild(el('rect', {
-        x: box.x + PAD - 0.5, y: box.y + PAD - 0.5,
-        width: Math.max(0, box.w - 2 * PAD + 1), height: Math.max(0, box.h - 2 * PAD + 1), rx: 2,
-      }));
-    });
+    const share = barShare(d);
+    if (share > 0 && h > 4) {
+      const bh = Math.max(1.5, h * share);
+      const bar = el('rect', {
+        x: t.x + 0.5, y: t.y + 0.5 + (h - bh), width: w, height: bh,
+        fill: barColor(d),
+      });
+      g.appendChild(bar); d.nodes.push(bar);
+    }
 
-  svg.setAttribute('aria-label', 'Treemap of all positions, area by current value, ' +
-    'colour by return, grouped by portfolio');
-  svg.replaceChildren(g, outlines);
+    if (w > 4 && h > 7) {
+      const dark = d.fund || d.cash;          // funds and cash in black ink, everything else white
+      const cx = t.x + w / 2;
+      const free = h * (1 - barShare(d));                 // headroom above the bar
+      const cy = t.y + (free > 26 ? free / 2 : h / 2);
+      // 4.9 viewBox units/char is calibrated at mapScale 1; the label's own font-size is
+      // compensated to stay a constant physical size regardless of mapScale (see .maplbl), so a
+      // shrunk as-of map fits fewer characters per viewBox unit of tile width, not the same
+      // count — without the factor here, labels overflowed their tiles once the map shrank.
+      // Floored at 1: even a sliver of a tile still gets its first character rather than nothing.
+      const chars = Math.max(1, Math.floor(w * mapScale / 4.9));
+      // the whole SVG is zoomed out by mapScale when the as-of map shrinks (area = value,
+      // throughout this page), which would otherwise compress this internal spacing right along
+      // with it — same fix as the font-size compensation, applied to position instead of size
+      const nudge = 1 / mapScale;
+      const name = el('text', {
+        x: cx, y: h > 28 ? cy - nudge : cy + 3 * nudge, 'text-anchor': 'middle',
+        class: 'maplbl' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+      });
+      name.textContent = d.label.length > chars ? d.label.slice(0, chars) : d.label;
+      g.appendChild(name);
+      if (h > 28) {
+        const sub = el('text', {
+          x: cx, y: cy + 10 * nudge, 'text-anchor': 'middle',
+          class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+        });
+        sub.textContent = d.cash ? fmtMoney(d.cur) : fmtPct(d.ret);
+        g.appendChild(sub);
+      }
+    }
+  });
+
+  svg.setAttribute('aria-label', 'Treemap of all positions, area by current value, colour by return');
+  svg.replaceChildren(g);
   attachTip(items);
-  renderClosed();
   legendMap();
 }
 
@@ -1649,32 +1945,39 @@ function gradientStops() {
 
 // one stacked bar over every realised result in the account, pre-tax. Two main blocks — gains and
 // losses — each split into the positions still open and the ones closed out; tax closes the losses.
-function renderClosed() {
+function renderClosed(over = null) {
   const wrap = document.getElementById('closedWrap');
   const svg = document.getElementById('closed');
   const has = d => Math.abs(barValue(d)) > 0.005 && !d.cash;
-  const closed = CLOSED.filter(has);
-  const open = ITEMS.filter(has);
+  const closed = (over ? over.closed : CLOSED).filter(has);
+  const open = (over ? over.open : ITEMS).filter(has);
+  const divTotal = over ? over.divTotal : DIV_TOTAL;
+  const taxTotal = over ? over.taxTotal : TAX_TOTAL;
+  const divRows = over ? over.divRows : DIV_ROWS;
+  const taxSplit = over ? over.taxSplit : TAX_SPLIT;
   if (!closed.length && !open.length) { wrap.hidden = true; return; }
   wrap.hidden = false;
 
   const W = 900, H = 96, y = 14, h = 30, STRIP_Y = 3, STRIP_H = 6, DIV_Y = 8;
   const pick = (rows, sign) => rows.filter(d => Math.sign(barValue(d)) === sign)
                                    .sort((a, b) => Math.abs(barValue(b)) - Math.abs(barValue(a)));
-  const divRow = DIV_TOTAL > 0.005
-    ? { name: 'Dividends', label: 'Dividends', portfolio: 'all portfolios', relPre: DIV_TOTAL,
+  const divRow = divTotal > 0.005
+    ? { name: 'Dividends', label: 'Dividends', portfolio: 'all portfolios', relPre: divTotal,
         isDiv: true, sold: true, flows: [], nodes: [] }
     : null;
-  const taxRow = TAX_TOTAL > 0.005
-    ? { name: 'Taxes', label: 'Taxes', portfolio: 'all portfolios', relPre: -TAX_TOTAL, isTax: true, flows: [], nodes: [] }
+  const taxRow = taxTotal > 0.005
+    ? { name: 'Taxes', label: 'Taxes', portfolio: 'all portfolios', relPre: -taxTotal, isTax: true, flows: [], nodes: [] }
     : null;
   const sub = (label, rows) => ({ label: `${label} · ${rows.length}`, rows });
 
   const closedGains = pick(closed, 1);
   if (divRow) closedGains.push(divRow);              // booked like a position sold at a profit
+  // "gains"/"losses" is a total-return read; in vs.-World mode the bar is grouped by alpha
+  // instead (barValue() switches to d.alpha there), so the labels need to say what the split
+  // actually means now — beat the benchmark or trailed it, not merely ended up positive
   const mains = [
-    { label: 'gains', subs: [sub('open', pick(open, 1)), sub('closed', closedGains)] },
-    { label: 'losses', subs: [
+    { label: MODE === 'rel' ? 'overperform' : 'gains', subs: [sub('open', pick(open, 1)), sub('closed', closedGains)] },
+    { label: MODE === 'rel' ? 'underperform' : 'losses', subs: [
       sub('open', pick(open, -1)), sub('closed', pick(closed, -1)),
       ...(taxRow ? [{ label: 'tax', rows: [taxRow] }] : []),
     ] },
@@ -1763,18 +2066,22 @@ function renderClosed() {
   svg.replaceChildren(g, marks);
 
   const sum = (rows, sign) => rows.reduce((t, d) => t + (Math.sign(barValue(d)) === sign ? barValue(d) : 0), 0);
-  const wins = sum(closed, 1) + sum(open, 1) + DIV_TOTAL;
+  const wins = sum(closed, 1) + sum(open, 1) + divTotal;
   const loss = sum(closed, -1) + sum(open, -1);
   const netEl = document.getElementById('closedNet');
-  netEl.textContent = `Realized gains pre-tax ${fmtMoney(wins)} · dividends ${fmtMoney(DIV_TOTAL)}` +
-    ` · losses ${fmtMoney(loss)} · taxes ${fmtMoney(-TAX_TOTAL)}` +
-    ` · net ${fmtMoney(wins + loss - TAX_TOTAL)}`;
-  netEl.className = wins + loss - TAX_TOTAL >= 0 ? 'realized' : 'neg';
+  netEl.textContent = `Realized gains pre-tax ${fmtMoney(wins)} · dividends ${fmtMoney(divTotal)}` +
+    ` · losses ${fmtMoney(loss)} · taxes ${fmtMoney(-taxTotal)}` +
+    ` · net ${fmtMoney(wins + loss - taxTotal)}`;
+  netEl.className = wins + loss - taxTotal >= 0 ? 'realized' : 'neg';
 
-  attachTipClosed(ordered);
+  attachTipClosed(ordered, { divTotal, divRows, taxTotal, taxSplit });
 }
 
-function attachTipClosed(rows) {
+function attachTipClosed(rows, ctx = null) {
+  const divTotal = ctx ? ctx.divTotal : DIV_TOTAL;
+  const divRows = ctx ? ctx.divRows : DIV_ROWS;
+  const taxTotal = ctx ? ctx.taxTotal : TAX_TOTAL;
+  const taxSplit = ctx ? ctx.taxSplit : TAX_SPLIT;
   const tip = document.getElementById('tip');
   const wrapEl = document.getElementById('closed').closest('.chartwrap');
   rows.forEach(d => d.nodes.forEach(n => {
@@ -1782,22 +2089,22 @@ function attachTipClosed(rows) {
     n.addEventListener('pointerenter', e => {
       if (d.isDiv) {
         const byName = new Map();
-        DIV_ROWS.forEach(r => byName.set(r.name, (byName.get(r.name) || 0) + num(r.amountNet)));
+        divRows.forEach(r => byName.set(r.name, (byName.get(r.name) || 0) + num(r.amountNet)));
         const top = [...byName.entries()].sort((a, b) => b[1] - a[1]);
         tip.innerHTML = `<div class="t">Dividends</div>` +
           `<div class="pf">all portfolios · net of withholding</div>` +
-          `<div class="r"><span>Total · ${DIV_ROWS.length} payments</span>` +
-          `<b class="income">${fmtMoney2(DIV_TOTAL)}</b></div>` +
+          `<div class="r"><span>Total · ${divRows.length} payments</span>` +
+          `<b class="income">${fmtMoney2(divTotal)}</b></div>` +
           top.slice(0, 8).map(([name, amt]) =>
             `<div class="r"><span>${NAMES.get(name) || tidyName(name)}</span>` +
             `<b class="income">${fmtMoney2(amt)}</b></div>`).join('') +
           (top.length > 8 ? `<div class="r"><span>+ ${top.length - 8} smaller</span><b></b></div>` : '');
       } else if (d.isTax) {
         tip.innerHTML = `<div class="t">Taxes</div><div class="pf">all portfolios</div>` +
-          `<div class="r"><span>On sales</span><b class="neg">${fmtMoney2(-TAX_SPLIT.sell)}</b></div>` +
-          `<div class="r"><span>On dividends</span><b class="neg">${fmtMoney2(-TAX_SPLIT.dividend)}</b></div>` +
-          `<div class="r"><span>Advance lump sum</span><b class="neg">${fmtMoney2(-TAX_SPLIT.other)}</b></div>` +
-          `<div class="r"><span>Total</span><b class="neg">${fmtMoney2(-TAX_TOTAL)}</b></div>`;
+          `<div class="r"><span>On sales</span><b class="neg">${fmtMoney2(-taxSplit.sell)}</b></div>` +
+          `<div class="r"><span>On dividends</span><b class="neg">${fmtMoney2(-taxSplit.dividend)}</b></div>` +
+          `<div class="r"><span>Advance lump sum</span><b class="neg">${fmtMoney2(-taxSplit.other)}</b></div>` +
+          `<div class="r"><span>Total</span><b class="neg">${fmtMoney2(-taxTotal)}</b></div>`;
       } else {
         tip.innerHTML =
           `<div class="t">${d.label || d.name}` +
@@ -1825,9 +2132,9 @@ function attachTipClosed(rows) {
           (d.taxSell > 0.005
             ? `<div class="r"><span>Tax paid</span><b class="neg">${fmtMoney2(-d.taxSell)}</b></div>` : '') +
           (Number.isFinite(d.irr) ? (MODE === 'rel' && Number.isFinite(d.benchIrr)
-            ? `<div class="r"><span>IRR vs. World</span>` +
+            ? `<div class="r"><span>XIRR vs. World</span>` +
               `<b class="${d.irr - d.benchIrr >= 0 ? 'pos' : 'neg'}">${fmtPP(d.irr - d.benchIrr)}</b></div>`
-            : `<div class="r"><span>${d.irrExact ? 'IRR (XIRR)' : 'Annualised'}</span>` +
+            : `<div class="r"><span>${d.irrExact ? 'XIRR' : 'Annualised'}</span>` +
               `<b class="${d.irr >= 0 ? 'pos' : 'neg'}">${fmtPct(d.irr)}</b></div>`) : '') +
           `<div class="r"><span>Trades</span><b>${d.flows.length || d.activityCount || '–'}</b></div>` +
           `<div class="sep">What if held${d.lastSell ? ' since ' + d.lastSell.slice(0, 10) : ''}</div>` +
@@ -1890,21 +2197,37 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     AS_OF = null;
 
 let SHOW_TOKEN = 0;
+const SEG_BUTTONS = { map: 'btnMap', pie: 'btnPie', positions: 'btnPositions', trades: 'btnTrades' };
 async function show(view) {
   VIEW = view;
-  const pieBtn = document.getElementById('btnPie'), mapBtn = document.getElementById('btnMap');
-  pieBtn.classList.toggle('on', view === 'pie');
-  mapBtn.classList.toggle('on', view === 'map');
-  pieBtn.setAttribute('aria-pressed', view === 'pie');
-  mapBtn.setAttribute('aria-pressed', view === 'map');
+  for (const [v, id] of Object.entries(SEG_BUTTONS)) {
+    const btn = document.getElementById(id);
+    btn.classList.toggle('on', view === v);
+    btn.setAttribute('aria-pressed', view === v);
+  }
+  const isChart = view === 'map' || view === 'pie';
+  document.getElementById('chartBody').hidden = !isChart;
   document.getElementById('keyPie').hidden = view !== 'pie';
   document.getElementById('keyMap').hidden = view !== 'map';
   document.getElementById('asOfWrap').hidden = view !== 'map';
+  document.getElementById('positionsCard').hidden = view !== 'positions';
+  document.getElementById('closedPositionsCard').hidden = view !== 'positions';
+  document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('tip').classList.remove('on');
+  // as-of reconstruction only exists for the map — disable the actual controls (not just the
+  // hidden wrapper) so they can't be triggered by a stray focus/keypress on the other frames
+  ['asOfDate', 'asOfDayBack', 'asOfDayFwd', 'asOfClear'].forEach(id => {
+    document.getElementById(id).disabled = view !== 'map';
+  });
+  document.getElementById('asOfStep').tabIndex = view === 'map' ? 0 : -1;
   if (view === 'pie') document.getElementById('closedWrap').hidden = true;
   const renderToken = ++SHOW_TOKEN;
   try {
-    if (view === 'pie') {
+    if (view === 'trades') {
+      renderTrades();
+    } else if (view === 'positions') {
+      // the table's own numbers are always live — an as-of pick only ever affects map/pie
+    } else if (view === 'pie') {
       renderPie(ITEMS);
     } else if (AS_OF) {
       const snap = await computeAsOf(AS_OF);
@@ -1913,6 +2236,8 @@ async function show(view) {
     } else {
       renderMap(ITEMS);
     }
+    await refreshHeader();
+    if (renderToken !== SHOW_TOKEN) return;              // a newer date/view raced us here too
   } catch (err) {
     document.getElementById('err').textContent =
       'chart error: ' + (err && err.message ? err.message + ' | ' : '') + (err && err.stack || err);
@@ -1928,17 +2253,64 @@ document.getElementById('relMode').addEventListener('change', e => {
 });
 document.getElementById('btnPie').addEventListener('click', () => show('pie'));
 document.getElementById('btnMap').addEventListener('click', () => show('map'));
-document.getElementById('asOfDate').max = new Date().toISOString().slice(0, 10);
+document.getElementById('btnPositions').addEventListener('click', () => show('positions'));
+document.getElementById('btnTrades').addEventListener('click', () => show('trades'));
+const TODAY = new Date().toISOString().slice(0, 10);
+document.getElementById('asOfDate').max = TODAY;
+document.getElementById('asOfDate').value = TODAY;   // "cleared" reads as today, not blank
 document.getElementById('asOfDate').addEventListener('change', e => {
-  AS_OF = e.target.value || null;
+  // picking today's date is the same as clearing — no point re-deriving what's already live
+  AS_OF = (e.target.value && e.target.value !== TODAY) ? e.target.value : null;
   document.getElementById('asOfClear').hidden = !AS_OF;
   if (VIEW === 'map') show('map');
 });
 document.getElementById('asOfClear').addEventListener('click', () => {
   AS_OF = null;
-  document.getElementById('asOfDate').value = '';
+  document.getElementById('asOfDate').value = TODAY;
   document.getElementById('asOfClear').hidden = true;
   if (VIEW === 'map') show('map');
+});
+
+// Scrubbing: Date's own setDate/setMonth carry overflow for us (Jan 31 + 1 day = Feb 1, no
+// manual day/month-length bookkeeping needed). The value updates immediately on every step for
+// a responsive field; the actual re-render is debounced, so holding a key doesn't fire a burst
+// of chart rebuilds while scrubbing fast.
+const MIN_DATE = document.getElementById('asOfDate').min || '2019-01-01';
+let asOfRenderTimer = null;
+function shiftAsOf(days, months) {
+  const base = new Date((AS_OF || TODAY) + 'T00:00:00Z');
+  if (months) {
+    // setMonth alone overflows FORWARD past the target month when the current day doesn't
+    // exist there (Mar 31 − 1mo would land on Mar 3, not Feb) — clamp to that month's last day
+    // instead, which is what stepping "a month back" actually means
+    const day = base.getUTCDate();
+    base.setUTCDate(1);
+    base.setUTCMonth(base.getUTCMonth() + months);
+    const lastDay = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 0)).getUTCDate();
+    base.setUTCDate(Math.min(day, lastDay));
+  }
+  if (days) base.setUTCDate(base.getUTCDate() + days);
+  let iso = base.toISOString().slice(0, 10);
+  if (iso > TODAY) iso = TODAY;
+  if (iso < MIN_DATE) iso = MIN_DATE;
+  document.getElementById('asOfDate').value = iso;
+  AS_OF = iso === TODAY ? null : iso;
+  document.getElementById('asOfClear').hidden = !AS_OF;
+  clearTimeout(asOfRenderTimer);
+  asOfRenderTimer = setTimeout(() => { if (VIEW === 'map') show('map'); }, 150);
+}
+document.getElementById('asOfDayBack').addEventListener('click', () => shiftAsOf(-1, 0));
+document.getElementById('asOfDayFwd').addEventListener('click', () => shiftAsOf(1, 0));
+// keydown on the wrapper, not the native date input — the input already claims arrow keys for
+// spinning its own day/month/year segments, so a separate focusable control is needed
+document.getElementById('asOfStep').addEventListener('keydown', e => {
+  const step = {
+    ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    PageUp: [0, -12], PageDown: [0, 12],
+  }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  shiftAsOf(step[0], step[1]);
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (VIEW === 'map') show('map'); });
 

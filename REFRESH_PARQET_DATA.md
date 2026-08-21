@@ -4,8 +4,8 @@ Task for an agent with the **Parqet MCP tools** and write access to `/Users/jjj/
 
 Goal: archive the two current CSVs under their download timestamp, then pull fresh data from Parqet
 and write new ones with **exactly the same schema**. `portfolio.html` reads
-`parqet_all_port.csv` and `parqet_trades.csv` from this directory — do not edit the HTML, and do not
-rename those two working filenames.
+`parqet/parqet_all_port.csv` and `parqet/parqet_trades.csv` — do not edit the HTML, and do not
+rename those two working filenames or move them out of `parqet/`.
 
 ---
 
@@ -14,7 +14,7 @@ rename those two working filenames.
 The "dl-timestamp" is the file's own modification time — that is when the data was downloaded.
 
 ```bash
-cd /Users/jjj/git/parqet
+cd /Users/jjj/git/parqet/parqet
 for f in parqet_all_port parqet_trades; do
   [ -f "$f.csv" ] || continue
   ts=$(date -r "$f.csv" +%Y%m%d-%H%M)      # macOS/BSD date
@@ -57,7 +57,7 @@ Gotchas that will bite you:
 - Prices move during the day. Pull the positions and the activities in one sitting so the two files
   agree, and note that `currentValue` is a snapshot.
 
-## 3. Write `parqet_all_port.csv`
+## 3. Write `parqet/parqet_all_port.csv`
 
 One row per position, **open and closed**, plus the cash accounts. Header, in order:
 
@@ -116,22 +116,22 @@ onward (or from `--from`, to extend the series backwards), and merges — refetc
 intraday value when it was written. It prints how many rows were added and corrected. The page reads
 the last row as "today" for the benchmark comparison, so run it whenever the positions are refreshed.
 
-`parqet_prices.csv` (`identifier,name,price,currency,asof,symbol,source`) carries a fresh price for
+`parqet/parqet_prices.csv` (`identifier,name,price,currency,asof,symbol,source`) carries a fresh price for
 each **closed** position, since Parqet freezes their quotes at the sale and the page needs a current
 one to answer "what if I had held on". Also from Yahoo: resolve the ISIN with
 `https://query1.finance.yahoo.com/v1/finance/search?q=<ISIN>`, then quote the symbol with the chart
 endpoint, preferring a EUR listing and converting USD/GBp with `EURUSD=X` / `EURGBP=X` when there
 isn't one. Check every match by name — the ISIN search returned iShares **S&P SmallCap 600** for the
 MSCI Japan Small Cap ISIN — and sanity-check each price against the frozen one in
-`parqet_all_port.csv`. Expired warrants get `price 0` and a note. Ask before fetching.
+`parqet/parqet_all_port.csv`. Expired warrants get `price 0` and a note. Ask before fetching.
 
-There is also a hand-maintained file, `parqet_names.csv` (`identifier,name,display,note`),
+There is also a hand-maintained file, `parqet/parqet_names.csv` (`identifier,name,display,note`),
 mapping ISIN — or the exact name, for cash rows — to the short label the page prints. It is not
 regenerated here: after a refresh, add a line for any position it does not yet cover.
 
 Last run: 49 rows — 32 open (30 securities + 2 cash) and 17 closed.
 
-## 4. Write `parqet_trades.csv`
+## 4. Write `parqet/parqet_trades.csv`
 
 One row per activity, all portfolios, sorted by `portfolio` then `datetime` ascending. Header:
 
@@ -158,8 +158,8 @@ Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 cd /Users/jjj/git/parqet
 python3 - <<'PY'
 import csv, collections
-pos = list(csv.DictReader(open('parqet_all_port.csv')))
-tr  = list(csv.DictReader(open('parqet_trades.csv')))
+pos = list(csv.DictReader(open('parqet/parqet_all_port.csv')))
+tr  = list(csv.DictReader(open('parqet/parqet_trades.csv')))
 f = lambda r, k: float(r[k] or 0)
 print('positions', len(pos), '| closed', sum(1 for p in pos if p['isSold'] == '1'),
       '| cash', sum(1 for p in pos if p['assetType'] == 'cash'))
