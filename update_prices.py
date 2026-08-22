@@ -32,6 +32,7 @@ FX_DIR = os.path.join(ROOT, "fx")
 REGISTRY = os.path.join(ROOT, "registry")
 UA = "Mozilla/5.0"
 FALLBACK_START = "2019-08-20"
+PLACEHOLDER_RUN = 5   # a shorter identical run is coincidence, not a dormant listing
 
 
 def config():
@@ -84,10 +85,39 @@ def fetch(symbol, since):
         result = None
     if not result:
         raise LookupError(f"no data for {symbol} — response was {out[:160]!r}")
+    quote = result[0]["indicators"]["quote"][0]
     stamps = result[0].get("timestamp") or []
-    closes = result[0]["indicators"]["quote"][0].get("close") or []
-    return {datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d"): round(c, 6)
-            for t, c in zip(stamps, closes) if c is not None}
+    closes = quote.get("close") or []
+    volumes = quote.get("volume") or [None] * len(closes)
+    rows = [(datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d"), round(c, 6), v)
+            for t, c, v in zip(stamps, closes, volumes) if c is not None]
+    return {d: c for d, c, _ in drop_placeholder_lead(rows, symbol)}
+
+
+def drop_placeholder_lead(rows, symbol=""):
+    """Discard the run of quotes Yahoo carries forward before a listing actually starts trading.
+
+    A dormant listing does not return nothing — it returns its last known quote, every day, on
+    zero volume. SK Hynix's Frankfurt line (HY9H.F) reported an identical 17.60 for 509 straight
+    trading days before real trading began in January 2021, which is not 509 observations.
+
+    Both halves of the test carry weight. Zero volume alone would throw away every FX series,
+    since Yahoo reports no volume for those at all — but a rate moves every day, so its run is one
+    row long and never reaches PLACEHOLDER_RUN. Requiring the quote to be unchanged *as well*
+    keeps the rule pointed at genuinely dead data. Only a *leading* run qualifies: a flat stretch
+    later on is a real, if illiquid, market.
+    """
+    if not rows:
+        return rows
+    first_close = rows[0][1]
+    n = 0
+    while n < len(rows) and not rows[n][2] and rows[n][1] == first_close:
+        n += 1
+    if n < PLACEHOLDER_RUN:
+        return rows
+    resumes = f"before {rows[n][0]}" if n < len(rows) else "— the whole span is dormant"
+    print(f"  {symbol}: dropped {n} placeholder rows {resumes} (no volume, quote never moved)")
+    return rows[n:]
 
 
 FX_CACHE = {}
