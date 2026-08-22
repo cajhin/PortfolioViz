@@ -1020,6 +1020,7 @@ function attachTipClosed(rows, ctx = null) {
       rows.forEach(o => o.nodes.forEach(m => m.style.opacity = o === d ? 1 : 0.35));
     });
     n.addEventListener('pointermove', e => placeTip(tip, wrapEl, e));
+    if (clickable(d)) n.addEventListener('click', () => openDetail(d));
     n.addEventListener('pointerleave', () => {
       tip.classList.remove('on');
       rows.forEach(o => o.nodes.forEach(m => m.style.opacity = 1));
@@ -1047,6 +1048,18 @@ function legendMap() {
 /* ---------- detail overlay ---------- */
 // Both lines rebased to 100 at the first date shown, so shape is comparable regardless of price.
 // Clicking a trade marker re-anchors the benchmark to that date instead, so the two lines meet there.
+
+// Every open or closed, non-cash position — the pool clicking the benchmark's own label can pick
+// a replacement from. Deduped by identifier: the same ISIN can appear twice (open in one
+// portfolio, closed in another — POET Technologies does), and it should only offer once.
+function benchmarkCandidates() {
+  const seen = new Map();
+  [...ITEMS, ...CLOSED].forEach(d => {
+    if (!d.cash && !seen.has(d.identifier)) seen.set(d.identifier, d);
+  });
+  return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
 const RANGE_FROM = {
   all: (d, series) => series.rows[0].date,
   '5y': () => shiftYears(-5),
@@ -1062,7 +1075,10 @@ function shiftYears(n) {
 
 // custom, when given, is a { from, to } drag-selected window that overrides the range buttons
 // entirely — both ends explicit, unlike a button's range which always runs through to today.
-function drawDetail(d, series, alignDate, range, custom) {
+// altBench, when given, swaps out the real MSCI World series for another position's own — same
+// { series, label } shape loadSeries()/a position both already carry, so a picked stock slots in
+// with no separate code path.
+function drawDetail(d, series, alignDate, range, custom, altBench) {
   const W = 840, H = 300, T = 12, B = 22;
   let from, to;
   if (custom) {
@@ -1074,7 +1090,8 @@ function drawDetail(d, series, alignDate, range, custom) {
   }
   const rows = series.rows.filter(r => r.date >= from && r.date <= to);
   if (rows.length < 2) return null;
-  const bench = BENCH.filter(r => r.date >= rows[0].date);
+  const benchLabel = altBench ? altBench.label : BENCH_LABEL;
+  const bench = (altBench ? altBench.series.rows : BENCH).filter(r => r.date >= rows[0].date);
 
   const dates = rows.map(r => r.date);
   const xOf = date => {                                  // nearest trading day at or before
@@ -1117,7 +1134,8 @@ function drawDetail(d, series, alignDate, range, custom) {
   const lastBench = benchVals.filter(Number.isFinite).slice(-1)[0];
   const keys = [{ text: `${d.label} ${fmtPct(lastStock)}`, v: lastStock, colour: 'var(--series-1)' }];
   if (Number.isFinite(lastBench))
-    keys.push({ text: `World ${fmtPct(lastBench)}`, v: lastBench, colour: 'var(--text-secondary)' });
+    keys.push({ text: `${benchLabel} ${fmtPct(lastBench)}`, v: lastBench,
+                colour: 'var(--text-secondary)', isBench: true });
   const R = Math.min(210, 14 + Math.max(...keys.map(k => k.text.length)) * 5.6);
   const fits = Math.floor((R - 14) / 5.6);              // a very long name gets clipped, not the label
   keys.forEach(k => {
@@ -1225,6 +1243,7 @@ function drawDetail(d, series, alignDate, range, custom) {
   if (overflow > 0) keys.forEach(k => { k.y -= overflow; });
   const top = (T + 8) - keys[0].y;
   if (top > 0) keys.forEach(k => { k.y += top; });
+  let benchKeyNode = null;
   keys.forEach(k => {
     if (Math.abs(k.y - y(k.v)) > 1.5)                    // moved: draw a leader to its line
       svg.appendChild(el('line', { x1: W - R - 1, y1: y(k.v), x2: W - R + 4, y2: k.y - 3,
@@ -1232,6 +1251,7 @@ function drawDetail(d, series, alignDate, range, custom) {
     const t = el('text', { x: W - R + 6, y: k.y, class: 'dtkey', fill: k.colour });
     t.textContent = k.text;
     svg.appendChild(t);
+    if (k.isBench) benchKeyNode = t;
   });
 
   // value bar: what the position was actually worth (euros, not per cent) on every day shown,
@@ -1266,19 +1286,20 @@ function drawDetail(d, series, alignDate, range, custom) {
   // dates/stockVals/benchVals/x plus the margins: everything renderDetail needs to turn a pointer
   // position back into "which day is this" for the hover crosshair, without redoing this geometry
   return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, bench: lastBench,
-           marks: markNodes, dates, stockVals, benchVals, x, L, R, T, B, H, W };
+           benchLabel, benchKeyNode, marks: markNodes, dates, stockVals, benchVals,
+           x, L, R, T, B, H, W };
 }
 
 let DETAIL = null;                                    // { d, series, alignDate }
 
 function renderDetail() {
   const body = document.getElementById('dtBody');
-  const { d, series, alignDate, range, customRange } = DETAIL;
+  const { d, series, alignDate, range, customRange, altBench } = DETAIL;
   document.querySelectorAll('#dtRange button').forEach(b =>
     b.classList.toggle('on', b.dataset.range === range));
   let drawn = null;
   try {
-    drawn = series && drawDetail(d, series, alignDate, range, customRange);
+    drawn = series && drawDetail(d, series, alignDate, range, customRange, altBench);
   } catch (err) {
     body.innerHTML = `<div class="empty">chart error: ${(err && err.message) || err}</div>`;
     return;
@@ -1294,7 +1315,7 @@ function renderDetail() {
   const subAt = (stock, bench, day) =>
     `${d.portfolio} · 0 % at ${drawn.anchor}` +
     ` · ${d.label} ${fmtPct(stock)}` +
-    (Number.isFinite(bench) ? ` · World ${fmtPct(bench)}` : '') +
+    (Number.isFinite(bench) ? ` · ${drawn.benchLabel} ${fmtPct(bench)}` : '') +
     (day ? ` — ${day}` : '');
   const defaultSub = subAt(drawn.stock, drawn.bench, null);
   sub.textContent = defaultSub;
@@ -1304,6 +1325,43 @@ function renderDetail() {
   const crosshair = el('line', { x1: 0, y1: drawn.T, x2: 0, y2: drawn.H - drawn.B, class: 'dtcrosshair' });
   drawn.svg.appendChild(crosshair);
   body.replaceChildren(drawn.svg, drawn.valueSvg, tip);
+
+  // clicking the benchmark's own end-label swaps it for any other position's price history — a
+  // plain <select>, floated near the label like the trade tooltip is, rather than a bespoke
+  // dropdown for what's fundamentally one choice from a list. Built on click, not on every
+  // render, so it costs nothing when nobody uses it.
+  if (drawn.benchKeyNode) {
+    drawn.benchKeyNode.style.cursor = 'pointer';
+    drawn.benchKeyNode.addEventListener('click', e => {
+      e.stopPropagation();   // else this also reaches the svg's own click handler underneath it
+      const candidates = benchmarkCandidates();
+      const select = document.createElement('select');
+      select.className = 'dtbenchpick';
+      select.innerHTML = `<option value="">${BENCH_LABEL} (reset)</option>` +
+        candidates.map(c => `<option value="${c.identifier}"` +
+          `${altBench && altBench.identifier === c.identifier ? ' selected' : ''}>${c.label}</option>`
+        ).join('');
+      const box = drawn.benchKeyNode.getBoundingClientRect(), host = body.getBoundingClientRect();
+      select.style.left = Math.max(4, box.left - host.left - 100) + 'px';
+      select.style.top = (box.top - host.top - 4) + 'px';
+      body.appendChild(select);
+      select.focus();
+      select.addEventListener('blur', () => select.remove(), { once: true });
+      select.addEventListener('change', async () => {
+        const val = select.value;
+        select.remove();
+        if (!val) { DETAIL.altBench = null; renderDetail(); return; }
+        const cand = candidates.find(c => c.identifier === val);
+        const s = await loadSeries(seriesSlug(cand));
+        if (!s) {
+          sub.textContent = `${defaultSub} — no price history for ${cand.label}`;
+          return;
+        }
+        DETAIL.altBench = { label: cand.label, identifier: cand.identifier, series: s };
+        renderDetail();
+      });
+    });
+  }
 
   // hover anywhere over the plot: a vertical line at the nearest trading day, and the subheader
   // swapped to that day's numbers instead of today's — pointermove fires on the svg as a whole, so
@@ -1431,7 +1489,7 @@ async function openDetail(d) {
   if (!dlg.open) dlg.showModal();
 
   DETAIL = { d, series: await loadSeries(seriesSlug(d)), alignDate: null,
-             range: (DETAIL && DETAIL.range) || 'buy', customRange: null };
+             range: (DETAIL && DETAIL.range) || 'buy', customRange: null, altBench: null };
   renderDetail();
 }
 

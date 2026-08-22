@@ -75,6 +75,8 @@ class El {
   replaceChildren(...c) { this.children = c; }
   addEventListener(t, f) { (this._on[t] = this._on[t] || []).push(f); }
   removeEventListener() {}
+  remove() {}
+  focus() {}
   querySelector() { return this._input || (this._input = byId('showMoney')); }
   querySelectorAll() { return []; }
   closest() { return BY_ID.get('__wrap'); }

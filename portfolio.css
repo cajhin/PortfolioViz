@@ -262,6 +262,9 @@
             box-shadow: 0 6px 20px rgba(0,0,0,.18); white-space: nowrap; z-index: 2; }
   .dt-tip.on { opacity: 1; }
   .dt-tip .mut { color: var(--text-muted); }
+  .dtbenchpick { position: absolute; z-index: 3; font: inherit; font-size: 0.8rem;
+                 color: var(--text-primary); background: var(--surface-1);
+                 border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
   .maprect { cursor: pointer; }
 
   .loader { border: 1px dashed var(--border); border-radius: 12px; padding: 22px; text-align: center; color: var(--text-secondary); }
