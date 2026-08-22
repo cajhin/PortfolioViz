@@ -1080,13 +1080,17 @@ function drawDetail(d, series, alignDate, range) {
   });
   const values = [...rows.map(stockPct), ...benchVals.filter(Number.isFinite), 0];
   const lo = Math.min(...values), hi = Math.max(...values);
-  const pad = (hi - lo) * 0.08 || 1;
-  const y = v => T + (H - T - B) * (1 - (v - (lo - pad)) / ((hi + pad) - (lo - pad)));
+  // No padding on either edge: each bound is the actual all-time low/high for the window shown —
+  // the most either line, stock or benchmark, ever fell or rose — so the chart never implies more
+  // room than the data has evidence for, above a peak or below a trough alike. Guard against the
+  // one degenerate case a flat pair of bounds would divide by zero on: a dead-flat line.
+  const yLo = lo, yHi = hi > lo ? hi : lo + 1;
+  const y = v => T + (H - T - B) * (1 - (v - yLo) / (yHi - yLo));
 
   // the left margin is whatever the widest y-axis label needs, so a big swing (a multi-bagger's
   // "+10000%") never runs past the left edge — same sizing rule as the right margin below
   const axisTexts = [0, 1, 2, 3, 4].map(i => {
-    const v = (lo - pad) + ((hi + pad) - (lo - pad)) * i / 4;
+    const v = yLo + (yHi - yLo) * i / 4;
     return `${v >= 0 ? '+' : ''}${Math.round(v)}%`;
   });
   const L = Math.max(34, 10 + Math.max(...axisTexts.map(t => t.length)) * 5.6);
@@ -1109,7 +1113,7 @@ function drawDetail(d, series, alignDate, range) {
     'aria-label': `${d.label} against the benchmark, in per cent from ${anchor}` });
 
   for (let i = 0; i <= 4; i++) {
-    const v = (lo - pad) + ((hi + pad) - (lo - pad)) * i / 4;
+    const v = yLo + (yHi - yLo) * i / 4;
     svg.appendChild(el('line', { x1: L, y1: y(v), x2: W - R, y2: y(v), class: 'dtgrid' }));
     const t = el('text', { x: L - 6, y: y(v) + 3, class: 'dtaxis', 'text-anchor': 'end' });
     t.textContent = axisTexts[i];
