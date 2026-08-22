@@ -1,3 +1,8 @@
 # data files — regenerate via REFRESH_PARQET_DATA.md / update_data_series.py, never commit
 *.csv
 data_series/
+
+# check_portfolio.js records real position values and tooltips here — same data, same rule
+check_baseline.json
+
+.DS_Store
