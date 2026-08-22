@@ -18,7 +18,9 @@
 
    AREA IS VALUE everywhere it appears — the pie's radii, the map's tiles, the realised bar's
    widths. When the as-of map shrinks, it shrinks by the square root of the value ratio for the
-   same reason. Keep that true of anything new.
+   same reason. Keep that true of anything new — and note that chrome costs area: any gap, inset
+   or label strip you carve out of a tile has to be paid for out of the layout (squarifyNet), not
+   out of the tile, or the smallest positions quietly stop being drawn to scale.
    ============================================================================================= */
 
 /* ---------- formatting ---------- */
@@ -602,6 +604,51 @@ function squarify(vals, rect) {
   return out;
 }
 
+// Every tile pays for chrome out of its own area: the 1-unit gap that separates it from its
+// neighbour. That toll is a fixed number of viewBox units per tile, not a share of it, so it
+// falls hardest on the smallest — which breaks the one rule this page has if left unpaid.
+// Measured against the real portfolio before this compensated for it, tiles ran from 46% to
+// 104% of the area their value called for, and a position in a small sector could gain 10%
+// while its tile barely moved.
+//
+// So the layout pays the toll from a separate pocket: lay out, measure what each tile will
+// actually lose to chrome, hand it that much room on top of its value, and lay out again.
+// `overhead` reports the units one laid-out rect loses. The toll depends on a rect's perimeter,
+// which stops moving as soon as the areas are close, so this reaches its fixed point in two
+// passes and the third is only insurance — every tile then draws its exact share of the value.
+function squarifyNet(vals, rect, overhead) {
+  let laid = squarify(vals, rect);
+  const total = vals.reduce((t, v) => t + v.value, 0);
+  const room = rect.w * rect.h;
+  if (!(total > 0) || !(room > 0)) return laid;
+  for (let pass = 0; pass < 3; pass++) {
+    const toll = new Map(laid.map(t => [t.item, Math.max(0, overhead(t))]));
+    const spare = room - [...toll.values()].reduce((t, v) => t + v, 0);
+    if (spare <= 0) break;                 // nothing left to share out; keep the plain layout
+    const k = spare / total;
+    // the input order is a fixed key, never value, so re-weighting never reshuffles the tiles
+    laid = squarify(vals.map(v => ({ item: v.item, value: k * v.value + toll.get(v.item) })), rect);
+  }
+  return laid;
+}
+
+// what one position tile loses to the 1-unit gap on two of its edges, and what is left of it
+const tileToll = t => t.w + t.h - 1;
+const tileArea = t => Math.max(0, t.w - 1) * Math.max(0, t.h - 1);
+
+// The area a sector rect really hands to its positions, once every tile's own gap inside it is
+// paid — the sector frame itself costs nothing (no inset, no head strip: positions run flush to
+// its edge). This, not the sector rect, is the figure that has to come out proportional to the
+// sector's value: a short wide sector spends far more of itself on tile gaps than a square one
+// does, so measuring the rect instead of the net would still leave the tiles in the flattest
+// sector under their due.
+function sectorNetArea(sr, members) {
+  if (sr.w <= 0 || sr.h <= 0) return 0;
+  return layTiles(sr, members).reduce((t, x) => t + tileArea(x), 0);
+}
+const layTiles = (inner, members) =>
+  squarifyNet(members.map(d => ({ value: d.cur, item: d })), inner, tileToll);
+
 function renderMap(items, asOf) {
   const svg = document.getElementById('pie');
   const W = 900, H = 560, PAD = 2;
@@ -609,7 +656,11 @@ function renderMap(items, asOf) {
   let mapScale = 1;                      // set below when the as-of map is shrunk; 1 otherwise
 
   if (asOf) {
-    mapScale = Math.max(0.15, Math.min(1, Math.sqrt(Math.max(0, asOf.ratio))));
+    // No floor here: a floor would clamp every ratio below it to the same width, so two real
+    // past values that both happen to sit under the floor render pixel-identical — exactly the
+    // "gain doesn't move the box" bug this invariant exists to prevent. sqrt(ratio) all the way
+    // down keeps distinct values visibly distinct, even when both are small.
+    mapScale = Math.min(1, Math.sqrt(Math.max(0, asOf.ratio)));
     svg.style.width = (mapScale * 100) + '%';
     svg.style.setProperty('--map-scale', mapScale);
     note.hidden = false;
@@ -637,42 +688,49 @@ function renderMap(items, asOf) {
     const s = sectorOf(d);
     (bySector.get(s) || bySector.set(s, []).get(s)).push(d);
   });
+  // settle the member order here, once: sectorNetArea below lays the same tiles out to measure
+  // what a sector rect is worth, and it has to reach the layout the drawing will actually use
+  bySector.forEach(members => members.sort((a, b) => a.label.localeCompare(b.label)));
   const sectorNames = [...bySector.keys()].sort((a, b) => sectorRank(a) - sectorRank(b));
-  const sectorRects = squarify(
+  const sectorRects = squarifyNet(
     sectorNames.map(s => ({ value: bySector.get(s).reduce((t, d) => t + d.cur, 0), item: s })),
-    { x: PAD, y: PAD, w: W - 2 * PAD, h: H - 2 * PAD }
+    { x: PAD, y: PAD, w: W - 2 * PAD, h: H - 2 * PAD },
+    sr => sr.w * sr.h - sectorNetArea(sr, bySector.get(sr.item))
   );
 
   sectorRects.forEach(sr => {
-    const sw = Math.max(0, sr.w - 1), sh = Math.max(0, sr.h - 1);
     const hue = sectorHue(sr.item);
+    // outline only, in the same neutral --rim token the pie's own rim uses (black on light,
+    // white on dark) — never the sector's hue, so two sectors sharing an edge draw the same
+    // line on top of each other and it reads as one divider, not two colours meeting.
+    // No half-pixel crisp-line offset here (unlike the position tiles): the svg is stretched to
+    // whatever width its container gives it, so 1 viewBox unit is rarely 1 device pixel, and that
+    // offset — tuned for an exact 1:1 map — only made the line's rendered weight swim between
+    // roughly 1 and 3px as the window resized. A plain 2px stroke on the rect's true edges is
+    // heavy enough to anti-alias consistently at any scale instead.
+    //
+    // *nudge, though, same as the label offsets below: an as-of pick shrinks the whole svg by
+    // mapScale, and a bare stroke-width shrinks right along with it — the border on a small,
+    // long-ago snapshot would visibly thin out as its value dropped, when the line is chrome, not
+    // data, and should read the same width regardless of what the map happens to be showing.
     const bg = el('rect', {
-      x: sr.x + 0.5, y: sr.y + 0.5, width: sw, height: sh,
+      x: sr.x, y: sr.y, width: sr.w, height: sr.h,
       fill: `hsl(${hue.toFixed(1)}deg 55% 55% / 0.22)`,
-      stroke: `hsl(${hue.toFixed(1)}deg 50% 45% / 0.55)`, 'stroke-width': 1,
+      stroke: 'var(--rim)', 'stroke-width': 2 * nudge,
       class: 'sectorbg',
     });
     g.appendChild(bg);
 
-    const showLabel = sw > 30 && sh > 16;
-    const headH = showLabel ? 6 : 0;
-    if (showLabel) {
-      const lbl = el('text', {
-        x: sr.x + 4 * nudge, y: sr.y + 5 * nudge, class: 'sectorlbl',
-        fill: `hsl(${hue.toFixed(1)}deg 55% 32%)`,
-      });
-      lbl.textContent = sr.item;
-      g.appendChild(lbl);
-    }
+    if (sr.w <= 0 || sr.h <= 0) return;
 
-    const inner = { x: sr.x + 1, y: sr.y + 1 + headH, w: sw - 2, h: sh - 2 - headH };
-    if (inner.w <= 0 || inner.h <= 0) return;
-
-    const members = bySector.get(sr.item).sort((a, b) => a.label.localeCompare(b.label));
-    squarify(members.map(d => ({ value: d.cur, item: d })), inner).forEach(t => {
+    // positions run flush to the sector frame — no inset, no head strip; the sector's own name
+    // is an overlay on the top-left tile instead (below), so it never takes layout space of its own
+    let firstTile = null;
+    layTiles(sr, bySector.get(sr.item)).forEach((t, i) => {
       const d = t.item;
       const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
       const fill = gradeColor(d.state === 'flat' ? NaN : d.ret, d.cash);
+      if (i === 0) firstTile = t;   // top-left tile: the sector label overlays it, below
       // no stroke on either layer — the 1px layout gap is the separator (showing the sector's
       // own background colour through), so the bar can never look wider than the tile it sits in
       const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
@@ -726,6 +784,17 @@ function renderMap(items, asOf) {
         }
       }
     });
+
+    // sector name, overlaid on the top-left tile after it (and everything on it) is drawn, so it
+    // sits on top rather than sharing the tile's own space
+    if (firstTile && firstTile.w > 30 && firstTile.h > 16) {
+      const lbl = el('text', {
+        x: firstTile.x + 4 * nudge, y: firstTile.y + 8 * nudge,
+        class: 'sectorlbl',
+      });
+      lbl.textContent = sr.item;
+      g.appendChild(lbl);
+    }
   });
 
   svg.setAttribute('aria-label', 'Treemap of all positions grouped by sector, area by current value, colour by return');

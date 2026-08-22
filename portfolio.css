@@ -161,7 +161,7 @@
   .maplbl.dark { fill: #12120f; }        /* funds and cash */
   .mapsub { font-size: calc(8px / var(--map-scale, 1)); font-variant-numeric: tabular-nums; }
   .sectorbg { pointer-events: none; }
-  .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700;
+  .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700; fill: #12120f;
                text-transform: uppercase; letter-spacing: 0.07em; pointer-events: none; }
   .closedhead { display: flex; justify-content: flex-start; align-items: baseline;
                 margin: 14px 0 2px; font-size: 0.82rem; color: var(--text-secondary); }
