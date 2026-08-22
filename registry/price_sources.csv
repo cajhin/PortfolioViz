@@ -1,7 +1,6 @@
 isin,priority,source,symbol,quote_currency,fx_symbol,note
 CA73044W3021,1,yahoo,POET,USD,EURUSD=X,
 CH0012032113,1,yahoo,RO.SW,CHF,EURCHF=X,primary SIX listing — liquid; RHO.DE is thin and goes stale
-CH0012032113,2,yahoo,RHO.DE,EUR,,"thin Xetra cross-listing — carries stale quotes, fallback only"
 DE0006069008,1,yahoo,NLM.F,EUR,,
 DE0008430026,1,yahoo,MUV2.DE,EUR,,
 DE000FA8G475,1,manual,,EUR,,expired warrant — worthless
@@ -16,9 +15,7 @@ IE00B3YLTY66,1,yahoo,SPYI.DE,EUR,,
 IE00B4L5Y983,1,yahoo,EUNL.DE,EUR,,
 IE00B9M6SJ31,1,yahoo,CRPH.IL,EUR,,
 IE00BHZRQZ17,1,yahoo,FLXI.DE,EUR,,
-IE00BHZRQZ17,2,yahoo,IE00BHZRQZ17.SG,EUR,,alternate listing
 IE00BMFKG444,1,yahoo,XNAS.DE,EUR,,
-IE00BMFKG444,2,yahoo,IE00BMFKG444.SG,EUR,,alternate listing
 IE00BMTX2B82,1,yahoo,IAEA.AS,EUR,,
 JP3979200007,1,yahoo,6920.T,JPY,EURJPY=X,
 KYG3323L1005,1,yahoo,FN,USD,EURUSD=X,
