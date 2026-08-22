@@ -15,12 +15,25 @@ To start a new series, create data_series/<name>.csv with just the header:
     # name=<what it is>
     # currency=EUR
     date,close
+
+A brand-new series with no --from given backfills from config.json's "timelineStart" (see that
+file, at the repo root, for the current value — it's the same start date the as-of picker honours).
 """
 import csv, io, json, os, subprocess, sys, time
 from datetime import datetime, timedelta, timezone
 
 DIR = "data_series"
 UA = "Mozilla/5.0"
+
+
+def timeline_start():
+    # config.json is maintained by agents, not this script — fall back quietly if it is missing
+    # or malformed rather than block a data refresh over a settings file
+    try:
+        with open("config.json") as fh:
+            return json.load(fh).get("timelineStart") or "2019-08-20"
+    except (OSError, ValueError):
+        return "2019-08-20"
 
 
 def read_file(path):
@@ -61,7 +74,7 @@ def update_one(path, backfill=None):
         print(f"{path}: skipped — no '# symbol=' header")
         return
 
-    last = max(rows) if rows else "2019-08-20"
+    last = max(rows) if rows else timeline_start()
     # normally just the tail; with --from, everything back to that day
     start = backfill if backfill and (not rows or backfill < min(rows)) else last
     since = as_stamp(start)

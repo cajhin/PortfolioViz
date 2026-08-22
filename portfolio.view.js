@@ -246,7 +246,7 @@ function attachTip(items) {
         `<div class="pf">${d.portfolio}</div>` +
         tipRow('Share', fmtShare(d.share)) +
         (d.cash ? '' :
-          tipRow(MODE === 'rel' ? 'Same money in MSCI World' : 'Purchase value', fmtMoney2(d.pur))) +
+          tipRow(MODE === 'rel' ? `Same money in ${BENCH_LABEL}` : 'Purchase value', fmtMoney2(d.pur))) +
         tipRow('Current value', fmtMoney2(d.cur)) +
         (d.divHeld > 0 ? tipRow('Dividends', fmtMoney2(d.divHeld), 'income') : '') +
         (d.state === 'flat' ? '' :
@@ -386,9 +386,9 @@ function renderTrades() {
 // tile — as-of items carry no relPre of their own, that figure comes from computeAsOfRealized.
 function renderHeaderTotals(items, closed = [], opts = {}) {
   document.getElementById('kPur').textContent =
-    MODE === 'rel' ? 'Same money in MSCI World' : 'Invested (ex cash)';
+    MODE === 'rel' ? `Same money in ${BENCH_LABEL}` : 'Invested (ex cash)';
   document.getElementById('kGain').textContent =
-    MODE === 'rel' ? 'Ahead of MSCI World' : 'Unrealised gain';
+    MODE === 'rel' ? `Ahead of ${BENCH_LABEL}` : 'Unrealised gain';
   const all = totals(items);
   document.getElementById('tCur').textContent = fmtMoney2(all.cur);
   document.getElementById('tPur').textContent = fmtMoney2(all.pur);
@@ -1028,7 +1028,7 @@ function legendMap() {
     item(`<span>−${GRADE_DOWN}%</span>` +
       `<span class="swatch" style="width:150px;background:linear-gradient(90deg,${gradientStops()})"></span>` +
       `<span>+${GRADE_UP}% — one ramp: ${MODE === 'rel'
-        ? 'body and foot bar = performance against MSCI World'
+        ? `body and foot bar = performance against ${BENCH_LABEL}`
         : 'body = total return, foot bar = annualised'}</span>`),
     item(`<span class="swatch" style="background:var(--income)"></span>` +
       `<span>Gold = dividends — a band on the tile, one block in the bar</span>`),
@@ -1194,7 +1194,7 @@ function renderDetail() {
   if (!drawn) {
     const slug = seriesSlug(d);
     body.innerHTML = `<div class="empty">no data — add <code>data_series/${slug || '…'}.csv</code>` +
-      ` and run <code>python3 update_data_series.py ${slug || '…'} --from 2019-01-01</code></div>`;
+      ` and run <code>python3 update_data_series.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }
   document.getElementById('dtSub').textContent =
@@ -1333,7 +1333,8 @@ document.getElementById('asOfClear').addEventListener('click', () => {
 // manual day/month-length bookkeeping needed). The value updates immediately on every step for
 // a responsive field; the actual re-render is debounced, so holding a key doesn't fire a burst
 // of chart rebuilds while scrubbing fast.
-const MIN_DATE = document.getElementById('asOfDate').min || '2019-01-01';
+// read at call time, never cached: this runs at parse time, before config.json's fetch (in the
+// startup chain, far below) has resolved TIMELINE_START to its real value
 let asOfRenderTimer = null;
 function shiftAsOf(days, months) {
   const base = new Date((AS_OF || TODAY) + 'T00:00:00Z');
@@ -1356,7 +1357,7 @@ function shiftAsOf(days, months) {
 
   let iso = base.toISOString().slice(0, 10);
   if (iso > TODAY) iso = TODAY;
-  if (iso < MIN_DATE) iso = MIN_DATE;
+  if (iso < TIMELINE_START) iso = TIMELINE_START;
   document.getElementById('asOfDate').value = iso;
   AS_OF = iso === TODAY ? null : iso;
   document.getElementById('asOfClear').hidden = !AS_OF;
@@ -1390,13 +1391,18 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 MODE = document.getElementById('relMode').checked ? 'rel' : 'abs';
 
 // ingest() builds the model; this draws it. Split so the model can be exercised without a DOM.
-function load(...csvTexts) {
-  ingest(...csvTexts);
+function load(...texts) {
+  ingest(...texts);
+  // config.json only ever changes two labels a browser has no other way to pick up early: the
+  // date picker's own native floor, and the mode-switch text baked into the static HTML
+  document.getElementById('asOfDate').min = TIMELINE_START;
+  document.getElementById('relModeLabel').textContent = `Performance vs. ${BENCH_LABEL}`;
   renderMeta(ITEMS, CLOSED);
   show(VIEW);
 }
 
 Promise.all([
+  fetch(CONFIG_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(CSV_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
   fetch(TRADES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(NAMES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
@@ -1410,11 +1416,12 @@ Promise.all([
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
   });
 
-// The fallback when the positions CSV can't be fetched: pick that one file by hand. The other
-// five are simply absent — ingest() treats each missing text as an empty table, so the page comes
-// up with no trades, names, benchmark or sectors, and the figures that need them are left out.
+// The fallback when the positions CSV can't be fetched: pick that one file by hand. config.json
+// and the other five CSVs are simply absent — ingest() treats each missing text as empty (an
+// empty table, or the built-in default settings), so the page comes up with no trades, names,
+// benchmark or sectors, and the figures that need them are left out.
 document.getElementById('file').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
-  f.text().then(t => load(t))
+  f.text().then(t => load('', t))
     .catch(err => document.getElementById('err').textContent = String(err));
 });

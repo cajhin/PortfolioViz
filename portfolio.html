@@ -32,6 +32,7 @@
       <div class="chartbar">
         <div class="chartbar-left" id="asOfWrap">
           <label class="asof">As of
+            <!-- min is the pre-load fallback for config.json's timelineStart; load() overwrites it once fetched -->
             <input type="date" id="asOfDate" min="2019-01-01">
           </label>
           <div class="asof-step" id="asOfStep" tabindex="0"
@@ -44,7 +45,8 @@
         </div>
         <div class="chartbar-right">
           <span id="showEuroSlot"></span>
-          <label class="modeswitch"><input type="checkbox" id="relMode"><span>Performance vs. MSCI World</span></label>
+          <!-- text is the pre-load fallback for config.json's benchmarkLabel; load() overwrites it once fetched -->
+          <label class="modeswitch"><input type="checkbox" id="relMode"><span id="relModeLabel">Performance vs. MSCI World</span></label>
           <div class="seg" role="group" aria-label="Chart type">
             <button type="button" id="btnMap" class="on" aria-pressed="true">Map</button>
             <button type="button" id="btnPie" aria-pressed="false">Pie</button>

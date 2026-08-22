@@ -10,7 +10,7 @@
 
    Sections, in order:
 
-     files                paths of the six CSVs the page reads
+     files                paths of config.json and the six CSVs the page reads
      state                every mutable global, and who is allowed to write it
      CSV                  parsing, and the "# key=value" header lines some files carry
      the trade log        TRADE_INDEX — one position's activities, the input to almost everything
@@ -32,6 +32,7 @@
    ============================================================================================= */
 
 /* ---------- files ---------- */
+const CONFIG_PATH = 'config.json';   // tunable settings an agent maintains — see its own comments
 const CSV_PATH = 'parqet/parqet_all_port.csv';
 const TRADES_PATH = 'parqet/parqet_trades.csv';
 const NAMES_PATH = 'parqet/parqet_names.csv';   // ISIN (or exact name) → short display name
@@ -47,14 +48,18 @@ const SECTORS_PATH = 'parqet/parqet_sectors.csv';   // hand-maintained ISIN → 
    TRADES is the raw activity log, and the three Maps are lookup tables read straight off their
    CSVs. MODE / VIEW / AS_OF are what the three controls in the chart bar currently say; the
    view syncs MODE from the checkbox at startup, since a browser restores a checkbox's ticked
-   state across a reload on its own and this script would otherwise disagree with the screen. */
+   state across a reload on its own and this script would otherwise disagree with the screen.
+   TIMELINE_START / BENCH_LABEL start at sensible defaults and are overwritten by ingest() from
+   config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
+   reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
     BENCH = [], CCY = 'EUR',
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
     VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
     AS_OF = null,                                      // an ISO date, or null for "today"
     PF = [],                                           // [{ name }] — portfolios in draw order
-    TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 };
+    TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
+    TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World';
 
 /* ---------- CSV ---------- */
 function parseCSV(text) {
@@ -463,7 +468,7 @@ const benchClose = iso => {
   return (lastAtOrBefore(BENCH, iso.slice(0, 10)) || BENCH[0]).close;
 };
 const benchNow = () => BENCH.length ? BENCH[BENCH.length - 1].close : NaN;
-const BENCH_LABEL = 'MSCI World';
+// BENCH_LABEL itself lives in the state block above, since ingest() overwrites it from config.json
 
 // The counterfactual for a position you still hold: only the lots that survived, each mirrored in
 // the benchmark from its own buy date. Realised results are the bar's business, so sold lots leave
@@ -732,9 +737,16 @@ function totals(rows) {
 }
 
 /* ---------- ingest ----------
-   The six CSVs in, the whole model out. Called by load() in portfolio.view.js, which renders
-   what this leaves behind; nothing here touches the page. */
-function ingest(text, tradesText, namesText, benchText, pricesText, sectorsText) {
+   config.json plus the six CSVs in, the whole model out. Called by load() in portfolio.view.js,
+   which renders what this leaves behind; nothing here touches the page. */
+function ingest(configText, text, tradesText, namesText, benchText, pricesText, sectorsText) {
+  // malformed or missing config.json keeps the built-in defaults rather than failing the page —
+  // same "absent input degrades gracefully" rule every other file here follows
+  try {
+    const cfg = configText ? JSON.parse(configText) : {};
+    if (cfg.timelineStart) TIMELINE_START = cfg.timelineStart;
+    if (cfg.benchmarkLabel) BENCH_LABEL = cfg.benchmarkLabel;
+  } catch { /* keep defaults */ }
   PRICES = new Map((pricesText ? parseCSV(pricesText) : [])
     .filter(r => r.identifier && r.price !== '' && r.asof)
     .map(r => [r.identifier, { price: num(r.price), asof: r.asof, symbol: r.symbol }]));

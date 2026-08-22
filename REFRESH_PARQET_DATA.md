@@ -92,6 +92,11 @@ date,close
 ```
 
 The fund is iShares Core MSCI World, Xetra ticker EUNL.DE — the same ISIN as the Comdirect holding.
+The symbol and name above are the source of truth for *fetching* it — that's all this script reads.
+The page's own display name for it is separate: `config.json`'s `benchmarkLabel` (currently "MSCI
+World"), used everywhere the UI says what the position is being measured against. Swap the fund and
+both need updating — this file's header so the right symbol gets fetched, `config.json` so the page
+says the right thing about it.
 
 **Update it incrementally**, don't refetch seven years:
 
@@ -100,6 +105,10 @@ python3 update_data_series.py                              # update every series
 python3 update_data_series.py benchmark                    # just this one series
 python3 update_data_series.py benchmark --from 2019-01-01  # also backfill, from that date
 ```
+
+`2019-01-01` above is `config.json`'s `timelineStart` — the same date the as-of picker won't go
+behind. A brand-new series (see below) backfills from there automatically when `--from` is omitted;
+an existing one only needs `--from` to reach further back than what it already has.
 
 Clicking a tile in the map opens a detail overlay that charts that position against the benchmark,
 both indexed to 100 at the position's first activity. It looks for `data_series/<slug>.csv`, where the
@@ -115,6 +124,13 @@ The script reads `# symbol=` from the file, asks Yahoo only for the days from th
 onward (or from `--from`, to extend the series backwards), and merges — refetching the overlap day on purpose, since the newest row may have been an
 intraday value when it was written. It prints how many rows were added and corrected. The page reads
 the last row as "today" for the benchmark comparison, so run it whenever the positions are refreshed.
+
+**Run the bare `python3 update_data_series.py` (no series name) every time**, closed positions
+included. The script has no idea which positions are open or closed — it just walks every file
+under `data_series/` — so a closed position's series keeps extending in step with everything else
+for as long as its file exists, with no special-casing needed. The only way a series actually stops
+or gains a hole is a refresh that skips this step entirely, so don't skip it: it's what keeps the
+as-of picker and the detail overlay honest for a position long after it's sold.
 
 `parqet/parqet_prices.csv` (`identifier,name,price,currency,asof,symbol,source`) carries a fresh price for
 each **closed** position, since Parqet freezes their quotes at the sale and the page needs a current
