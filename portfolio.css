@@ -230,6 +230,7 @@
   .detail .dt-title { font-weight: 600; font-size: 1.05rem; }
   .detail .dt-sub { color: var(--text-secondary); font-size: 0.84rem; margin-top: 2px;
                     font-variant-numeric: tabular-nums; }
+  .detail .dt-warn { color: var(--income); font-size: 0.78rem; margin-top: 3px; }
   .detail button { appearance: none; border: 0; background: transparent; cursor: pointer;
                    color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px; }
   .detail .dt-body { padding: 0 18px 6px; }
@@ -237,6 +238,7 @@
   .detail .dt-foot .seg button { padding: 4px 13px; }
   .detail .empty { padding: 28px 0 34px; text-align: center; color: var(--text-muted); }
   .dtline { fill: none; stroke-width: 1.6; }
+  .dtline-fill { stroke-dasharray: 4 3; opacity: 0.55; }   /* a bridged gap — price held flat, not real */
   .dtgrid { stroke: var(--border); stroke-width: 0.6; }
   .dtqtick { stroke: var(--text-muted); stroke-width: 1; }   /* darker than .dtgrid — an actual
                                                                  tick mark, not a background line */

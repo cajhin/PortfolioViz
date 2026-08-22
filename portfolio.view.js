@@ -1088,10 +1088,43 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
     from = pick && pick > series.rows[0].date ? pick : series.rows[0].date;
     to = series.rows[series.rows.length - 1].date;
   }
-  const rows = series.rows.filter(r => r.date >= from && r.date <= to);
+  let rows = series.rows.filter(r => r.date >= from && r.date <= to);
   if (rows.length < 2) return null;
   const benchLabel = altBench ? altBench.label : BENCH_LABEL;
   const bench = (altBench ? altBench.series.rows : BENCH).filter(r => r.date >= rows[0].date);
+
+  // The x-axis spaces points by index, not calendar time — normally harmless, since real trading
+  // days are already close to evenly spaced. It breaks badly across a genuine gap in the price
+  // history (a thinly-traded listing Yahoo has no data for over some stretch — Roche's RHO.DE
+  // has one, 2019-09 to 2025-04): the two rows on either side land on ADJACENT x positions no
+  // matter how many years actually separate them, so whatever real price move happened during
+  // the gap draws as a single implausible jump. And that jump doesn't stay confined to this
+  // line — the benchmark is looked up AT these same dates, so it visibly "jumps" too, even
+  // though its own data has no gap at all.
+  //
+  // Rather than get the x-axis right in general (a bigger change, and every other line here is
+  // already fine with index spacing), patch the one case that's actually broken: bridge a gap
+  // with synthetic weekly points holding the last known price flat, so the x-axis allocates that
+  // stretch roughly the width real trading days would have, and a still-continuous benchmark or
+  // alt-benchmark reads its own real values there instead of two years apart read as one step.
+  const GAP_DAYS = 20;                 // past a long holiday cluster; a real data gap, not a weekend
+  const WEEK = 7 * 864e5;
+  const bridged = [rows[0]];
+  for (let i = 1; i < rows.length; i++) {
+    const prevT = Date.parse(rows[i - 1].date), curT = Date.parse(rows[i].date);
+    if ((curT - prevT) / 864e5 > GAP_DAYS) {
+      for (let t = prevT + WEEK; t < curT; t += WEEK)
+        bridged.push({ date: new Date(t).toISOString().slice(0, 10), close: rows[i - 1].close, filled: true });
+    }
+    bridged.push(rows[i]);
+  }
+  rows = bridged;
+  const gapRuns = [];                  // [{ from, to }] — every bridged stretch, for the warning
+  rows.forEach((r, i) => {
+    if (!r.filled) return;
+    if (!rows[i - 1] || !rows[i - 1].filled) gapRuns.push({ from: rows[i - 1].date, to: null });
+    gapRuns[gapRuns.length - 1].to = rows[i + 1] ? rows[i + 1].date : r.date;
+  });
 
   const dates = rows.map(r => r.date);
   const xOf = date => {                                  // nearest trading day at or before
@@ -1201,12 +1234,27 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
     }
   });
 
-  const path = (pts, stroke) => svg.appendChild(el('path', {
+  const path = (pts, stroke, dashed) => svg.appendChild(el('path', {
     d: pts.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' '),
-    class: 'dtline', stroke,
+    class: 'dtline' + (dashed ? ' dtline-fill' : ''), stroke,
   }));
   if (benchPts.length > 1) path(benchPts.map(p => [p[0], y(p[1])]), 'var(--flat)');
-  path(rows.map((r, i) => [x(i), y(stockPct(r))]), 'var(--series-1)');
+  // the stock's own path breaks into solid/dashed runs at each bridged gap: an edge is "filled"
+  // if either point it connects is a synthetic one, so the dashing starts and ends exactly on the
+  // last real point either side, and the two styles always meet rather than leaving a visible seam
+  const stockPts = rows.map((r, i) => [x(i), y(stockPct(r)), !!r.filled]);
+  let run = [stockPts[0]], runFill = null;
+  for (let i = 1; i < stockPts.length; i++) {
+    const edgeFill = stockPts[i][2] || stockPts[i - 1][2];
+    if (runFill === null) runFill = edgeFill;
+    if (edgeFill !== runFill) {
+      path(run, 'var(--series-1)', runFill);
+      run = [stockPts[i - 1]];
+      runFill = edgeFill;
+    }
+    run.push(stockPts[i]);
+  }
+  path(run, 'var(--series-1)', runFill);
 
   if (anchor !== dates[0]) {                              // show what the lines were tied to
     const i = xOf(anchor);
@@ -1286,8 +1334,8 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
   // dates/stockVals/benchVals/x plus the margins: everything renderDetail needs to turn a pointer
   // position back into "which day is this" for the hover crosshair, without redoing this geometry
   return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, bench: lastBench,
-           benchLabel, benchKeyNode, marks: markNodes, dates, stockVals, benchVals,
-           x, L, R, T, B, H, W };
+           benchLabel, benchKeyNode, marks: markNodes, dates, stockVals, benchVals, gapRuns,
+           filled: rows.map(r => !!r.filled), x, L, R, T, B, H, W };
 }
 
 let DETAIL = null;                                    // { d, series, alignDate }
@@ -1312,13 +1360,23 @@ function renderDetail() {
   }
   const sub = document.getElementById('dtSub');
   // built once so hovering can restore exactly this on pointerleave, instead of re-deriving it
-  const subAt = (stock, bench, day) =>
+  const subAt = (stock, bench, day, isFilled) =>
     `${d.portfolio} · 0 % at ${drawn.anchor}` +
     ` · ${d.label} ${fmtPct(stock)}` +
     (Number.isFinite(bench) ? ` · ${drawn.benchLabel} ${fmtPct(bench)}` : '') +
-    (day ? ` — ${day}` : '');
+    (day ? ` — ${day}` : '') +
+    (isFilled ? ' (no data — held flat)' : '');
   const defaultSub = subAt(drawn.stock, drawn.bench, null);
   sub.textContent = defaultSub;
+
+  // no price history for a stretch (a thinly-traded listing Yahoo has gaps for) — the dashed
+  // the dashed run on the chart already shows what this covers; just say when
+  const warn = document.getElementById('dtWarn');
+  warn.hidden = !drawn.gapRuns.length;
+  if (drawn.gapRuns.length) {
+    warn.textContent = `⚠ no price data ` +
+      drawn.gapRuns.map(g => `${g.from} → ${g.to}`).join(', ');
+  }
 
   const tip = document.createElement('div');
   tip.className = 'dt-tip';
@@ -1369,7 +1427,7 @@ function renderDetail() {
   // hoverDay tracks what's currently under the crosshair so a plain click can tie the lines there
   // too, the same re-anchor a trade marker's own click already does — click is meaningless without
   // a day under it, so it's a no-op wherever pointermove last cleared this back to null.
-  const { dates, stockVals, benchVals, x, L, R } = drawn;
+  const { dates, stockVals, benchVals, filled, x, L, R } = drawn;
   let hoverDay = null;
   // drag-to-zoom: pointerdown marks where a possible drag starts, pointermove past a day's width
   // turns it into one (dragMoved), pointerup on a real drag sets the custom range and redraws.
@@ -1415,7 +1473,7 @@ function renderDetail() {
     hoverDay = dates[i];
     crosshair.setAttribute('x1', x(i)); crosshair.setAttribute('x2', x(i));
     crosshair.classList.add('on');
-    sub.textContent = subAt(stockVals[i], benchVals[i], dates[i]);
+    sub.textContent = subAt(stockVals[i], benchVals[i], dates[i], filled[i]);
   });
   drawn.svg.addEventListener('pointerup', e => {
     if (dragStartI === null) return;
