@@ -1333,15 +1333,16 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
       x: x(i) - barW / 2, y: VALH - h, width: barW, height: h, fill,
     }));
   });
+  // ATH is a property of the whole window and stays put; CLS and INV describe one day, so the
+  // crosshair retargets them at whatever day it is over (see valueAt() in renderDetail)
+  let clsLabel = null, invLabel = null;
   if (ath > 0) {
     const athLabel = el('text', { x: L, y: 12, class: 'dtaxis', 'text-anchor': 'start' });
     athLabel.textContent = `ATH ${fmtMoney(ath)}`;
     valueSvg.appendChild(athLabel);
-    const clsLabel = el('text', { x: L, y: 24, class: 'dtaxis', 'text-anchor': 'start' });
-    clsLabel.textContent = `CLS ${fmtMoney(vals[vals.length - 1].cur)}`;
+    clsLabel = el('text', { x: L, y: 24, class: 'dtaxis', 'text-anchor': 'start' });
     valueSvg.appendChild(clsLabel);
-    const invLabel = el('text', { x: L, y: 36, class: 'dtaxis', 'text-anchor': 'start' });
-    invLabel.textContent = `INV ${fmtMoney(vals[vals.length - 1].cost)}`;
+    invLabel = el('text', { x: L, y: 36, class: 'dtaxis', 'text-anchor': 'start' });
     valueSvg.appendChild(invLabel);
   }
 
@@ -1349,6 +1350,7 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
   // position back into "which day is this" for the hover crosshair, without redoing this geometry
   return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, bench: lastBench,
            benchLabel, benchKeyNode, marks: markNodes, dates, stockVals, benchVals, gapRuns,
+           vals, clsLabel, invLabel,
            filled: rows.map(r => !!r.filled), x, L, R, T, B, H, W };
 }
 
@@ -1442,6 +1444,16 @@ function renderDetail() {
   // too, the same re-anchor a trade marker's own click already does — click is meaningless without
   // a day under it, so it's a no-op wherever pointermove last cleared this back to null.
   const { dates, stockVals, benchVals, filled, x, L, R } = drawn;
+  // CLS and INV follow the crosshair; passing null puts them back on the last day in the window,
+  // which is what they read when nothing is hovered
+  const valueAt = i => {
+    if (!drawn.clsLabel) return;
+    const v = drawn.vals[i == null ? drawn.vals.length - 1 : i];
+    if (!v) return;
+    drawn.clsLabel.textContent = `CLS ${fmtMoney(v.cur)}`;
+    drawn.invLabel.textContent = `INV ${fmtMoney(v.cost)}`;
+  };
+  valueAt(null);
   let hoverDay = null;
   // drag-to-zoom: pointerdown marks where a possible drag starts, pointermove past a day's width
   // turns it into one (dragMoved), pointerup on a real drag sets the custom range and redraws.
@@ -1475,12 +1487,14 @@ function renderDetail() {
       selectBand.setAttribute('width', Math.max(0, x(b) - x(a)));
       selectBand.classList.add('on');
       crosshair.classList.remove('on');
+      valueAt(null);
       return;
     }
     if (vx < L || vx > drawn.W - R) {
       hoverDay = null;
       crosshair.classList.remove('on');
       sub.textContent = defaultSub;
+      valueAt(null);
       return;
     }
     const i = idxAt(vx);
@@ -1488,6 +1502,7 @@ function renderDetail() {
     crosshair.setAttribute('x1', x(i)); crosshair.setAttribute('x2', x(i));
     crosshair.classList.add('on');
     sub.textContent = subAt(stockVals[i], benchVals[i], dates[i], filled[i]);
+    valueAt(i);
   });
   drawn.svg.addEventListener('pointerup', e => {
     if (dragStartI === null) return;
@@ -1507,6 +1522,7 @@ function renderDetail() {
     hoverDay = null;
     crosshair.classList.remove('on');
     sub.textContent = defaultSub;
+    valueAt(null);
   });
   drawn.svg.addEventListener('click', () => {
     if (dragMoved) { dragMoved = false; return; }   // that click was the tail end of a real drag
