@@ -200,6 +200,8 @@
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; flex: none; }
   .tablescroll { overflow-x: auto; }
   td.src { color: var(--text-muted); font-size: 0.78rem; white-space: nowrap; }
+  td.posname { cursor: pointer; }
+  td.posname:hover { text-decoration: underline; }
 
   .tip {
     position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;

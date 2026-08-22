@@ -322,12 +322,16 @@ function renderMeta(items, closed = []) {
       tr.innerHTML =
         `<td>${p.name}</td>` +
         `<td class="src">${sourceTag(d)}</td>` +
-        `<td><span class="dot" style="background:${d.core}"></span>${d.label}</td><td>${d.shares.toLocaleString('de-DE')}</td>` +
+        `<td class="posname"><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
+        `<td>${d.shares.toLocaleString('de-DE')}</td>` +
         `<td>${d.cash ? '–' : fmtMoney2(d.pur)}</td><td>${fmtMoney2(d.cur)}</td>` +
         `<td class="${cls}">${d.state === 'flat' ? '–' : fmtMoney2(d.gain)}</td>` +
         `<td class="${cls}">${d.state === 'flat' ? '–' : fmtPct(d.ret)}</td>` +
         `<td class="${d.relPre > 0 ? 'realized' : d.relPre < 0 ? 'neg' : ''}">` +
         `${Math.abs(d.relPre) > 0.005 ? fmtMoney2(d.relPre) : '–'}</td>`;
+      // cash has no price series, so nothing to chart — every real position opens it on a click
+      // scoped to its own name cell, not the whole row, so the surrounding figures stay plain text
+      if (!d.cash) tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
       trs.push(tr);
     });
     const s = totals(rows);
@@ -359,11 +363,12 @@ function renderClosedPositions() {
     tr.innerHTML =
       `<td>${d.portfolio}</td>` +
       `<td class="src">${sourceTag(d)}</td>` +
-      `<td><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
+      `<td class="posname"><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
       `<td>${fmtMoney2(d.invested)}</td>` +
       `<td class="${Number.isFinite(ret) ? (ret >= 0 ? 'pos' : 'neg') : ''}">${Number.isFinite(ret) ? fmtPct(ret) : '–'}</td>` +
       `<td class="${d.relPre >= 0 ? 'realized' : 'neg'}">${fmtMoney2(d.relPre)}</td>` +
       `<td class="${Number.isFinite(d.irr) ? (d.irr >= 0 ? 'pos' : 'neg') : ''}">${Number.isFinite(d.irr) ? fmtPct(d.irr) : '–'}</td>`;
+    tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
     return tr;
   }));
 }
