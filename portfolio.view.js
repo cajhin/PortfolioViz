@@ -237,7 +237,12 @@ function placeTip(tip, wrapEl, e) {
 function attachTip(items) {
   const svg = document.getElementById('pie');
   const tip = document.getElementById('tip');
-  const wrapEl = svg.parentElement;
+  // #tip lives inside #chartBody, but #chartBody isn't positioned — its containing block is
+  // really .chartwrap, one level up, past the whole chart-bar header row. Using #chartBody's own
+  // rect here (as this did) discounts that header's height from every placeTip() calculation,
+  // rendering the tooltip that much too high — close enough to slide over the cursor that started
+  // it. .closest('.chartwrap') is the same fix renderClosed() already needed for this same tip.
+  const wrapEl = svg.closest('.chartwrap');
   items.forEach(d => d.nodes.forEach(n => {
     n.style.cursor = 'default';
     n.addEventListener('pointerenter', e => {
