@@ -52,6 +52,7 @@
             <button type="button" id="btnPie" aria-pressed="false">Pie</button>
             <button type="button" id="btnPositions" aria-pressed="false">Positions</button>
             <button type="button" id="btnTrades" aria-pressed="false">Trades</button>
+            <button type="button" id="btnWatch" aria-pressed="false">Watch</button>
           </div>
         </div>
       </div>
@@ -143,6 +144,16 @@
         <thead><tr>
           <th>Date</th><th>Portfolio</th><th>Position</th><th>Type</th><th>Shares</th>
           <th>Price</th><th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card tablescroll" id="watchCard" hidden>
+      <div class="closedhead"><b id="watchHead"></b></div>
+      <table id="tblWatch">
+        <thead><tr>
+          <th>Source</th><th>Position</th><th>Sector</th><th>Last close</th>
         </tr></thead>
         <tbody></tbody>
       </table>

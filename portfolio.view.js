@@ -398,6 +398,38 @@ function renderTrades() {
   }));
 }
 
+// Every registry instrument with no matching holding, open or closed — the point of a row here
+// with nothing to trade against it. INSTRUMENTS carries each row under both its id and its ISIN
+// (equal, for a security), so de-dupe by object identity before filtering, not the map's own size.
+let WATCH_DRAWN_FOR = null;
+function renderWatch() {
+  if (WATCH_DRAWN_FOR === SHOW_MONEY) return;
+  WATCH_DRAWN_FOR = SHOW_MONEY;
+  const held = new Set([...ITEMS, ...CLOSED].filter(d => !d.cash).map(d => d.identifier));
+  const rows = [...new Set(INSTRUMENTS.values())]
+    .filter(inst => inst.type !== 'cash' && !held.has(inst.id) && !held.has(inst.isin))
+    .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
+  document.getElementById('watchHead').textContent =
+    `${rows.length} tracked, never held`;
+  const tb = document.querySelector('#tblWatch tbody');
+  tb.replaceChildren(...rows.map(inst => {
+    // enough of a position-shaped object for openDetail()/sourceTag() to work on: no trades will
+    // ever match tradeKey(d), so the value bar is correctly all-zero rather than wrong
+    const d = { identifier: inst.id, name: inst.name, label: inst.display || inst.name,
+               portfolio: 'Watchlist', cash: false };
+    const last = PRICES.get(inst.id);
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', () => openDetail(d));
+    tr.innerHTML =
+      `<td class="src">${sourceTag(d)}</td>` +
+      `<td><span class="dot" style="background:${nameColor(d.label)}"></span>${d.label}</td>` +
+      `<td>${inst.sector || '–'}</td>` +
+      `<td>${last ? fmtMoney2(last.price) : '–'}</td>`;
+    return tr;
+  }));
+}
+
 // The stat-tile row + per-portfolio breakdown, split out of renderMeta so an as-of pick can
 // refresh just this part with reconstructed figures without touching the (always-live) table.
 // `opts.realizedTotal`, when given, replaces the live rel/relPre sum for the "Realised pre-tax"
@@ -477,6 +509,7 @@ function attachCurTip(items) {
 // the old formatting until something else happens to rebuild them.
 function redrawEverything() {
   TRADES_DRAWN_FOR = null;
+  WATCH_DRAWN_FOR = null;
   renderMeta(ITEMS, CLOSED);
   show(VIEW);
 }
@@ -1600,7 +1633,8 @@ document.getElementById('detail').addEventListener('click', e => {
 
 /* ---------- views + controls ---------- */
 let SHOW_TOKEN = 0;
-const SEG_BUTTONS = { map: 'btnMap', pie: 'btnPie', positions: 'btnPositions', trades: 'btnTrades' };
+const SEG_BUTTONS = { map: 'btnMap', pie: 'btnPie', positions: 'btnPositions', trades: 'btnTrades',
+                      watch: 'btnWatch' };
 async function show(view) {
   VIEW = view;
   STOPS = null;                          // re-read the theme once, not once per tile
@@ -1617,6 +1651,7 @@ async function show(view) {
   document.getElementById('positionsCard').hidden = view !== 'positions';
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
+  document.getElementById('watchCard').hidden = view !== 'watch';
   document.getElementById('tip').classList.remove('on');
   // as-of reconstruction only exists for the map — disable the actual controls (not just the
   // hidden wrapper) so they can't be triggered by a stray focus/keypress on the other frames
@@ -1629,6 +1664,8 @@ async function show(view) {
   try {
     if (view === 'trades') {
       renderTrades();
+    } else if (view === 'watch') {
+      renderWatch();
     } else if (view === 'positions') {
       // the table's own numbers are always live — an as-of pick only ever affects map/pie
     } else if (view === 'pie') {
@@ -1658,6 +1695,7 @@ document.getElementById('btnPie').addEventListener('click', () => show('pie'));
 document.getElementById('btnMap').addEventListener('click', () => show('map'));
 document.getElementById('btnPositions').addEventListener('click', () => show('positions'));
 document.getElementById('btnTrades').addEventListener('click', () => show('trades'));
+document.getElementById('btnWatch').addEventListener('click', () => show('watch'));
 const TODAY = new Date().toISOString().slice(0, 10);
 const isWeekend = dateStr => [0, 6].includes(new Date(dateStr + 'T00:00:00Z').getUTCDay());
 document.getElementById('asOfDate').max = TODAY;
