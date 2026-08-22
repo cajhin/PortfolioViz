@@ -1113,7 +1113,65 @@ function benchmarkCandidates() {
   [...ITEMS, ...CLOSED].forEach(d => {
     if (!d.cash && !seen.has(d.identifier)) seen.set(d.identifier, d);
   });
+  // every registry instrument tracked but never held gets a shot too — the same pool renderWatch()
+  // lists under "Watch": comparing against a name you don't own is exactly what that tab is for
+  [...new Set(INSTRUMENTS.values())]
+    .filter(inst => inst.type !== 'cash' && !seen.has(inst.id) && !seen.has(inst.isin))
+    .forEach(inst => seen.set(inst.id, { identifier: inst.id, label: inst.display || inst.name }));
   return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// The one picker every clickable comparison-line label (and the compare control in the footer)
+// opens: a custom floated list, not a native <select> — a native dropdown only ever paints a
+// handful of rows and auto-scrolls the *page* underneath it to reveal more as you move through a
+// long list, which reads as slow with dozens of candidates. Every row is a plain <div> built up
+// front instead, so the whole list is on screen (or one ordinary, instant div-scroll away) the
+// moment it opens. onPick(value) fires with the chosen identifier, "__reset", or "__hide" — never
+// at all if the picker is dismissed by clicking elsewhere.
+function openStockPicker(anchorEl, { resetLabel, showHide, currentIdentifier } = {}, onPick) {
+  const candidates = benchmarkCandidates();
+  const body = document.getElementById('dtBody');
+  const box = anchorEl.getBoundingClientRect();
+
+  const menu = document.createElement('div');
+  menu.className = 'dtpick';
+  // fixed, not absolute: a <dialog> defaults to overflow:auto, and since this popup is out of
+  // flow it never grows the dialog's own fit-content box — it just gets clipped to a sliver by
+  // the dialog's small scrollport, with its OWN internal scrollbar standing in for the dialog's.
+  // Fixed positioning is placed against the viewport directly and isn't clipped by an ancestor's
+  // overflow at all, which is the standard way a floating menu escapes a scrolling container.
+  menu.style.left = Math.max(4, box.left - 100) + 'px';
+  const MARGIN = 8;
+  const spaceBelow = innerHeight - box.bottom - MARGIN, spaceAbove = box.top - MARGIN;
+  // open on whichever side has more room, and size the list to exactly what that side has —
+  // no fixed cap, so a tall window shows the whole thing and a short one still uses all it's got
+  if (spaceBelow >= spaceAbove) {
+    menu.style.top = (box.bottom + 4) + 'px';
+    menu.style.maxHeight = Math.max(60, spaceBelow - 4) + 'px';
+  } else {
+    menu.style.bottom = (innerHeight - box.top + 4) + 'px';
+    menu.style.maxHeight = Math.max(60, spaceAbove - 4) + 'px';
+  }
+
+  const close = () => { menu.remove(); document.removeEventListener('mousedown', onOutside, true); };
+  const row = (value, text, current) => {
+    const r = document.createElement('div');
+    r.className = 'dtpick-opt' + (current ? ' on' : '');
+    r.textContent = text;
+    r.addEventListener('click', () => { close(); onPick(value); });
+    return r;
+  };
+  const rows = [];
+  if (resetLabel) rows.push(row('__reset', `${resetLabel} (reset)`, false));
+  if (showHide) rows.push(row('__hide', '[hide this]', false));
+  candidates.forEach(c => rows.push(row(c.identifier, c.label, currentIdentifier === c.identifier)));
+  menu.replaceChildren(...rows);
+  body.appendChild(menu);
+
+  // deferred a tick so the very click that opened this menu — still bubbling toward the document
+  // — doesn't immediately close it again
+  const onOutside = e => { if (!menu.contains(e.target)) close(); };
+  setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
 }
 
 const RANGE_FROM = {
@@ -1131,10 +1189,13 @@ function shiftYears(n) {
 
 // custom, when given, is a { from, to } drag-selected window that overrides the range buttons
 // entirely — both ends explicit, unlike a button's range which always runs through to today.
-// altBench, when given, swaps out the real MSCI World series for another position's own — same
-// { series, label } shape loadSeries()/a position both already carry, so a picked stock slots in
-// with no separate code path.
-function drawDetail(d, series, alignDate, range, custom, altBench) {
+// One entry per comparison line beyond the position's own — the real benchmark by default (see
+// DEFAULT_EXTRAS in renderDetail), plus whatever the "+" button or a swap has added. isDefaultBench
+// stays on the fast in-memory BENCH/BENCH_LABEL path (no fetch, and it tracks a mid-session config
+// change); anything picked by hand carries its own fetched series instead.
+const EXTRA_COLOURS = ['var(--flat)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
+
+function drawDetail(d, series, alignDate, range, custom, extras) {
   const W = 840, H = 300, T = 12, B = 22;
   let from, to;
   if (custom) {
@@ -1146,8 +1207,18 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
   }
   let rows = series.rows.filter(r => r.date >= from && r.date <= to);
   if (rows.length < 2) return null;
-  const benchLabel = altBench ? altBench.label : BENCH_LABEL;
-  const bench = (altBench ? altBench.series.rows : BENCH).filter(r => r.date >= rows[0].date);
+  // colour is keyed by what a line IS, not by its position in the list: the neutral grey stays
+  // reserved for the real benchmark specifically, so a plain stock never inherits "the benchmark's
+  // colour" just because it happens to end up first after the actual benchmark gets hidden
+  let extraColourAt = 0;
+  const secondaries = (extras || []).map((entry, i) => ({
+    label: entry.isDefaultBench ? BENCH_LABEL : entry.label,
+    identifier: entry.isDefaultBench ? null : entry.identifier,
+    secRows: (entry.isDefaultBench ? BENCH : entry.series.rows).filter(r => r.date >= rows[0].date),
+    colour: entry.isDefaultBench ? EXTRA_COLOURS[0]
+      : EXTRA_COLOURS[1 + (extraColourAt++ % (EXTRA_COLOURS.length - 1))],
+    entryIndex: i,
+  }));
 
   // The x-axis spaces points by index, not calendar time — normally harmless, since real trading
   // days are already close to evenly spaced. It breaks badly across a genuine gap in the price
@@ -1189,19 +1260,41 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
   };
   const at = lastAtOrBefore;
 
-  // both lines are read as % against the tie point, so they are 0 there and cross by construction
+  // every line is read as % against the tie point, so they are all 0 there and cross by construction
   const anchor = (alignDate && xOf(alignDate) !== null) ? dates[xOf(alignDate)] : dates[0];
   const stockAnchor = rows[xOf(anchor)];
-  const benchAnchor = at(bench, anchor);
   const stockPct = r => (r.close / stockAnchor.close - 1) * 100;
-  const benchPct = b => benchAnchor ? (b.close / benchAnchor.close - 1) * 100 : NaN;
-
-  const benchVals = dates.map(dt => {
-    const b = at(bench, dt);
-    return b ? benchPct(b) : null;
-  });
   const stockVals = rows.map(stockPct);                  // kept: the hover crosshair reads back into it
-  const values = [...stockVals, ...benchVals.filter(Number.isFinite), 0];
+
+  secondaries.forEach(s => {
+    const anchorRow = at(s.secRows, anchor);
+    if (anchorRow) {
+      // has real data back to the global tie point — read it against that, exactly like every
+      // other line, so they all cross at 0% there by construction
+      s.vals = dates.map(dt => {
+        const r = at(s.secRows, dt);
+        return r ? (r.close / anchorRow.close - 1) * 100 : null;
+      });
+    } else {
+      // it didn't exist yet at the tie point (an IPO, or just a later start than the chart's
+      // range) — there's nothing there to compare it against, so instead of resetting it to a
+      // false 0% on its first day, pick it up wherever the primary stock's own line already is
+      // that day: "what if this had been bought instead, right when it became available" is the
+      // fair comparison, and understates nothing the way a fresh 0% start would
+      const first = s.secRows[0];
+      const startI = first && xOf(first.date);
+      const startFrac = (startI != null) ? stockVals[startI] / 100 : 0;
+      s.vals = dates.map((dt, i) => {
+        if (!first || dt < first.date) return null;
+        const r = at(s.secRows, dt);
+        if (!r) return null;
+        return ((1 + startFrac) * (r.close / first.close) - 1) * 100;
+      });
+    }
+    s.last = s.vals.filter(Number.isFinite).slice(-1)[0];
+  });
+
+  const values = [...stockVals, ...secondaries.flatMap(s => s.vals.filter(Number.isFinite)), 0];
   const lo = Math.min(...values), hi = Math.max(...values);
   // No padding on either edge: each bound is the actual all-time low/high for the window shown —
   // the most either line, stock or benchmark, ever fell or rose — so the chart never implies more
@@ -1220,21 +1313,25 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
 
   // the right margin is whatever the end labels need, so they can never be clipped
   const lastStock = stockVals[stockVals.length - 1];
-  const lastBench = benchVals.filter(Number.isFinite).slice(-1)[0];
   const keys = [{ text: `${d.label} ${fmtPct(lastStock)}`, v: lastStock, colour: 'var(--series-1)' }];
-  if (Number.isFinite(lastBench))
-    keys.push({ text: `${benchLabel} ${fmtPct(lastBench)}`, v: lastBench,
-                colour: 'var(--text-secondary)', isBench: true });
+  secondaries.forEach(s => {
+    if (Number.isFinite(s.last))
+      keys.push({ text: `${s.label} ${fmtPct(s.last)}`, v: s.last, colour: s.colour,
+                  entryIndex: s.entryIndex });
+  });
   const R = Math.min(210, 14 + Math.max(...keys.map(k => k.text.length)) * 5.6);
   const fits = Math.floor((R - 14) / 5.6);              // a very long name gets clipped, not the label
   keys.forEach(k => {
     if (k.text.length > fits) k.text = k.text.slice(0, Math.max(4, fits - 1)) + '…';
   });
   const x = i => L + (W - L - R) * (i / (dates.length - 1));
-  const benchPts = benchVals.map((v, i) => Number.isFinite(v) ? [x(i), v] : null).filter(Boolean);
+  secondaries.forEach(s => {
+    s.pts = s.vals.map((v, i) => Number.isFinite(v) ? [x(i), v] : null).filter(Boolean);
+  });
 
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
-    'aria-label': `${d.label} against the benchmark, in per cent from ${anchor}` });
+    'aria-label': `${d.label} against ${secondaries.map(s => s.label).join(', ') || 'nothing'},` +
+                  ` in per cent from ${anchor}` });
 
   for (let i = 0; i <= 4; i++) {
     const v = yLo + (yHi - yLo) * i / 4;
@@ -1294,7 +1391,7 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
     d: pts.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' '),
     class: 'dtline' + (dashed ? ' dtline-fill' : ''), stroke,
   }));
-  if (benchPts.length > 1) path(benchPts.map(p => [p[0], y(p[1])]), 'var(--flat)');
+  secondaries.forEach(s => { if (s.pts.length > 1) path(s.pts.map(p => [p[0], y(p[1])]), s.colour); });
   // the stock's own path breaks into solid/dashed runs at each bridged gap: an edge is "filled"
   // if either point it connects is a synthetic one, so the dashing starts and ends exactly on the
   // last real point either side, and the two styles always meet rather than leaving a visible seam
@@ -1347,7 +1444,6 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
   if (overflow > 0) keys.forEach(k => { k.y -= overflow; });
   const top = (T + 8) - keys[0].y;
   if (top > 0) keys.forEach(k => { k.y += top; });
-  let benchKeyNode = null;
   keys.forEach(k => {
     if (Math.abs(k.y - y(k.v)) > 1.5)                    // moved: draw a leader to its line
       svg.appendChild(el('line', { x1: W - R - 1, y1: y(k.v), x2: W - R + 4, y2: k.y - 3,
@@ -1355,7 +1451,9 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
     const t = el('text', { x: W - R + 6, y: k.y, class: 'dtkey', fill: k.colour });
     t.textContent = k.text;
     svg.appendChild(t);
-    if (k.isBench) benchKeyNode = t;
+    // fed back onto the matching secondaries[] entry, not just kept on the (sorted-by-y, so
+    // reordered) keys array — renderDetail wires the click there, keyed by entryIndex
+    if (k.entryIndex != null) secondaries[k.entryIndex].node = t;
   });
 
   // value bar: what the position was actually worth (euros, not per cent) on every day shown,
@@ -1388,11 +1486,11 @@ function drawDetail(d, series, alignDate, range, custom, altBench) {
     valueSvg.appendChild(invLabel);
   }
 
-  // dates/stockVals/benchVals/x plus the margins: everything renderDetail needs to turn a pointer
-  // position back into "which day is this" for the hover crosshair, without redoing this geometry
-  return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, bench: lastBench,
-           benchLabel, benchKeyNode, marks: markNodes, dates, stockVals, benchVals, gapRuns,
-           vals, clsLabel, invLabel,
+  // dates/stockVals/secondaries/x plus the margins: everything renderDetail needs to turn a
+  // pointer position back into "which day is this" for the hover crosshair, and each secondary's
+  // .node back into "which slot was clicked", without redoing this geometry
+  return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, secondaries,
+           marks: markNodes, dates, stockVals, gapRuns, vals, clsLabel, invLabel,
            filled: rows.map(r => !!r.filled), x, L, R, T, B, H, W };
 }
 
@@ -1400,12 +1498,12 @@ let DETAIL = null;                                    // { d, series, alignDate 
 
 function renderDetail() {
   const body = document.getElementById('dtBody');
-  const { d, series, alignDate, range, customRange, altBench } = DETAIL;
+  const { d, series, alignDate, range, customRange, extras } = DETAIL;
   document.querySelectorAll('#dtRange button').forEach(b =>
     b.classList.toggle('on', b.dataset.range === range));
   let drawn = null;
   try {
-    drawn = series && drawDetail(d, series, alignDate, range, customRange, altBench);
+    drawn = series && drawDetail(d, series, alignDate, range, customRange, extras);
   } catch (err) {
     body.innerHTML = `<div class="empty">chart error: ${(err && err.message) || err}</div>`;
     return;
@@ -1417,15 +1515,20 @@ function renderDetail() {
     return;
   }
   const sub = document.getElementById('dtSub');
+  const vals = document.getElementById('dtVals');
   // built once so hovering can restore exactly this on pointerleave, instead of re-deriving it
-  const subAt = (stock, bench, day, isFilled) =>
+  const subAt = (day, isFilled) =>
     `${d.portfolio} · 0 % at ${drawn.anchor}` +
-    ` · ${d.label} ${fmtPct(stock)}` +
-    (Number.isFinite(bench) ? ` · ${drawn.benchLabel} ${fmtPct(bench)}` : '') +
     (day ? ` — ${day}` : '') +
     (isFilled ? ' (no data — held flat)' : '');
-  const defaultSub = subAt(drawn.stock, drawn.bench, null);
+  const valsAt = (stock, secVals) =>
+    `${d.label} ${fmtPct(stock)}` +
+    drawn.secondaries.map((s, i) =>
+      Number.isFinite(secVals[i]) ? ` · ${s.label} ${fmtPct(secVals[i])}` : '').join('');
+  const defaultSub = subAt(null, false);
+  const defaultVals = valsAt(drawn.stock, drawn.secondaries.map(s => s.last));
   sub.textContent = defaultSub;
+  vals.textContent = defaultVals;
 
   // no price history for a stretch (a thinly-traded listing Yahoo has gaps for) — the dashed
   // the dashed run on the chart already shows what this covers; just say when
@@ -1442,42 +1545,34 @@ function renderDetail() {
   drawn.svg.appendChild(crosshair);
   body.replaceChildren(drawn.svg, drawn.valueSvg, tip);
 
-  // clicking the benchmark's own end-label swaps it for any other position's price history — a
-  // plain <select>, floated near the label like the trade tooltip is, rather than a bespoke
-  // dropdown for what's fundamentally one choice from a list. Built on click, not on every
-  // render, so it costs nothing when nobody uses it.
-  if (drawn.benchKeyNode) {
-    drawn.benchKeyNode.style.cursor = 'pointer';
-    drawn.benchKeyNode.addEventListener('click', e => {
+  // clicking any comparison line's own end-label swaps it for another stock's price history, or
+  // removes it — a plain <select>, floated near the label like the trade tooltip is, rather than
+  // a bespoke dropdown for what's fundamentally one choice from a list. Built on click, not on
+  // every render, so it costs nothing when nobody uses it.
+  drawn.secondaries.forEach(s => {
+    if (!s.node) return;
+    s.node.style.cursor = 'pointer';
+    s.node.addEventListener('click', e => {
       e.stopPropagation();   // else this also reaches the svg's own click handler underneath it
-      const candidates = benchmarkCandidates();
-      const select = document.createElement('select');
-      select.className = 'dtbenchpick';
-      select.innerHTML = `<option value="">${BENCH_LABEL} (reset)</option>` +
-        candidates.map(c => `<option value="${c.identifier}"` +
-          `${altBench && altBench.identifier === c.identifier ? ' selected' : ''}>${c.label}</option>`
-        ).join('');
-      const box = drawn.benchKeyNode.getBoundingClientRect(), host = body.getBoundingClientRect();
-      select.style.left = Math.max(4, box.left - host.left - 100) + 'px';
-      select.style.top = (box.top - host.top - 4) + 'px';
-      body.appendChild(select);
-      select.focus();
-      select.addEventListener('blur', () => select.remove(), { once: true });
-      select.addEventListener('change', async () => {
-        const val = select.value;
-        select.remove();
-        if (!val) { DETAIL.altBench = null; renderDetail(); return; }
-        const cand = candidates.find(c => c.identifier === val);
-        const s = await loadSeries(seriesSlug(cand));
-        if (!s) {
-          sub.textContent = `${defaultSub} — no price history for ${cand.label}`;
-          return;
-        }
-        DETAIL.altBench = { label: cand.label, identifier: cand.identifier, series: s };
+      // "was this ever the benchmark slot" has to survive a swap, or resetting back only works
+      // once — isBenchSlot is set the first time and then just carried forward on every rewrite
+      const cur = extras[s.entryIndex];
+      const isBenchSlot = !!(cur && (cur.isDefaultBench || cur.isBenchSlot));
+      openStockPicker(s.node, {
+        resetLabel: isBenchSlot ? BENCH_LABEL : null,
+        showHide: true,
+        currentIdentifier: s.identifier,
+      }, async val => {
+        if (val === '__hide') { extras.splice(s.entryIndex, 1); renderDetail(); return; }
+        if (val === '__reset') { extras[s.entryIndex] = { isDefaultBench: true }; renderDetail(); return; }
+        const cand = benchmarkCandidates().find(c => c.identifier === val);
+        const ser = await loadSeries(seriesSlug(cand));
+        if (!ser) { vals.textContent = `${defaultVals} — no price history for ${cand.label}`; return; }
+        extras[s.entryIndex] = { label: cand.label, identifier: cand.identifier, series: ser, isBenchSlot };
         renderDetail();
       });
     });
-  }
+  });
 
   // hover anywhere over the plot: a vertical line at the nearest trading day, and the subheader
   // swapped to that day's numbers instead of today's — pointermove fires on the svg as a whole, so
@@ -1485,7 +1580,7 @@ function renderDetail() {
   // hoverDay tracks what's currently under the crosshair so a plain click can tie the lines there
   // too, the same re-anchor a trade marker's own click already does — click is meaningless without
   // a day under it, so it's a no-op wherever pointermove last cleared this back to null.
-  const { dates, stockVals, benchVals, filled, x, L, R } = drawn;
+  const { dates, stockVals, secondaries, filled, x, L, R } = drawn;
   // CLS and INV follow the crosshair; passing null puts them back on the last day in the window,
   // which is what they read when nothing is hovered
   const valueAt = i => {
@@ -1536,6 +1631,7 @@ function renderDetail() {
       hoverDay = null;
       crosshair.classList.remove('on');
       sub.textContent = defaultSub;
+      vals.textContent = defaultVals;
       valueAt(null);
       return;
     }
@@ -1543,7 +1639,8 @@ function renderDetail() {
     hoverDay = dates[i];
     crosshair.setAttribute('x1', x(i)); crosshair.setAttribute('x2', x(i));
     crosshair.classList.add('on');
-    sub.textContent = subAt(stockVals[i], benchVals[i], dates[i], filled[i]);
+    sub.textContent = subAt(dates[i], filled[i]);
+    vals.textContent = valsAt(stockVals[i], secondaries.map(s => s.vals[i]));
     valueAt(i);
   });
   drawn.svg.addEventListener('pointerup', e => {
@@ -1564,6 +1661,7 @@ function renderDetail() {
     hoverDay = null;
     crosshair.classList.remove('on');
     sub.textContent = defaultSub;
+    vals.textContent = defaultVals;
     valueAt(null);
   });
   drawn.svg.addEventListener('click', () => {
@@ -1614,12 +1712,16 @@ async function openDetail(d) {
   const dlg = document.getElementById('detail');
   document.getElementById('dtTitle').textContent = d.label || d.name;
   document.getElementById('dtSub').textContent = `${d.portfolio} · ${d.name}`;
+  document.getElementById('dtVals').textContent = '';
   const body = document.getElementById('dtBody');
   body.innerHTML = '<div class="empty">loading…</div>';
   if (!dlg.open) dlg.showModal();
 
+  // extras always starts with just the real benchmark — a fresh chart shows what it always has,
+  // and isDefaultBench keeps it on the fast in-memory BENCH path rather than a fetch
   DETAIL = { d, series: await loadSeries(seriesSlug(d)), alignDate: null,
-             range: (DETAIL && DETAIL.range) || 'buy', customRange: null, altBench: null };
+             range: (DETAIL && DETAIL.range) || 'buy', customRange: null,
+             extras: [{ isDefaultBench: true }] };
   renderDetail();
 }
 
@@ -1629,6 +1731,18 @@ document.getElementById('dtRange').addEventListener('click', e => {
   DETAIL.range = btn.dataset.range;
   DETAIL.customRange = null;   // a preset button is the escape hatch out of a drag-selected zoom
   renderDetail();
+});
+const addCompareBtn = document.getElementById('dtAddCompare');
+addCompareBtn.addEventListener('click', () => {
+  if (!DETAIL) return;
+  openStockPicker(addCompareBtn, {}, async val => {
+    const cand = benchmarkCandidates().find(c => c.identifier === val);
+    if (!cand) return;
+    const ser = await loadSeries(seriesSlug(cand));
+    if (!ser) return;   // the chart is already open; nowhere to report "no data" but the console
+    DETAIL.extras.push({ label: cand.label, identifier: cand.identifier, series: ser });
+    renderDetail();
+  });
 });
 document.getElementById('dtClose').addEventListener('click',
   () => document.getElementById('detail').close());

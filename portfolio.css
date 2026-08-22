@@ -232,12 +232,21 @@
   .detail .dt-title { font-weight: 600; font-size: 1.05rem; }
   .detail .dt-sub { color: var(--text-secondary); font-size: 0.84rem; margin-top: 2px;
                     font-variant-numeric: tabular-nums; }
+  .detail .dt-vals { color: var(--text-primary); font-size: 0.84rem; font-weight: 600;
+                     margin-top: 2px; font-variant-numeric: tabular-nums; }
   .detail .dt-warn { color: var(--income); font-size: 0.78rem; margin-top: 3px; }
   .detail button { appearance: none; border: 0; background: transparent; cursor: pointer;
                    color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px; }
   .detail .dt-body { padding: 0 18px 6px; }
-  .detail .dt-foot { display: flex; justify-content: center; padding: 4px 18px 16px; }
+  .detail .dt-foot { display: flex; align-items: center; justify-content: center; gap: 10px;
+                     padding: 4px 18px 16px; }
   .detail .dt-foot .seg button { padding: 4px 13px; }
+  .dt-addsel {
+    appearance: none; border: 1px solid var(--border); border-radius: 999px;
+    background: transparent; color: var(--text-secondary); cursor: pointer;
+    font: inherit; font-size: 0.82rem; padding: 5px 12px; line-height: 1.4;
+  }
+  .dt-addsel:hover { color: var(--text-primary); border-color: var(--text-secondary); }
   .detail .empty { padding: 28px 0 34px; text-align: center; color: var(--text-muted); }
   .dtline { fill: none; stroke-width: 1.6; }
   .dtline-fill { stroke-dasharray: 4 3; opacity: 0.55; }   /* a bridged gap — price held flat, not real */
@@ -266,9 +275,15 @@
             box-shadow: 0 6px 20px rgba(0,0,0,.18); white-space: nowrap; z-index: 2; }
   .dt-tip.on { opacity: 1; }
   .dt-tip .mut { color: var(--text-muted); }
-  .dtbenchpick { position: absolute; z-index: 3; font: inherit; font-size: 0.8rem;
-                 color: var(--text-primary); background: var(--surface-1);
-                 border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+  .dtpick { position: fixed; z-index: 3; font: inherit; font-size: 0.8rem;
+            color: var(--text-primary); background: var(--surface-1);
+            border: 1px solid var(--border); border-radius: 8px; padding: 4px;
+            max-height: 60vh; overflow-y: auto; min-width: 160px;   /* JS sets the real cap —
+            this is only a fallback for the rare case it can't */
+            box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+  .dtpick-opt { padding: 5px 9px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+  .dtpick-opt:hover { background: color-mix(in srgb, var(--text-primary) 8%, transparent); }
+  .dtpick-opt.on { font-weight: 600; }
   .maprect { cursor: pointer; }
 
   .loader { border: 1px dashed var(--border); border-radius: 12px; padding: 22px; text-align: center; color: var(--text-secondary); }
