@@ -167,6 +167,9 @@
   .maplbl { font-size: calc(9px / var(--map-scale, 1)); fill: #ffffff; font-weight: 600; paint-order: stroke; }
   .maplbl.dark { fill: #12120f; }        /* funds and cash */
   .mapsub { font-size: calc(8px / var(--map-scale, 1)); font-variant-numeric: tabular-nums; }
+  .sectorbg { pointer-events: none; }
+  .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700;
+               text-transform: uppercase; letter-spacing: 0.07em; pointer-events: none; }
   .closedhead { display: flex; justify-content: flex-start; align-items: baseline;
                 margin: 14px 0 2px; font-size: 0.82rem; color: var(--text-secondary); }
   .closedhead b { font-variant-numeric: tabular-nums; }
@@ -244,7 +247,7 @@
   .dtanchor { stroke: var(--rim); stroke-width: 0.8; stroke-dasharray: 3 3; }
   .dtzero { stroke: var(--text-muted); stroke-width: 1; }
   .dtmark { cursor: pointer; stroke: var(--surface-1); stroke-width: 1.4; }
-  .dtmark.buy { fill: var(--series-1); }
+  .dtmark.buy { fill: var(--realized); }
   .dtmark.sell { fill: var(--loss); }
   .dtmark.on { stroke: var(--rim); stroke-width: 1.8; }
   .dtmark:hover { r: 5.6; }
@@ -409,6 +412,7 @@ const TRADES_PATH = 'parqet/parqet_trades.csv';
 const NAMES_PATH = 'parqet/parqet_names.csv';   // ISIN (or exact name) → short display name
 const BENCH_PATH = 'data_series/benchmark.csv';   // daily closes of the benchmark fund
 const PRICES_PATH = 'parqet/parqet_prices.csv';     // fresh prices where Parqet has none (closed positions)
+const SECTORS_PATH = 'parqet/parqet_sectors.csv';   // hand-maintained ISIN → sector, for the map's grouping
 const LABEL_MIN_SHARE = 0.003;   // label wedges worth at least 0.3% of the total…
 const LABEL_GAP = 14;            // …as long as they still fit this far apart
 
@@ -794,7 +798,7 @@ function shiftYears(n) {
 }
 
 function drawDetail(d, series, alignDate, range) {
-  const W = 840, H = 300, L = 34, T = 12, B = 22;
+  const W = 840, H = 300, T = 12, B = 22;
   const pick = (RANGE_FROM[range] || RANGE_FROM.buy)(d, series);
   const from = pick && pick > series.rows[0].date ? pick : series.rows[0].date;
   const rows = series.rows.filter(r => r.date >= from);
@@ -829,6 +833,14 @@ function drawDetail(d, series, alignDate, range) {
   const pad = (hi - lo) * 0.08 || 1;
   const y = v => T + (H - T - B) * (1 - (v - (lo - pad)) / ((hi + pad) - (lo - pad)));
 
+  // the left margin is whatever the widest y-axis label needs, so a big swing (a multi-bagger's
+  // "+10000%") never runs past the left edge — same sizing rule as the right margin below
+  const axisTexts = [0, 1, 2, 3, 4].map(i => {
+    const v = (lo - pad) + ((hi + pad) - (lo - pad)) * i / 4;
+    return `${v >= 0 ? '+' : ''}${Math.round(v)}%`;
+  });
+  const L = Math.max(34, 10 + Math.max(...axisTexts.map(t => t.length)) * 5.6);
+
   // the right margin is whatever the end labels need, so they can never be clipped
   const lastStock = stockPct(rows[rows.length - 1]);
   const lastBench = benchVals.filter(Number.isFinite).slice(-1)[0];
@@ -850,7 +862,7 @@ function drawDetail(d, series, alignDate, range) {
     const v = (lo - pad) + ((hi + pad) - (lo - pad)) * i / 4;
     svg.appendChild(el('line', { x1: L, y1: y(v), x2: W - R, y2: y(v), class: 'dtgrid' }));
     const t = el('text', { x: L - 6, y: y(v) + 3, class: 'dtaxis', 'text-anchor': 'end' });
-    t.textContent = `${v >= 0 ? '+' : ''}${Math.round(v)}%`;
+    t.textContent = axisTexts[i];
     svg.appendChild(t);
   }
   svg.appendChild(el('line', { x1: L, y1: y(0), x2: W - R, y2: y(0), class: 'dtzero' }));
@@ -1792,6 +1804,29 @@ const luminance = rgb => {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
 
+// The map's sector: from the hand-maintained parqet_sectors.csv (ISIN → sector), cash gets its
+// own bucket, anything the file doesn't cover — a new position, before it's been triaged — falls
+// to "Other" rather than breaking the grouping.
+const sectorOf = d => d.cash ? 'Cash' : (SECTORS.get(d.identifier) || 'Other');
+
+// Fixed order so a sector's colour and position among its peers stay put across sessions — only
+// the sectors that actually appear are drawn, but their relative order never depends on which
+// ones happen to be present today. Anything not listed here (a sector added to the CSV later)
+// still gets a colour, just hashed rather than hand-picked.
+const SECTOR_ORDER = ['Optical', 'Hyperscaler', 'Semiconductors', 'Cybersecurity', 'AI Supply',
+  'Other', 'Cash'];
+function sectorHue(name) {
+  const i = SECTOR_ORDER.indexOf(name);
+  if (i >= 0) return (i * 137.508) % 360;                 // golden-angle spacing, well separated
+  let h = 0;
+  for (let i2 = 0; i2 < name.length; i2++) h = (h * 31 + name.charCodeAt(i2)) >>> 0;
+  return h % 360;
+}
+function sectorRank(name) {
+  const i = SECTOR_ORDER.indexOf(name);
+  return i >= 0 ? i : SECTOR_ORDER.length + name.charCodeAt(0);
+}
+
 // squarified treemap: lay `vals` (descending) into rect {x,y,w,h}
 function squarify(vals, rect) {
   const out = [];
@@ -1856,75 +1891,108 @@ function renderMap(items, asOf) {
 
   const g = el('g', {});
   items.forEach(d => { d.nodes = []; });
+  const nudge = 1 / mapScale;
 
-  // one flat pool of positions by value — which portfolio a position sits in plays no part
-  // in the layout; that's still in every label, tooltip, and the table
-  squarify(
-    items.filter(d => d.cur > 0).sort((a, b) => b.cur - a.cur).map(d => ({ value: d.cur, item: d })),
+  // two-level treemap: sectors first, each position's own tile squarified inside its sector's
+  // slice. Both levels sort by a fixed key (sector order, then label) rather than by current
+  // value, so a day's price move resizes tiles without reshuffling who sits next to whom.
+  const bySector = new Map();
+  items.filter(d => d.cur > 0).forEach(d => {
+    const s = sectorOf(d);
+    (bySector.get(s) || bySector.set(s, []).get(s)).push(d);
+  });
+  const sectorNames = [...bySector.keys()].sort((a, b) => sectorRank(a) - sectorRank(b));
+  const sectorRects = squarify(
+    sectorNames.map(s => ({ value: bySector.get(s).reduce((t, d) => t + d.cur, 0), item: s })),
     { x: PAD, y: PAD, w: W - 2 * PAD, h: H - 2 * PAD }
-  ).forEach(t => {
-    const d = t.item;
-    const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
-    const fill = gradeColor(d.state === 'flat' ? NaN : d.ret, d.cash);
-    // no stroke on either layer — the 1px layout gap is the separator, so the bar
-    // can never look wider than the tile it sits in
-    const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
-                              class: 'maprect' });
-    rect.addEventListener('click', () => openDetail(d));
-    g.appendChild(rect); d.nodes.push(rect);
+  );
 
-    // income band at the head of the tile: dividends the held shares paid, against tile value
-    if (d.divHeld > 0 && d.cur > 0 && h > 6) {
-      const ih = Math.max(1.5, Math.min(h / 3, h * d.divHeld / d.cur));
-      const band = el('rect', {
-        x: t.x + 0.5, y: t.y + 0.5, width: w, height: ih, fill: 'var(--income)',
+  sectorRects.forEach(sr => {
+    const sw = Math.max(0, sr.w - 1), sh = Math.max(0, sr.h - 1);
+    const hue = sectorHue(sr.item);
+    const bg = el('rect', {
+      x: sr.x + 0.5, y: sr.y + 0.5, width: sw, height: sh,
+      fill: `hsl(${hue.toFixed(1)}deg 55% 55% / 0.22)`,
+      stroke: `hsl(${hue.toFixed(1)}deg 50% 45% / 0.55)`, 'stroke-width': 1,
+      class: 'sectorbg',
+    });
+    g.appendChild(bg);
+
+    const showLabel = sw > 30 && sh > 16;
+    const headH = showLabel ? 6 : 0;
+    if (showLabel) {
+      const lbl = el('text', {
+        x: sr.x + 4 * nudge, y: sr.y + 5 * nudge, class: 'sectorlbl',
+        fill: `hsl(${hue.toFixed(1)}deg 55% 32%)`,
       });
-      g.appendChild(band); d.nodes.push(band);
+      lbl.textContent = sr.item;
+      g.appendChild(lbl);
     }
 
-    const share = barShare(d);
-    if (share > 0 && h > 4) {
-      const bh = Math.max(1.5, h * share);
-      const bar = el('rect', {
-        x: t.x + 0.5, y: t.y + 0.5 + (h - bh), width: w, height: bh,
-        fill: barColor(d),
-      });
-      g.appendChild(bar); d.nodes.push(bar);
-    }
+    const inner = { x: sr.x + 1, y: sr.y + 1 + headH, w: sw - 2, h: sh - 2 - headH };
+    if (inner.w <= 0 || inner.h <= 0) return;
 
-    if (w > 4 && h > 7) {
-      const dark = d.fund || d.cash;          // funds and cash in black ink, everything else white
-      const cx = t.x + w / 2;
-      const free = h * (1 - barShare(d));                 // headroom above the bar
-      const cy = t.y + (free > 26 ? free / 2 : h / 2);
-      // 4.9 viewBox units/char is calibrated at mapScale 1; the label's own font-size is
-      // compensated to stay a constant physical size regardless of mapScale (see .maplbl), so a
-      // shrunk as-of map fits fewer characters per viewBox unit of tile width, not the same
-      // count — without the factor here, labels overflowed their tiles once the map shrank.
-      // Floored at 1: even a sliver of a tile still gets its first character rather than nothing.
-      const chars = Math.max(1, Math.floor(w * mapScale / 4.9));
-      // the whole SVG is zoomed out by mapScale when the as-of map shrinks (area = value,
-      // throughout this page), which would otherwise compress this internal spacing right along
-      // with it — same fix as the font-size compensation, applied to position instead of size
-      const nudge = 1 / mapScale;
-      const name = el('text', {
-        x: cx, y: h > 28 ? cy - nudge : cy + 3 * nudge, 'text-anchor': 'middle',
-        class: 'maplbl' + (dark ? ' dark' : ''), 'pointer-events': 'none',
-      });
-      name.textContent = d.label.length > chars ? d.label.slice(0, chars) : d.label;
-      g.appendChild(name);
-      if (h > 28) {
-        const sub = el('text', {
-          x: cx, y: cy + 10 * nudge, 'text-anchor': 'middle',
-          class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+    const members = bySector.get(sr.item).sort((a, b) => a.label.localeCompare(b.label));
+    squarify(members.map(d => ({ value: d.cur, item: d })), inner).forEach(t => {
+      const d = t.item;
+      const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
+      const fill = gradeColor(d.state === 'flat' ? NaN : d.ret, d.cash);
+      // no stroke on either layer — the 1px layout gap is the separator (showing the sector's
+      // own background colour through), so the bar can never look wider than the tile it sits in
+      const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
+                                class: 'maprect' });
+      rect.addEventListener('click', () => openDetail(d));
+      g.appendChild(rect); d.nodes.push(rect);
+
+      // income band at the head of the tile: dividends the held shares paid, against tile value
+      if (d.divHeld > 0 && d.cur > 0 && h > 6) {
+        const ih = Math.max(1.5, Math.min(h / 3, h * d.divHeld / d.cur));
+        const band = el('rect', {
+          x: t.x + 0.5, y: t.y + 0.5, width: w, height: ih, fill: 'var(--income)',
         });
-        sub.textContent = d.cash ? fmtMoney(d.cur) : fmtPct(d.ret);
-        g.appendChild(sub);
+        g.appendChild(band); d.nodes.push(band);
       }
-    }
+
+      const share = barShare(d);
+      if (share > 0 && h > 4) {
+        const bh = Math.max(1.5, h * share);
+        const bar = el('rect', {
+          x: t.x + 0.5, y: t.y + 0.5 + (h - bh), width: w, height: bh,
+          fill: barColor(d),
+        });
+        g.appendChild(bar); d.nodes.push(bar);
+      }
+
+      if (w > 4 && h > 7) {
+        const dark = d.fund || d.cash;          // funds and cash in black ink, everything else white
+        const cx = t.x + w / 2;
+        const free = h * (1 - barShare(d));                 // headroom above the bar
+        const cy = t.y + (free > 26 ? free / 2 : h / 2);
+        // 4.9 viewBox units/char is calibrated at mapScale 1; the label's own font-size is
+        // compensated to stay a constant physical size regardless of mapScale (see .maplbl), so a
+        // shrunk as-of map fits fewer characters per viewBox unit of tile width, not the same
+        // count — without the factor here, labels overflowed their tiles once the map shrank.
+        // Floored at 1: even a sliver of a tile still gets its first character rather than nothing.
+        const chars = Math.max(1, Math.floor(w * mapScale / 4.9));
+        const name = el('text', {
+          x: cx, y: h > 28 ? cy - nudge : cy + 3 * nudge, 'text-anchor': 'middle',
+          class: 'maplbl' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+        });
+        name.textContent = d.label.length > chars ? d.label.slice(0, chars) : d.label;
+        g.appendChild(name);
+        if (h > 28) {
+          const sub = el('text', {
+            x: cx, y: cy + 10 * nudge, 'text-anchor': 'middle',
+            class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+          });
+          sub.textContent = d.cash ? fmtMoney(d.cur) : fmtPct(d.ret);
+          g.appendChild(sub);
+        }
+      }
+    });
   });
 
-  svg.setAttribute('aria-label', 'Treemap of all positions, area by current value, colour by return');
+  svg.setAttribute('aria-label', 'Treemap of all positions grouped by sector, area by current value, colour by return');
   svg.replaceChildren(g);
   attachTip(items);
   legendMap();
@@ -2191,8 +2259,12 @@ function totals(rows) {
            rel: inv.reduce((s, d) => s + (d.relPre ?? d.rel), 0) };
 }
 
-let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
-    BENCH = [], BENCH_NAME = '', MODE = 'abs', TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
+let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
+    // a browser restores a checkbox's checked state across a reload on its own, independent of
+    // this script re-running — read it here so MODE starts in sync with what's actually on
+    // screen instead of defaulting to 'abs' under a checkbox the page shows already ticked
+    BENCH = [], BENCH_NAME = '', MODE = document.getElementById('relMode').checked ? 'rel' : 'abs',
+    TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
     VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
     AS_OF = null;
 
@@ -2256,6 +2328,7 @@ document.getElementById('btnMap').addEventListener('click', () => show('map'));
 document.getElementById('btnPositions').addEventListener('click', () => show('positions'));
 document.getElementById('btnTrades').addEventListener('click', () => show('trades'));
 const TODAY = new Date().toISOString().slice(0, 10);
+const isWeekend = dateStr => [0, 6].includes(new Date(dateStr + 'T00:00:00Z').getUTCDay());
 document.getElementById('asOfDate').max = TODAY;
 document.getElementById('asOfDate').value = TODAY;   // "cleared" reads as today, not blank
 document.getElementById('asOfDate').addEventListener('change', e => {
@@ -2290,6 +2363,12 @@ function shiftAsOf(days, months) {
     base.setUTCDate(Math.min(day, lastDay));
   }
   if (days) base.setUTCDate(base.getUTCDate() + days);
+
+  // a market has no data on a weekend; land on the nearest workday in the direction we were
+  // already stepping, so "back a day" from Monday reaches Friday rather than bouncing to Sunday
+  const dir = Math.sign(days) || Math.sign(months) || 1;
+  while (isWeekend(base.toISOString().slice(0, 10))) base.setUTCDate(base.getUTCDate() + dir);
+
   let iso = base.toISOString().slice(0, 10);
   if (iso > TODAY) iso = TODAY;
   if (iso < MIN_DATE) iso = MIN_DATE;
@@ -2301,20 +2380,25 @@ function shiftAsOf(days, months) {
 }
 document.getElementById('asOfDayBack').addEventListener('click', () => shiftAsOf(-1, 0));
 document.getElementById('asOfDayFwd').addEventListener('click', () => shiftAsOf(1, 0));
-// keydown on the wrapper, not the native date input — the input already claims arrow keys for
-// spinning its own day/month/year segments, so a separate focusable control is needed
-document.getElementById('asOfStep').addEventListener('keydown', e => {
-  const step = {
-    ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
-    PageUp: [0, -12], PageDown: [0, 12],
-  }[e.key];
+const ASOF_KEYS = {
+  ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+  PageUp: [0, -12], PageDown: [0, 12],
+};
+// on document, not the scrub wrapper: works whether that control is focused, some unrelated
+// button is, or nothing is focused at all. The native date input keeps its own arrow-key segment
+// spinning — anything else editable (were one ever added) gets the same courtesy.
+document.addEventListener('keydown', e => {
+  if (VIEW !== 'map') return;
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) return;
+  const step = ASOF_KEYS[e.key];
   if (!step) return;
   e.preventDefault();
   shiftAsOf(step[0], step[1]);
 });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (VIEW === 'map') show('map'); });
 
-function load(text, tradesText, namesText, benchText, pricesText) {
+function load(text, tradesText, namesText, benchText, pricesText, sectorsText) {
   PRICES = new Map((pricesText ? parseCSV(pricesText) : [])
     .filter(r => r.identifier && r.price !== '' && r.asof)
     .map(r => [r.identifier, { price: num(r.price), asof: r.asof, symbol: r.symbol }]));
@@ -2328,6 +2412,9 @@ function load(text, tradesText, namesText, benchText, pricesText) {
   NAMES = new Map((namesText ? parseCSV(namesText) : [])
     .filter(r => r.display)
     .map(r => [r.identifier || r.name, r.display]));
+  SECTORS = new Map((sectorsText ? parseCSV(sectorsText) : [])
+    .filter(r => r.identifier && r.sector)
+    .map(r => [r.identifier, r.sector]));
   const all = build(parseCSV(text));
   ITEMS = all.filter(d => !d.sold);
   CLOSED = all.filter(d => d.sold).sort((a, b) => b.rel - a.rel);
@@ -2342,8 +2429,9 @@ Promise.all([
   fetch(NAMES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(BENCH_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
   fetch(PRICES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
+  fetch(SECTORS_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
 ])
-  .then(([positions, trades, names, bench, prices]) => load(positions, trades, names, bench, prices))
+  .then(([positions, trades, names, bench, prices, sectors]) => load(positions, trades, names, bench, prices, sectors))
   .catch(err => {
     document.getElementById('loader').hidden = false;
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
