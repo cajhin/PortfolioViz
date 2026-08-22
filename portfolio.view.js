@@ -850,7 +850,12 @@ function renderClosed(over = null) {
   if (!closed.length && !open.length) { wrap.hidden = true; return; }
   wrap.hidden = false;
 
-  const W = 900, H = 96, y = 14, h = 30, STRIP_Y = 3, STRIP_H = 6, DIV_Y = 8;
+  // y is the bar's own top padding, inside the svg, below the "Realized gains" header that sits
+  // just above it in the HTML — trimmed from 14 so the header reads closer to what it labels. H
+  // shrinks by the same amount, not just y, so the labels below the bar (unchanged relative to y)
+  // keep the same margin under them they always had, instead of the removed space reappearing
+  // at the bottom.
+  const W = 900, H = 88, y = 6, h = 30, STRIP_Y = 3, STRIP_H = 6, DIV_Y = 8;
   const pick = (rows, sign) => rows.filter(d => Math.sign(barValue(d)) === sign)
                                    .sort((a, b) => Math.abs(barValue(b)) - Math.abs(barValue(a)));
   const divRow = divTotal > 0.005
