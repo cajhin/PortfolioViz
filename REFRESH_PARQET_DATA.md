@@ -4,7 +4,7 @@ Task for an agent with the **Parqet MCP tools** and write access to `/Users/jjj/
 
 Goal: archive the two current CSVs under their download timestamp, then pull fresh data from Parqet
 and write new ones with **exactly the same schema**. `portfolio.html` reads
-`parqet/parqet_all_port.csv` and `parqet/parqet_trades.csv` — do not edit the HTML, and do not
+`parqet/positions.csv` and `parqet/activities.csv` — do not edit the HTML, and do not
 rename those two working filenames or move them out of `parqet/`.
 
 ---
@@ -15,7 +15,7 @@ The "dl-timestamp" is the file's own modification time — that is when the data
 
 ```bash
 cd /Users/jjj/git/parqet/parqet
-for f in parqet_all_port parqet_trades; do
+for f in positions activities; do
   [ -f "$f.csv" ] || continue
   ts=$(date -r "$f.csv" +%Y%m%d-%H%M)      # macOS/BSD date
   mv -n "$f.csv" "${f}_${ts}.csv"
@@ -57,7 +57,7 @@ Gotchas that will bite you:
 - Prices move during the day. Pull the positions and the activities in one sitting so the two files
   agree, and note that `currentValue` is a snapshot.
 
-## 3. Write `parqet/parqet_all_port.csv`
+## 3. Write `parqet/positions.csv`
 
 One row per position, **open and closed**, plus the cash accounts. Header, in order:
 
@@ -80,7 +80,7 @@ lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,a
   `assetType == "cash"` and leaves it out of invested/gain figures.
 - Numbers: plain decimals, `.` separator, no thousands separator, no currency symbol.
 
-## 4. Write `parqet/parqet_trades.csv`
+## 4. Write `parqet/activities.csv`
 
 One row per activity, all portfolios, sorted by `portfolio` then `datetime` ascending. Header:
 
@@ -115,18 +115,18 @@ watchlist name would be. `config.json` names the benchmark by ISIN (`benchmarkIs
 ## 6. Refresh the price series
 
 Price series are driven by `registry/price_sources.csv` — one row per instrument per source,
-ordered by `priority` — and fetched by `update_data_series.py`. Nothing about *how* to fetch an
+ordered by `priority` — and fetched by `update_prices.py`. Nothing about *how* to fetch an
 instrument lives in the fetched file, and there is no hand-maintained price file left to update.
 
 ```bash
-python3 update_data_series.py                  # every instrument in the registry
-python3 update_data_series.py roche            # just this one (slug or ISIN)
-python3 update_data_series.py roche --from 2019-01-01   # also backfill, from that date
+python3 update_prices.py                  # every instrument in the registry
+python3 update_prices.py roche            # just this one (slug or ISIN)
+python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
 ```
 
 **Run the bare form on every refresh**, closed positions included. The script has no idea which
 positions are open or closed — it walks the registry — so a closed position's series keeps
-extending in step with everything else. It also writes `data_series/_latest.csv`, the freshest
+extending in step with everything else. It also writes `prices/_latest.csv`, the freshest
 close per instrument, which is what supplies the quote Parqet freezes once a position is sold.
 That file used to be `parqet/parqet_prices.csv` and used to be maintained by hand; it is now a
 by-product of the fetch. Do not recreate it.
@@ -161,8 +161,8 @@ fallback. The chart marks any stretch it still cannot fill with a dashed line an
 cd /Users/jjj/git/parqet
 python3 - <<'PY'
 import csv, collections
-pos = list(csv.DictReader(open('parqet/parqet_all_port.csv')))
-tr  = list(csv.DictReader(open('parqet/parqet_trades.csv')))
+pos = list(csv.DictReader(open('parqet/positions.csv')))
+tr  = list(csv.DictReader(open('parqet/activities.csv')))
 f = lambda r, k: float(r[k] or 0)
 print('positions', len(pos), '| closed', sum(1 for p in pos if p['isSold'] == '1'),
       '| cash', sum(1 for p in pos if p['assetType'] == 'cash'))

@@ -300,6 +300,18 @@ function legendPie() {
 }
 
 /* ---------- table + headline figures ---------- */
+// Where a position's prices actually come from, compact enough for a table cell: the provider's
+// initial and its own symbol, e.g. "Y-HY9H.F". The exchange suffix is kept — two listings of one
+// instrument differ only by it (XNAS.DE vs IE00BMFKG444.SG), and that is exactly what this column
+// exists to disambiguate. Only the priority-1 source is shown; a fallback is not where a price
+// normally comes from. Cash, and anything with no quotable source, gets a dash.
+const SOURCE_LETTER = { yahoo: 'Y', manual: 'M' };
+function sourceTag(d) {
+  const s = SOURCES.get(d.identifier);
+  if (!s) return '–';
+  const letter = SOURCE_LETTER[s.source] || (s.source || '?').slice(0, 1).toUpperCase();
+  return s.symbol ? `${letter}-${s.symbol}` : letter;
+}
 function renderMeta(items, closed = []) {
   const tb = document.querySelector('#tbl tbody');
   const trs = [];
@@ -310,6 +322,7 @@ function renderMeta(items, closed = []) {
       const tr = document.createElement('tr');
       tr.innerHTML =
         `<td>${p.name}</td>` +
+        `<td class="src">${sourceTag(d)}</td>` +
         `<td><span class="dot" style="background:${d.core}"></span>${d.label}</td><td>${d.shares.toLocaleString('de-DE')}</td>` +
         `<td>${d.cash ? '–' : fmtMoney2(d.pur)}</td><td>${fmtMoney2(d.cur)}</td>` +
         `<td class="${cls}">${d.state === 'flat' ? '–' : fmtMoney2(d.gain)}</td>` +
@@ -320,7 +333,7 @@ function renderMeta(items, closed = []) {
     });
     const s = totals(rows);
     const tr = document.createElement('tr'); tr.className = 'sub';
-    tr.innerHTML = `<td colspan="3">${p.name} — total</td>` +
+    tr.innerHTML = `<td colspan="4">${p.name} — total</td>` +
       `<td>${fmtMoney2(s.pur)}</td><td>${fmtMoney2(s.cur)}</td>` +
       `<td class="${s.gain >= 0 ? 'pos' : 'neg'}">${fmtMoney2(s.gain)}</td>` +
       `<td class="${s.gain >= 0 ? 'pos' : 'neg'}">${s.pur > 0 ? fmtPct(s.gain / s.pur * 100) : '–'}</td>` +
@@ -346,6 +359,7 @@ function renderClosedPositions() {
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td>${d.portfolio}</td>` +
+      `<td class="src">${sourceTag(d)}</td>` +
       `<td><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
       `<td>${fmtMoney2(d.invested)}</td>` +
       `<td class="${Number.isFinite(ret) ? (ret >= 0 ? 'pos' : 'neg') : ''}">${Number.isFinite(ret) ? fmtPct(ret) : '–'}</td>` +
@@ -892,7 +906,7 @@ function renderClosed(over = null) {
 
         // what the shares did after the sale, read from your side — a rise since selling is a
         // loss to you, so the grade is inverted. Closed positions get it too, now that
-        // data_series/_latest.csv supplies the price Parqet stopped publishing at the sale.
+        // prices/_latest.csv supplies the price Parqet stopped publishing at the sale.
         if (!d.isTax && !d.isDiv && d.sinceKnown && d.grossProceeds > 0) {
           // absolute: did the price fall after the sale? benchmark: did selling and holding the
           // index beat holding on? Both are graded so that green means the sale was right.
@@ -1354,8 +1368,8 @@ function renderDetail() {
   }
   if (!drawn) {
     const slug = seriesSlug(d);
-    body.innerHTML = `<div class="empty">no data — add <code>data_series/${slug || '…'}.csv</code>` +
-      ` and run <code>python3 update_data_series.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
+    body.innerHTML = `<div class="empty">no data — add <code>prices/${slug || '…'}.csv</code>` +
+      ` and run <code>python3 update_prices.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }
   const sub = document.getElementById('dtSub');
@@ -1721,9 +1735,9 @@ const get = (path, required) => !path ? Promise.resolve('')
       .then(r => r.ok ? r.text() : (required ? Promise.reject(new Error(r.status)) : ''))
       .catch(err => { if (required) throw err; return ''; });
 
-Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH)])
-  .then(([configText, instrumentsText]) => Promise.all([
-    configText, get(CSV_PATH, true), get(TRADES_PATH), instrumentsText,
+Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH)])
+  .then(([configText, instrumentsText, sourcesText]) => Promise.all([
+    configText, get(CSV_PATH, true), get(TRADES_PATH), instrumentsText, sourcesText,
     get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH),
   ]))
   .then(texts => load(...texts))                       // ingest()'s argument order

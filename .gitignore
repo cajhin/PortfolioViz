@@ -1,18 +1,18 @@
-# Data, by lifecycle. All of it is gitignored — it carries real position values and holdings.
+# Data, by lifecycle. Committed only where it is small, curated, and not reproducible.
 #
-#   parqet/       IMPORTED — regenerate via REFRESH_PARQET_DATA.md
-#   data_series/  DERIVED  — regenerate via update_data_series.py
-#   fx/           DERIVED  — same
-#   registry/     CURATED  — NOT regenerable from anything. instruments.csv and price_sources.csv
-#                            are hand/agent-maintained; losing them means rebuilding by hand.
-#                            Back this one up somewhere, or commit it to a private remote.
+#   parqet/     IMPORTED — regenerate via REFRESH_PARQET_DATA.md. Ignored: holds real position
+#                          values and share counts.
+#   prices/     DERIVED  — regenerate via update_prices.py. Ignored: bulk, and reproducible from
+#   fx/         DERIVED    registry/price_sources.csv alone.
+#   registry/   CURATED  — COMMITTED. Two small tables no import can rebuild. Note that
+#                          instruments.csv does enumerate which instruments are held.
 *.csv
 parqet/
-registry/
-data_series/
+prices/
 fx/
+!registry/*.csv
 
-# check_portfolio.js records real position values and tooltips here — same data, same rule
+# check_portfolio.js records real position values and tooltips here — same rule as parqet/
 check_baseline.json
 
 .DS_Store

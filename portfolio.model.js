@@ -17,7 +17,7 @@
      FIFO lots            the shared share-retirement walk every cost-basis figure is built on
      colour from name     a position's hue, derived from its own name
      XIRR                 cash flows out of the trade log, and the bisection solver over them
-     price series         data_series/*.csv, and the "last close at or before" lookup
+     price series         prices/*.csv, and the "last close at or before" lookup
      splits               undoing Parqet's post-split restatement of historical share counts
      as of                the portfolio rebuilt as it stood on a past date
      benchmark            "what if this money had gone into the index instead" — four flavours
@@ -33,23 +33,24 @@
    Three input directories, by lifecycle — the distinction is worth preserving:
      parqet/       IMPORTED  regenerated wholesale by the refresh task; never hand-edited
      registry/     CURATED   what exists and where its prices come from; never overwritten
-     data_series/  DERIVED   reproducible from registry/price_sources.csv alone
-   Every close in data_series/ is already in the portfolio currency — update_data_series.py
+     prices/  DERIVED   reproducible from registry/price_sources.csv alone
+   Every close in prices/ is already in the portfolio currency — update_prices.py
    converts on write and keeps the untouched quote alongside — so nothing here does FX.
    ============================================================================================= */
 
 /* ---------- files ---------- */
 const CONFIG_PATH = 'config.json';   // tunable settings an agent maintains — see its own comments
-const CSV_PATH = 'parqet/parqet_all_port.csv';
-const TRADES_PATH = 'parqet/parqet_trades.csv';
+const CSV_PATH = 'parqet/positions.csv';
+const TRADES_PATH = 'parqet/activities.csv';
 // registry/ is curated: what exists, and what each instrument is called. It is keyed by ISIN and
 // is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
 const INSTRUMENTS_PATH = 'registry/instruments.csv';
-// data_series/ is derived: reproducible from registry/price_sources.csv by update_data_series.py.
+const PRICE_SOURCES_PATH = 'registry/price_sources.csv';
+// prices/ is derived: reproducible from registry/price_sources.csv by update_prices.py.
 // _latest.csv is the freshest close per instrument, which is what fills the quote Parqet freezes
 // on a position once it is sold.
-const LATEST_PATH = 'data_series/_latest.csv';
+const LATEST_PATH = 'prices/_latest.csv';
 
 /* ---------- state ----------
    Every mutable global on the page. Only ingest() and build() below, and the control handlers
@@ -65,6 +66,7 @@ const LATEST_PATH = 'data_series/_latest.csv';
    reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
     INSTRUMENTS = new Map(),      // registry rows, keyed by ISIN (and by name, for cash)
+    SOURCES = new Map(),          // ISIN → its priority-1 price source, for the Source column
     BENCH = [], CCY = 'EUR',
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
     VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
@@ -232,7 +234,7 @@ function benchSeriesPath(configText, instrumentsText) {
   if (!isin) return '';
   const row = (instrumentsText ? parseCSV(instrumentsText) : [])
     .find(r => r.id === isin || r.isin === isin);
-  return row && row.slug ? `data_series/${row.id}-${row.slug}.csv` : '';
+  return row && row.slug ? `prices/${row.id}-${row.slug}.csv` : '';
 }
 
 /* ---------- price series ---------- */
@@ -251,7 +253,7 @@ async function loadSeries(slug) {
   if (SERIES_CACHE.has(slug)) return SERIES_CACHE.get(slug);
   let out = null;
   try {
-    const r = await fetch(`data_series/${slug}.csv`, { cache: 'no-store' });
+    const r = await fetch(`prices/${slug}.csv`, { cache: 'no-store' });
     if (r.ok) {
       const file = splitMeta(await r.text());
       const rows = parseCSV(file.body)
@@ -309,7 +311,7 @@ function detectMidHistorySplit(trades) {
 }
 
 // This position's buys and sells with every share count restated onto today's scale.
-// data_series prices come from an external provider that split-adjusts its whole history
+// prices prices come from an external provider that split-adjusts its whole history
 // uniformly, so share counts fed against them must be on that same current-day scale for every
 // date, not whatever scale they were actually traded at. d.split already carries the ratio for an
 // open position (detected from today's Parqet-restated cost basis); a closed one needs its own
@@ -357,7 +359,7 @@ function asOfIrr(lots, cur, dateStr) {
 /* ---------- as of: the portfolio on a past date ---------- */
 // The portfolio as it stood on a past date: replay each position's trades up to that day (FIFO,
 // same walk as the split/dividend helpers) to get shares actually held, price them from that
-// position's own data_series file, and value the remaining cost at what was actually paid. Cash
+// position's own prices file, and value the remaining cost at what was actually paid. Cash
 // and any position lacking a series that day are left out and named in the result, since neither
 // can be honestly reconstructed from what this page has on hand.
 const AS_OF_CACHE = new Map();
@@ -427,7 +429,7 @@ async function computeAsOf(dateStr) {
 // The same per-date value computeAsOf works out for one pick, walked across every day already on
 // screen instead — what the value bar under the detail overlay chart reads. anchorClose mirrors
 // computeAsOf() exactly: Parqet's own last known price is the ground truth for "today", so this
-// and the live map agree on the position's current value even though the data_series close comes
+// and the live map agree on the position's current value even though the prices close comes
 // from a different provider. Synchronous — series is already loaded by the time a chart draws.
 function valueOverTime(d, series, displayRows) {
   const deals = splitAdjustedDeals(d);
@@ -794,7 +796,7 @@ function totals(rows) {
 /* ---------- ingest ----------
    config.json plus the six CSVs in, the whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
-function ingest(configText, text, tradesText, instrumentsText, benchText, latestText) {
+function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText) {
   // malformed or missing config.json keeps the built-in defaults rather than failing the page —
   // same "absent input degrades gracefully" rule every other file here follows
   let benchIsin = '';
@@ -821,7 +823,16 @@ function ingest(configText, text, tradesText, instrumentsText, benchText, latest
   });
   if (benchIsin && INSTRUMENTS.has(benchIsin)) BENCH_LABEL = INSTRUMENTS.get(benchIsin).display;
 
-  // the last close update_data_series.py stored per instrument — same shape the hand-kept
+  // only the priority-1 row per instrument: the table shows where a price actually comes from,
+  // and a fallback is by definition not where it normally comes from
+  SOURCES = new Map();
+  (sourcesText ? parseCSV(sourcesText) : []).forEach(r => {
+    if (!r.isin) return;
+    const prev = SOURCES.get(r.isin);
+    if (!prev || num(r.priority) < num(prev.priority)) SOURCES.set(r.isin, r);
+  });
+
+  // the last close update_prices.py stored per instrument — same shape the hand-kept
   // parqet_prices.csv used to supply, now a by-product of the fetch instead of a chore
   PRICES = new Map((latestText ? parseCSV(latestText) : [])
     .filter(r => r.isin && r.close !== '' && r.date)

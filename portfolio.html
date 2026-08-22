@@ -10,7 +10,7 @@
 <div class="verttitle" aria-hidden="true">Portfolio</div>
 <div class="wrap">
   <div id="loader" class="loader" hidden>
-    <div>Could not read <code>parqet_all_port.csv</code> automatically (browsers block local file reads from <code>file://</code>).</div>
+    <div>Could not read <code>parqet/positions.csv</code> automatically (browsers block local file reads from <code>file://</code>).</div>
     <div>Pick the file, or serve the folder with <code>python3 -m http.server</code>.</div>
     <input type="file" id="file" accept=".csv,text/csv">
     <div class="err" id="err"></div>
@@ -119,7 +119,7 @@
     <div class="card tablescroll" id="positionsCard" hidden>
       <table id="tbl">
         <thead><tr>
-          <th>Portfolio</th><th>Position</th><th>Shares</th><th>Purchase value</th>
+          <th>Portfolio</th><th>Source</th><th>Position</th><th>Shares</th><th>Purchase value</th>
           <th>Current value</th><th>Unrealised</th><th>Return</th><th>Realised (pre-tax)</th>
         </tr></thead>
         <tbody></tbody>
@@ -130,7 +130,7 @@
       <div class="closedhead"><b>Closed positions</b></div>
       <table id="tblClosedPositions">
         <thead><tr>
-          <th>Portfolio</th><th>Position</th><th>Purchase value</th><th>Return</th>
+          <th>Portfolio</th><th>Source</th><th>Position</th><th>Purchase value</th><th>Return</th>
           <th>Realised (pre-tax)</th><th>XIRR</th>
         </tr></thead>
         <tbody></tbody>

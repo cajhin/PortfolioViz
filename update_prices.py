@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Fetch daily price history into data_series/, driven by registry/price_sources.csv.
+"""Fetch daily price history into prices/, driven by registry/price_sources.csv.
 
 Nothing about *how* to fetch an instrument lives in the fetched file any more — the registry is
 the single place that maps an ISIN to a source, a symbol and a quote currency, so you can answer
 "what am I tracking, and from where?" by reading one table instead of opening every series.
 
-    python3 update_data_series.py                       # update every instrument in the registry
-    python3 update_data_series.py roche                 # just this one (slug or ISIN)
-    python3 update_data_series.py roche --from 2019-01-01   # also backfill, from that date
+    python3 update_prices.py                       # update every instrument in the registry
+    python3 update_prices.py roche                 # just this one (slug or ISIN)
+    python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
 
 One instrument may list several sources, ordered by `priority`. Priority 1 is the truth; a lower
 one is only ever consulted for dates the higher one does not have. That is what makes a thin
@@ -19,15 +19,15 @@ names, and the untouched quote is kept alongside in `close_raw`. Converting here
 the browser keeps the page's arithmetic single-currency, and keeping the raw means a bad FX day
 can be recomputed rather than re-fetched.
 
-Written per instrument:  data_series/<isin>-<slug>.csv   date,close,close_raw,quote_currency,source
-Written once per run:    data_series/_latest.csv         isin,date,close,source
+Written per instrument:  prices/<isin>-<slug>.csv   date,close,close_raw,quote_currency,source
+Written once per run:    prices/_latest.csv         isin,date,close,source
 FX series are cached in  fx/<PAIR>.csv                   date,rate
 """
 import csv, io, json, os, subprocess, sys, time
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DIR = os.path.join(ROOT, "data_series")
+DIR = os.path.join(ROOT, "prices")
 FX_DIR = os.path.join(ROOT, "fx")
 REGISTRY = os.path.join(ROOT, "registry")
 UA = "Mozilla/5.0"

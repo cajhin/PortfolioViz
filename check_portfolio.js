@@ -6,7 +6,7 @@
  *   node check_portfolio.js            re-run and diff against that baseline
  *
  * How it works: the scripts portfolio.html loads are concatenated in page order and run in a vm
- * context against a mini DOM defined below and the real CSVs in parqet/ and data_series/. Add a
+ * context against a mini DOM defined below and the real CSVs in parqet/ and prices/. Add a
  * <script src> to the page and it is picked up here automatically. It then dumps
  *
  *   - every computed field of every open and closed position, in both modes,
@@ -190,7 +190,7 @@ function hoverAll(rows, tag, out) {
     h.setShowMoney(true);
 
     // the modal price chart: its own code path, and the only one that reads a position's
-    // data_series file for drawing rather than for the as-of replay
+    // prices file for drawing rather than for the as-of replay
     const detail = {};
     for (const d of h.items().slice(0, 6).concat(h.closed().slice(0, 2))) {
       await h.openDetail(d);
