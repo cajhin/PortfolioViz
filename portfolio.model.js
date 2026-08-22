@@ -392,6 +392,24 @@ async function computeAsOf(dateStr) {
   return result;
 }
 
+// The same per-date value computeAsOf works out for one pick, walked across every day already on
+// screen instead — what the value bar under the detail overlay chart reads. anchorClose mirrors
+// computeAsOf() exactly: Parqet's own last known price is the ground truth for "today", so this
+// and the live map agree on the position's current value even though the data_series close comes
+// from a different provider. Synchronous — series is already loaded by the time a chart draws.
+function valueOverTime(d, series, displayRows) {
+  const deals = splitAdjustedDeals(d);
+  const anchorClose = seriesCloseAt(series.rows, d.lastPriceDate) ||
+    series.rows[series.rows.length - 1].close;
+  const factor = (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
+  return displayRows.map(r => {
+    const lots = survivingLots(deals, { until: r.date });
+    const shares = lotShares(lots), cost = lotCost(lots);
+    const cur = shares * r.close * factor;
+    return { date: r.date, cur, cost, ret: cost > 0 ? (cur - cost) / cost * 100 : 0 };
+  });
+}
+
 // The realised side of the same as-of pick: every sell (and its dividends/taxes) booked on or
 // before dateStr, split into "open" (some shares still held on that date) and "closed" (fully
 // sold by then) so renderClosed can draw the same open|closed bar it draws for today, just

@@ -1057,11 +1057,19 @@ function shiftYears(n) {
   return t.toISOString().slice(0, 10);
 }
 
-function drawDetail(d, series, alignDate, range) {
+// custom, when given, is a { from, to } drag-selected window that overrides the range buttons
+// entirely — both ends explicit, unlike a button's range which always runs through to today.
+function drawDetail(d, series, alignDate, range, custom) {
   const W = 840, H = 300, T = 12, B = 22;
-  const pick = (RANGE_FROM[range] || RANGE_FROM.buy)(d, series);
-  const from = pick && pick > series.rows[0].date ? pick : series.rows[0].date;
-  const rows = series.rows.filter(r => r.date >= from);
+  let from, to;
+  if (custom) {
+    ({ from, to } = custom);
+  } else {
+    const pick = (RANGE_FROM[range] || RANGE_FROM.buy)(d, series);
+    from = pick && pick > series.rows[0].date ? pick : series.rows[0].date;
+    to = series.rows[series.rows.length - 1].date;
+  }
+  const rows = series.rows.filter(r => r.date >= from && r.date <= to);
   if (rows.length < 2) return null;
   const bench = BENCH.filter(r => r.date >= rows[0].date);
 
@@ -1083,7 +1091,8 @@ function drawDetail(d, series, alignDate, range) {
     const b = at(bench, dt);
     return b ? benchPct(b) : null;
   });
-  const values = [...rows.map(stockPct), ...benchVals.filter(Number.isFinite), 0];
+  const stockVals = rows.map(stockPct);                  // kept: the hover crosshair reads back into it
+  const values = [...stockVals, ...benchVals.filter(Number.isFinite), 0];
   const lo = Math.min(...values), hi = Math.max(...values);
   // No padding on either edge: each bound is the actual all-time low/high for the window shown —
   // the most either line, stock or benchmark, ever fell or rose — so the chart never implies more
@@ -1101,7 +1110,7 @@ function drawDetail(d, series, alignDate, range) {
   const L = Math.max(34, 10 + Math.max(...axisTexts.map(t => t.length)) * 5.6);
 
   // the right margin is whatever the end labels need, so they can never be clipped
-  const lastStock = stockPct(rows[rows.length - 1]);
+  const lastStock = stockVals[stockVals.length - 1];
   const lastBench = benchVals.filter(Number.isFinite).slice(-1)[0];
   const keys = [{ text: `${d.label} ${fmtPct(lastStock)}`, v: lastStock, colour: 'var(--series-1)' }];
   if (Number.isFinite(lastBench))
@@ -1125,14 +1134,50 @@ function drawDetail(d, series, alignDate, range) {
     svg.appendChild(t);
   }
   svg.appendChild(el('line', { x1: L, y1: y(0), x2: W - R, y2: y(0), class: 'dtzero' }));
-  let lastYear = '';
+  // year labels, plus small ticks along the bottom marking quarters — April, July, October, never
+  // January, since that boundary already has the year label above to carry it. Zoomed under a
+  // year, quarters would land three or fewer per chart — too sparse to read anything from — so
+  // every month gets its own tick and a single-letter label instead, except where that letter
+  // would land right on top of a year label already claiming the same spot.
+  const spanDays = (Date.parse(dates[dates.length - 1]) - Date.parse(dates[0])) / 864e5;
+  const monthMode = spanDays < 365;
+  const MONTH_LETTER = 'JFMAMJJASOND';
+  // a range starting mid-year (a drag selection, a "1y"/"5y" button) shouldn't claim that year
+  // with a label at the left edge — it isn't really where that year begins, just where the view
+  // happens to cut in. Only a range that genuinely starts in January gets to show it up front;
+  // priming lastYear with the real starting year everywhere else skips that first, false label.
+  let lastYear = (+dates[0].slice(5, 7) === 1) ? '' : dates[0].slice(0, 4);
+  // same idea one level down: a range that starts on, say, the 20th of April isn't where April
+  // begins either, so priming lastMonth the same way keeps that leading tick from claiming a
+  // month (or quarter) it only partly covers. <=3 allows for a weekend or holiday pushing the
+  // first trading day of a genuine month-start forward a little, same slack every other month
+  // boundary in this walk already gets for free by only checking when the month value changes.
+  const startDay = +dates[0].slice(8, 10);
+  let lastMonth = startDay <= 3 ? '' : String(+dates[0].slice(5, 7));
   dates.forEach((dt, i) => {
-    const yr = dt.slice(0, 4);
-    if (yr === lastYear) return;
-    lastYear = yr;
-    const t = el('text', { x: x(i), y: H - 6, class: 'dtaxis', 'text-anchor': 'middle' });
-    t.textContent = yr;
-    svg.appendChild(t);
+    const yr = dt.slice(0, 4), mi = +dt.slice(5, 7);      // mi: 1..12
+    const newYear = yr !== lastYear;
+    if (newYear) {
+      lastYear = yr;
+      const t = el('text', { x: x(i), y: H - 6, class: 'dtaxis', 'text-anchor': 'middle' });
+      t.textContent = yr;
+      svg.appendChild(t);
+      // in quarter mode January never qualifies as a quarter (only April/July/October do), so
+      // without this the year boundary itself would be the one tick-less label on the axis;
+      // month mode already draws January's own tick below, so skip it here to avoid a double line
+      if (!monthMode) svg.appendChild(el('line',
+        { x1: x(i), y1: H - B, x2: x(i), y2: H - B + 5, class: 'dtqtick' }));
+    }
+    if (String(mi) === lastMonth) return;
+    lastMonth = String(mi);
+    if (!monthMode && mi !== 4 && mi !== 7 && mi !== 10) return;
+    const tx = x(i);
+    svg.appendChild(el('line', { x1: tx, y1: H - B, x2: tx, y2: H - B + 5, class: 'dtqtick' }));
+    if (monthMode && !newYear) {
+      const t = el('text', { x: tx, y: H - 6, class: 'dtaxis', 'text-anchor': 'middle' });
+      t.textContent = MONTH_LETTER[mi - 1];
+      svg.appendChild(t);
+    }
   });
 
   const path = (pts, stroke) => svg.appendChild(el('path', {
@@ -1147,17 +1192,24 @@ function drawDetail(d, series, alignDate, range) {
     svg.appendChild(el('line', { x1: x(i), y1: T, x2: x(i), y2: H - B, class: 'dtanchor' }));
   }
 
-  // one marker per trade, on the stock line
-  const marks = dealsOf(d).filter(t => t.datetime.slice(0, 10) >= from);
-  const markNodes = marks.map(t => {
+  // one marker per day, not per trade: a savings-plan top-up routinely books as two or three
+  // separate orders on the same day (see Alphabet C, 2026-02-05 — one whole share, one fractional
+  // remainder), and those would otherwise stack as identical, individually-unclickable circles at
+  // the exact same point. Group first, so the marker underneath is always the thing you can hit.
+  const byDay = new Map();
+  dealsOf(d).filter(t => t.datetime.slice(0, 10) >= from).forEach(t => {
     const day = t.datetime.slice(0, 10);
+    (byDay.get(day) || byDay.set(day, []).get(day)).push(t);
+  });
+  const markNodes = [...byDay.entries()].map(([day, trades]) => {
     const i = xOf(day);
     if (i === null) return null;
+    const type = trades.every(t => t.type === trades[0].type) ? trades[0].type : 'mixed';
     const node = el('circle', {
-      cx: x(i), cy: y(stockPct(rows[i])), r: 4.2, class: 'dtmark ' + t.type,
+      cx: x(i), cy: y(stockPct(rows[i])), r: 4.2, class: 'dtmark ' + type,
     });
     svg.appendChild(node);
-    return { node, trade: t, day, close: rows[i].close, aligned: anchor === dates[i] };
+    return { node, trades, day, close: rows[i].close, aligned: anchor === dates[i] };
   }).filter(Boolean);
 
   // place the end labels at their line, then push apart if they would collide, keeping both inside
@@ -1179,19 +1231,51 @@ function drawDetail(d, series, alignDate, range) {
     svg.appendChild(t);
   });
 
-  return { svg, from: rows[0].date, anchor, stock: lastStock, bench: lastBench, marks: markNodes };
+  // value bar: what the position was actually worth (euros, not per cent) on every day shown,
+  // one column per date, coloured through the same red/green ramp the map's tiles use — same x
+  // positions as the line chart above it (L/R/x carry over unchanged) so the two stay aligned
+  // when the range buttons change which days are in view.
+  const VALH = 200;
+  const vals = valueOverTime(d, series, rows);
+  const ath = Math.max(0, ...vals.map(v => v.cur));
+  const barW = (W - L - R) / Math.max(1, dates.length - 1);
+  const valueSvg = el('svg', { viewBox: `0 0 ${W} ${VALH}`, role: 'img', class: 'dtvalue',
+    'aria-label': `${d.label}'s value over the same period, area by day` });
+  vals.forEach((v, i) => {
+    const h = ath > 0 ? Math.max(0, v.cur / ath) * VALH : 0;
+    const fill = gradeColor(Math.abs(v.ret) < 0.005 ? NaN : v.ret, false);
+    valueSvg.appendChild(el('rect', {
+      x: x(i) - barW / 2, y: VALH - h, width: barW, height: h, fill,
+    }));
+  });
+  if (ath > 0) {
+    const athLabel = el('text', { x: L, y: 12, class: 'dtaxis', 'text-anchor': 'start' });
+    athLabel.textContent = `ATH ${fmtMoney(ath)}`;
+    valueSvg.appendChild(athLabel);
+    const clsLabel = el('text', { x: L, y: 24, class: 'dtaxis', 'text-anchor': 'start' });
+    clsLabel.textContent = `CLS ${fmtMoney(vals[vals.length - 1].cur)}`;
+    valueSvg.appendChild(clsLabel);
+    const invLabel = el('text', { x: L, y: 36, class: 'dtaxis', 'text-anchor': 'start' });
+    invLabel.textContent = `INV ${fmtMoney(vals[vals.length - 1].cost)}`;
+    valueSvg.appendChild(invLabel);
+  }
+
+  // dates/stockVals/benchVals/x plus the margins: everything renderDetail needs to turn a pointer
+  // position back into "which day is this" for the hover crosshair, without redoing this geometry
+  return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, bench: lastBench,
+           marks: markNodes, dates, stockVals, benchVals, x, L, R, T, B, H, W };
 }
 
 let DETAIL = null;                                    // { d, series, alignDate }
 
 function renderDetail() {
   const body = document.getElementById('dtBody');
-  const { d, series, alignDate, range } = DETAIL;
+  const { d, series, alignDate, range, customRange } = DETAIL;
   document.querySelectorAll('#dtRange button').forEach(b =>
     b.classList.toggle('on', b.dataset.range === range));
   let drawn = null;
   try {
-    drawn = series && drawDetail(d, series, alignDate, range);
+    drawn = series && drawDetail(d, series, alignDate, range, customRange);
   } catch (err) {
     body.innerHTML = `<div class="empty">chart error: ${(err && err.message) || err}</div>`;
     return;
@@ -1202,22 +1286,122 @@ function renderDetail() {
       ` and run <code>python3 update_data_series.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }
-  document.getElementById('dtSub').textContent =
+  const sub = document.getElementById('dtSub');
+  // built once so hovering can restore exactly this on pointerleave, instead of re-deriving it
+  const subAt = (stock, bench, day) =>
     `${d.portfolio} · 0 % at ${drawn.anchor}` +
-    ` · ${d.label} ${fmtPct(drawn.stock)}` +
-    (Number.isFinite(drawn.bench) ? ` · World ${fmtPct(drawn.bench)}` : '');
+    ` · ${d.label} ${fmtPct(stock)}` +
+    (Number.isFinite(bench) ? ` · World ${fmtPct(bench)}` : '') +
+    (day ? ` — ${day}` : '');
+  const defaultSub = subAt(drawn.stock, drawn.bench, null);
+  sub.textContent = defaultSub;
 
   const tip = document.createElement('div');
   tip.className = 'dt-tip';
-  body.replaceChildren(drawn.svg, tip);
+  const crosshair = el('line', { x1: 0, y1: drawn.T, x2: 0, y2: drawn.H - drawn.B, class: 'dtcrosshair' });
+  drawn.svg.appendChild(crosshair);
+  body.replaceChildren(drawn.svg, drawn.valueSvg, tip);
+
+  // hover anywhere over the plot: a vertical line at the nearest trading day, and the subheader
+  // swapped to that day's numbers instead of today's — pointermove fires on the svg as a whole, so
+  // this reads even while the cursor sits over a trade marker or one of the lines themselves.
+  // hoverDay tracks what's currently under the crosshair so a plain click can tie the lines there
+  // too, the same re-anchor a trade marker's own click already does — click is meaningless without
+  // a day under it, so it's a no-op wherever pointermove last cleared this back to null.
+  const { dates, stockVals, benchVals, x, L, R } = drawn;
+  let hoverDay = null;
+  // drag-to-zoom: pointerdown marks where a possible drag starts, pointermove past a day's width
+  // turns it into one (dragMoved), pointerup on a real drag sets the custom range and redraws.
+  // click still does the old "tie the lines here" — dragMoved gates which one a release means,
+  // since a plain click also fires pointerdown/pointerup a few pixels apart in the same spot.
+  let dragStartI = null, dragMoved = false;
+  const selectBand = el('rect', { x: 0, y: drawn.T, width: 0, height: drawn.H - drawn.B - drawn.T,
+                                  class: 'dtselect' });
+  drawn.svg.appendChild(selectBand);
+  const idxAt = vx => Math.max(0, Math.min(dates.length - 1,
+    Math.round((vx - L) / (drawn.W - L - R) * (dates.length - 1))));
+  const vxOf = e => {
+    const rect = drawn.svg.getBoundingClientRect();
+    return (e.clientX - rect.left) / rect.width * drawn.W;
+  };
+  drawn.svg.addEventListener('pointerdown', e => {
+    const vx = vxOf(e);
+    if (vx < L || vx > drawn.W - R) return;
+    dragStartI = idxAt(vx);
+    dragMoved = false;
+    drawn.svg.setPointerCapture?.(e.pointerId);
+  });
+  drawn.svg.addEventListener('pointermove', e => {
+    const vx = vxOf(e);
+    if (dragStartI !== null) {
+      const i = idxAt(vx);
+      hoverDay = dates[i];   // so a click that turns out not to be a drag still has a day to use
+      if (i !== dragStartI) dragMoved = true;
+      const a = Math.min(dragStartI, i), b = Math.max(dragStartI, i);
+      selectBand.setAttribute('x', x(a));
+      selectBand.setAttribute('width', Math.max(0, x(b) - x(a)));
+      selectBand.classList.add('on');
+      crosshair.classList.remove('on');
+      return;
+    }
+    if (vx < L || vx > drawn.W - R) {
+      hoverDay = null;
+      crosshair.classList.remove('on');
+      sub.textContent = defaultSub;
+      return;
+    }
+    const i = idxAt(vx);
+    hoverDay = dates[i];
+    crosshair.setAttribute('x1', x(i)); crosshair.setAttribute('x2', x(i));
+    crosshair.classList.add('on');
+    sub.textContent = subAt(stockVals[i], benchVals[i], dates[i]);
+  });
+  drawn.svg.addEventListener('pointerup', e => {
+    if (dragStartI === null) return;
+    const i = idxAt(vxOf(e));
+    const a = Math.min(dragStartI, i), b = Math.max(dragStartI, i);
+    const madeSelection = dragMoved && b > a;
+    dragStartI = null;
+    selectBand.classList.remove('on');
+    drawn.svg.releasePointerCapture?.(e.pointerId);
+    if (madeSelection) {
+      DETAIL.customRange = { from: dates[a], to: dates[b] };
+      renderDetail();
+    }
+  });
+  drawn.svg.addEventListener('pointerleave', () => {
+    if (dragStartI !== null) return;   // pointer capture keeps a drag going past the edge
+    hoverDay = null;
+    crosshair.classList.remove('on');
+    sub.textContent = defaultSub;
+  });
+  drawn.svg.addEventListener('click', () => {
+    if (dragMoved) { dragMoved = false; return; }   // that click was the tail end of a real drag
+    if (!hoverDay) return;
+    DETAIL.alignDate = (DETAIL.alignDate === hoverDay) ? null : hoverDay;   // click again to reset
+    renderDetail();
+  });
 
   drawn.marks.forEach(m => {
     if (m.aligned) m.node.classList.add('on');
     m.node.addEventListener('pointerenter', () => {
-      const t = m.trade;
-      tip.innerHTML = `<b>${t.type === 'buy' ? 'Buy' : 'Sell'}</b> ${m.day}<br>` +
-        `${num(t.shares).toLocaleString('de-DE')} × ${fmtMoney2(num(t.price))}` +
-        ` = ${fmtMoney2(num(t.amount))}<br>` +
+      const line = t => `${num(t.shares).toLocaleString('de-DE')} × ${fmtMoney2(num(t.price))}` +
+        ` = ${fmtMoney2(num(t.amount))}`;
+      let head;
+      if (m.trades.length === 1) {
+        const t = m.trades[0];
+        head = `<b>${t.type === 'buy' ? 'Buy' : 'Sell'}</b> ${m.day}<br>${line(t)}<br>`;
+      } else {
+        // the average is what one order at this size and price would have looked like — same
+        // shares and amount as the individual trades sum to, just undivided — with each real
+        // trade listed below it in grey so the split itself is still visible, not hidden by it
+        const shares = m.trades.reduce((s, t) => s + num(t.shares), 0);
+        const amount = m.trades.reduce((s, t) => s + num(t.amount), 0);
+        head = `<b>${m.trades.length} trades</b> on ${m.day}<br>` +
+          `avg ${line({ shares, amount, price: amount / shares })}<br>` +
+          m.trades.map(t => `<span class="mut">${line(t)}</span>`).join('<br>') + '<br>';
+      }
+      tip.innerHTML = head +
         `<span class="mut">close ${fmtMoney2(m.close)} · click to tie the lines here</span>`;
       const box = m.node.getBoundingClientRect(), host = body.getBoundingClientRect();
       tip.style.left = Math.max(4, Math.min(box.left - host.left - 60, host.width - 200)) + 'px';
@@ -1225,7 +1409,10 @@ function renderDetail() {
       tip.classList.add('on');
     });
     m.node.addEventListener('pointerleave', () => tip.classList.remove('on'));
-    m.node.addEventListener('click', () => {
+    m.node.addEventListener('click', e => {
+      e.stopPropagation();   // else this bubbles to the svg's own click handler and immediately
+                              // un-toggles what this just set — a marker always sits exactly on a
+                              // trading day, so the two handlers would otherwise agree and fight
       DETAIL.alignDate = (DETAIL.alignDate === m.day) ? null : m.day;   // click again to reset
       renderDetail();
     });
@@ -1241,7 +1428,7 @@ async function openDetail(d) {
   if (!dlg.open) dlg.showModal();
 
   DETAIL = { d, series: await loadSeries(seriesSlug(d)), alignDate: null,
-             range: (DETAIL && DETAIL.range) || 'buy' };
+             range: (DETAIL && DETAIL.range) || 'buy', customRange: null };
   renderDetail();
 }
 
@@ -1249,6 +1436,7 @@ document.getElementById('dtRange').addEventListener('click', e => {
   const btn = e.target.closest('button[data-range]');
   if (!btn || !DETAIL) return;
   DETAIL.range = btn.dataset.range;
+  DETAIL.customRange = null;   // a preset button is the escape hatch out of a drag-selected zoom
   renderDetail();
 });
 document.getElementById('dtClose').addEventListener('click',

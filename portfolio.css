@@ -172,6 +172,9 @@
              text-transform: uppercase; letter-spacing: 0.08em; }
   .mapgrp { font-size: 9px; fill: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
   svg { display: block; width: 100%; height: auto; }
+  .dtvalue { max-height: 200px; margin-top: 8px; }   /* the dialog's own width cap already keeps
+                                                         this near 200px; the rule is the actual
+                                                         guarantee, not an incidental one */
   .lbl { font-size: 8.4px; fill: var(--text-primary); font-variant-numeric: tabular-nums; }
   .lbl-sub { font-size: 11px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .leader { stroke: var(--border); stroke-width: 1; fill: none; }
@@ -235,13 +238,21 @@
   .detail .empty { padding: 28px 0 34px; text-align: center; color: var(--text-muted); }
   .dtline { fill: none; stroke-width: 1.6; }
   .dtgrid { stroke: var(--border); stroke-width: 0.6; }
+  .dtqtick { stroke: var(--text-muted); stroke-width: 1; }   /* darker than .dtgrid — an actual
+                                                                 tick mark, not a background line */
   .dtaxis { font-size: 9px; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
   .dtkey { font-size: 10px; font-weight: 600; }
   .dtanchor { stroke: var(--rim); stroke-width: 0.8; stroke-dasharray: 3 3; }
   .dtzero { stroke: var(--text-muted); stroke-width: 1; }
+  .dtcrosshair { stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 2 2;
+                 pointer-events: none; opacity: 0; }
+  .dtcrosshair.on { opacity: 1; }
+  .dtselect { fill: var(--series-1); opacity: 0; pointer-events: none; }
+  .dtselect.on { opacity: 0.15; }
   .dtmark { cursor: pointer; stroke: var(--surface-1); stroke-width: 1.4; }
   .dtmark.buy { fill: var(--realized); }
   .dtmark.sell { fill: var(--loss); }
+  .dtmark.mixed { fill: var(--text-secondary); }   /* a day with both a buy and a sell — rare */
   .dtmark.on { stroke: var(--rim); stroke-width: 1.8; }
   .dtmark:hover { r: 5.6; }
   .detail .dt-body { position: relative; }
