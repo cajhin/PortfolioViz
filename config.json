@@ -1,4 +1,6 @@
 {
   "timelineStart": "2019-01-01",
+  "currency": "EUR",
+  "benchmarkIsin": "IE00B4L5Y983",
   "benchmarkLabel": "MSCI World"
 }

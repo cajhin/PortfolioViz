@@ -10,7 +10,7 @@
 
    Sections, in order:
 
-     files                paths of config.json and the six CSVs the page reads
+     files                paths of config.json, the registry and the CSVs the page reads
      state                every mutable global, and who is allowed to write it
      CSV                  parsing, and the "# key=value" header lines some files carry
      the trade log        TRADE_INDEX — one position's activities, the input to almost everything
@@ -24,21 +24,32 @@
      dividends            attributing income to the lots that earned it
      display names        trimming legal boilerplate off a position's full name
      build                CSV rows → the position objects every renderer consumes
-     ingest               all six files in, the whole model out
+     ingest               config + registry + the Parqet export in, the whole model out
 
    Two rules the code holds to, worth keeping: a position is identified by portfolio *and*
    identifier (the same ISIN can live in two portfolios with separate histories), and money
    figures are always pre-tax unless the name says otherwise.
+
+   Three input directories, by lifecycle — the distinction is worth preserving:
+     parqet/       IMPORTED  regenerated wholesale by the refresh task; never hand-edited
+     registry/     CURATED   what exists and where its prices come from; never overwritten
+     data_series/  DERIVED   reproducible from registry/price_sources.csv alone
+   Every close in data_series/ is already in the portfolio currency — update_data_series.py
+   converts on write and keeps the untouched quote alongside — so nothing here does FX.
    ============================================================================================= */
 
 /* ---------- files ---------- */
 const CONFIG_PATH = 'config.json';   // tunable settings an agent maintains — see its own comments
 const CSV_PATH = 'parqet/parqet_all_port.csv';
 const TRADES_PATH = 'parqet/parqet_trades.csv';
-const NAMES_PATH = 'parqet/parqet_names.csv';   // ISIN (or exact name) → short display name
-const BENCH_PATH = 'data_series/benchmark.csv';   // daily closes of the benchmark fund
-const PRICES_PATH = 'parqet/parqet_prices.csv';     // fresh prices where Parqet has none (closed positions)
-const SECTORS_PATH = 'parqet/parqet_sectors.csv';   // hand-maintained ISIN → sector, for the map's grouping
+// registry/ is curated: what exists, and what each instrument is called. It is keyed by ISIN and
+// is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
+// portfolio holds (a benchmark, a watchlist name) and still be charted.
+const INSTRUMENTS_PATH = 'registry/instruments.csv';
+// data_series/ is derived: reproducible from registry/price_sources.csv by update_data_series.py.
+// _latest.csv is the freshest close per instrument, which is what fills the quote Parqet freezes
+// on a position once it is sold.
+const LATEST_PATH = 'data_series/_latest.csv';
 
 /* ---------- state ----------
    Every mutable global on the page. Only ingest() and build() below, and the control handlers
@@ -53,6 +64,7 @@ const SECTORS_PATH = 'parqet/parqet_sectors.csv';   // hand-maintained ISIN → 
    config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
+    INSTRUMENTS = new Map(),      // registry rows, keyed by ISIN (and by name, for cash)
     BENCH = [], CCY = 'EUR',
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
     VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
@@ -209,10 +221,30 @@ function xirr(flows) {
   return ((lo + hi) / 2) * 100;
 }
 
+// The benchmark is an instrument like any other now, so its series has no dedicated path — it is
+// resolved from config.json's benchmarkIsin against the registry. The view calls this before its
+// second fetch round, since the file to ask for is not knowable until both of those are in hand.
+// Parsing stays here rather than in the view: the model never reads the DOM, and the view never
+// parses a CSV.
+function benchSeriesPath(configText, instrumentsText) {
+  let isin = '';
+  try { isin = (configText ? JSON.parse(configText) : {}).benchmarkIsin || ''; } catch { /* none */ }
+  if (!isin) return '';
+  const row = (instrumentsText ? parseCSV(instrumentsText) : [])
+    .find(r => r.id === isin || r.isin === isin);
+  return row && row.slug ? `data_series/${row.id}-${row.slug}.csv` : '';
+}
+
 /* ---------- price series ---------- */
 const SERIES_CACHE = new Map();
-const seriesSlug = d => (NAMES.get('series:' + d.identifier) ||
-  (d.label || d.name || '').toLowerCase().replace(/[^a-z0-9]+/g, ''));
+// The series file for a position: "<isin>-<slug>", both straight off the registry row. The slug
+// is carried there rather than derived from the display name, so renaming a position on screen
+// can never silently point the chart at a different file (or at none).
+const seriesSlug = d => {
+  const inst = INSTRUMENTS.get(d.identifier) || INSTRUMENTS.get(d.name);
+  if (!inst || !inst.slug) return '';
+  return `${inst.id}-${inst.slug}`;
+};
 
 async function loadSeries(slug) {
   if (!slug) return null;
@@ -606,7 +638,7 @@ function splitFactor(d) {
 
 /* ---------- display names ---------- */
 // No fund flag comes out of Parqet — assetType is "security" for stocks and ETFs alike — so read it
-// off the full name. Overridable later by a column in parqet_names.csv if a fund ever hides it.
+// off the full name. Overridable later by a column in registry/instruments.csv if a fund hides it.
 const FUND_RE = /\b(UCITS|ETF|ETC|ETN|Fonds|Fund|Fd|Index|Ind\.?\s?Fd|SICAV|Investmentfonds)\b/i;
 const isFund = d => FUND_RE.test(d.name || '');
 
@@ -664,7 +696,12 @@ function build(rows) {
   });
 
   items.forEach(d => {
-    const fresh = PRICES.get(d.identifier);           // fills the gap Parqet leaves on closed positions
+    // Closed positions only, deliberately. _latest.csv now covers every tracked instrument, not
+    // just the sold ones the hand-kept price file used to carry — but for a position Parqet still
+    // quotes, Parqet is the truth: its currentValue and its lastPrice have to describe the same
+    // moment, or "as of today" stops reproducing the live map. A sold position is the one case
+    // Parqet stops quoting, which is what this is for.
+    const fresh = d.sold ? PRICES.get(d.identifier) : null;
     if (fresh && (!d.lastPriceDate || fresh.asof > d.lastPriceDate)) {
       d.lastPrice = fresh.price;
       d.lastPriceDate = fresh.asof;
@@ -757,29 +794,44 @@ function totals(rows) {
 /* ---------- ingest ----------
    config.json plus the six CSVs in, the whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
-function ingest(configText, text, tradesText, namesText, benchText, pricesText, sectorsText) {
+function ingest(configText, text, tradesText, instrumentsText, benchText, latestText) {
   // malformed or missing config.json keeps the built-in defaults rather than failing the page —
   // same "absent input degrades gracefully" rule every other file here follows
+  let benchIsin = '';
   try {
     const cfg = configText ? JSON.parse(configText) : {};
     if (cfg.timelineStart) TIMELINE_START = cfg.timelineStart;
     if (cfg.benchmarkLabel) BENCH_LABEL = cfg.benchmarkLabel;
+    if (cfg.benchmarkIsin) benchIsin = cfg.benchmarkIsin;
   } catch { /* keep defaults */ }
-  PRICES = new Map((pricesText ? parseCSV(pricesText) : [])
-    .filter(r => r.identifier && r.price !== '' && r.asof)
-    .map(r => [r.identifier, { price: num(r.price), asof: r.asof, symbol: r.symbol }]));
+
+  // one registry row per instrument, indexed by ISIN and — for cash, which carries none — by the
+  // exact name Parqet reports. NAMES/SECTORS stay as they were so every reader downstream is
+  // unchanged; only where they are filled from has moved.
+  INSTRUMENTS = new Map();
+  NAMES = new Map();
+  SECTORS = new Map();
+  (instrumentsText ? parseCSV(instrumentsText) : []).forEach(r => {
+    if (!r.id) return;
+    INSTRUMENTS.set(r.id, r);
+    if (r.isin) INSTRUMENTS.set(r.isin, r);
+    if (!r.isin && r.name) INSTRUMENTS.set(r.name, r);      // cash: matched on its Parqet name
+    if (r.display) NAMES.set(r.isin || r.name, r.display);
+    if (r.isin && r.sector) SECTORS.set(r.isin, r.sector);
+  });
+  if (benchIsin && INSTRUMENTS.has(benchIsin)) BENCH_LABEL = INSTRUMENTS.get(benchIsin).display;
+
+  // the last close update_data_series.py stored per instrument — same shape the hand-kept
+  // parqet_prices.csv used to supply, now a by-product of the fetch instead of a chore
+  PRICES = new Map((latestText ? parseCSV(latestText) : [])
+    .filter(r => r.isin && r.close !== '' && r.date)
+    .map(r => [r.isin, { price: num(r.close), asof: r.date, symbol: r.source }]));
   BENCH = (benchText ? parseCSV(splitMeta(benchText).body) : [])
     .map(r => ({ date: r.date, close: num(r.close) }))
     .filter(r => r.date && r.close > 0)
     .sort((a, b) => a.date < b.date ? -1 : 1);
   TRADES = tradesText ? parseCSV(tradesText) : [];
   indexTrades();
-  NAMES = new Map((namesText ? parseCSV(namesText) : [])
-    .filter(r => r.display)
-    .map(r => [r.identifier || r.name, r.display]));
-  SECTORS = new Map((sectorsText ? parseCSV(sectorsText) : [])
-    .filter(r => r.identifier && r.sector)
-    .map(r => [r.identifier, r.sector]));
   const all = build(parseCSV(text));
   ITEMS = all.filter(d => !d.sold);
   CLOSED = all.filter(d => d.sold).sort((a, b) => b.rel - a.rel);

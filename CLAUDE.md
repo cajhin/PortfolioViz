@@ -8,19 +8,33 @@ portfolio.html          markup only; loads the css and the two scripts, in that 
 portfolio.css
 portfolio.model.js      data and arithmetic — never touches the DOM
 portfolio.view.js       everything that reads or writes the page
-config.json             tunable settings — timeline start, benchmark label; see its own comments in ingest()
+config.json             settings — timeline start, portfolio currency, which ISIN is the benchmark
 check_portfolio.js      regression check for both scripts (see below)
-update_data_series.py   fetches a position's daily closes into data_series/
+update_data_series.py   fetches price history per registry/price_sources.csv
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
-parqet/*.csv            positions, trades, names, prices, sectors — gitignored, regenerate them
-data_series/*.csv       one file of daily closes per position, plus benchmark.csv — gitignored
+registry/*.csv          CURATED — instruments.csv, price_sources.csv; gitignored, not regenerable
+parqet/*.csv            IMPORTED — positions and trades; gitignored, regenerate them
+data_series/*.csv       DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
+fx/*.csv                DERIVED — one file per currency pair, for the conversion on write
 ```
 
-`config.json` is committed, not generated — an agent edits it directly when asked to change the
-as-of picker's earliest date or what the benchmark is called. `portfolio.model.js`'s `ingest()`
-reads it (falling back to built-in defaults if it's missing or malformed) and `update_data_series.py`
-reads its `timelineStart` too, so both the page and the data-fetching script move together. It has
-no schema doc beyond the comments at its two read sites — keep it to flat, self-explanatory keys.
+The three data directories differ by **lifecycle**, and that is the distinction to preserve:
+`parqet/` is overwritten wholesale by the refresh task, `registry/` is hand- or agent-maintained
+and must never be clobbered by an import, and `data_series/` + `fx/` are reproducible from
+`registry/price_sources.csv` alone.
+
+`registry/instruments.csv` is keyed by ISIN (cash, which has none, gets a `CASH:<portfolio>` id)
+and is the single answer to "what exists and what is it called". `registry/price_sources.csv` is
+the single answer to "where do this instrument's prices come from" — one row per source, ordered
+by `priority`, so a thin listing can be backed by a liquid one. Prices are converted to the
+portfolio currency **on write**, with the original kept in `close_raw`; nothing in the browser
+does FX. An instrument may be listed with no matching Parqet holding — that is how a benchmark or
+a future watchlist name gets charted.
+
+`config.json` is committed, not generated — an agent edits it directly to change the as-of
+picker's earliest date, the portfolio currency, or which ISIN is the benchmark. `ingest()` reads it
+(falling back to built-in defaults if it's missing or malformed) and `update_data_series.py` reads
+`timelineStart`/`currency` too, so the page and the fetcher move together. Keep it to flat keys.
 
 The two scripts are classic `<script>` tags sharing one global scope — no modules, no imports.
 `portfolio.model.js` loads first and declares the state; `portfolio.view.js` reads it. The

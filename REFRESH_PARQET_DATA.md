@@ -80,73 +80,6 @@ lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,a
   `assetType == "cash"` and leaves it out of invested/gain figures.
 - Numbers: plain decimals, `.` separator, no thousands separator, no currency symbol.
 
-`data_series/benchmark.csv` holds daily closes of the benchmark fund. Its constants sit once in
-`# key=value` comment lines above the header, and the rows are just `date,close`:
-
-```
-# symbol=EUNL.DE
-# name=iShares Core MSCI World UCITS ETF (IE00B4L5Y983)
-# currency=EUR
-date,close
-2019-08-20,51.086
-```
-
-The fund is iShares Core MSCI World, Xetra ticker EUNL.DE — the same ISIN as the Comdirect holding.
-The symbol and name above are the source of truth for *fetching* it — that's all this script reads.
-The page's own display name for it is separate: `config.json`'s `benchmarkLabel` (currently "MSCI
-World"), used everywhere the UI says what the position is being measured against. Swap the fund and
-both need updating — this file's header so the right symbol gets fetched, `config.json` so the page
-says the right thing about it.
-
-**Update it incrementally**, don't refetch seven years:
-
-```bash
-python3 update_data_series.py                              # update every series in data_series/
-python3 update_data_series.py benchmark                    # just this one series
-python3 update_data_series.py benchmark --from 2019-01-01  # also backfill, from that date
-```
-
-`2019-01-01` above is `config.json`'s `timelineStart` — the same date the as-of picker won't go
-behind. A brand-new series (see below) backfills from there automatically when `--from` is omitted;
-an existing one only needs `--from` to reach further back than what it already has.
-
-Clicking a tile in the map opens a detail overlay that charts that position against the benchmark,
-both indexed to 100 at the position's first activity. It looks for `data_series/<slug>.csv`, where the
-slug is the display name lowercased with non-alphanumerics stripped (`Amazon` → `amazon`); if the file
-is missing it says so and names the command that would create it.
-
-`update_data_series.py` works for any series under `data_series/`: it takes the file's stem as its
-argument and reads the Yahoo symbol from the file's own header. To add another series — a second
-benchmark, an index, a currency pair — create `data_series/<name>.csv` with just the `# symbol=`,
-`# name=`, `# currency=` lines and a `date,close` header, then run the script against it.
-
-The script reads `# symbol=` from the file, asks Yahoo only for the days from the last stored close
-onward (or from `--from`, to extend the series backwards), and merges — refetching the overlap day on purpose, since the newest row may have been an
-intraday value when it was written. It prints how many rows were added and corrected. The page reads
-the last row as "today" for the benchmark comparison, so run it whenever the positions are refreshed.
-
-**Run the bare `python3 update_data_series.py` (no series name) every time**, closed positions
-included. The script has no idea which positions are open or closed — it just walks every file
-under `data_series/` — so a closed position's series keeps extending in step with everything else
-for as long as its file exists, with no special-casing needed. The only way a series actually stops
-or gains a hole is a refresh that skips this step entirely, so don't skip it: it's what keeps the
-as-of picker and the detail overlay honest for a position long after it's sold.
-
-`parqet/parqet_prices.csv` (`identifier,name,price,currency,asof,symbol,source`) carries a fresh price for
-each **closed** position, since Parqet freezes their quotes at the sale and the page needs a current
-one to answer "what if I had held on". Also from Yahoo: resolve the ISIN with
-`https://query1.finance.yahoo.com/v1/finance/search?q=<ISIN>`, then quote the symbol with the chart
-endpoint, preferring a EUR listing and converting USD/GBp with `EURUSD=X` / `EURGBP=X` when there
-isn't one. Check every match by name — the ISIN search returned iShares **S&P SmallCap 600** for the
-MSCI Japan Small Cap ISIN — and sanity-check each price against the frozen one in
-`parqet/parqet_all_port.csv`. Expired warrants get `price 0` and a note. Ask before fetching.
-
-There is also a hand-maintained file, `parqet/parqet_names.csv` (`identifier,name,display,note`),
-mapping ISIN — or the exact name, for cash rows — to the short label the page prints. It is not
-regenerated here: after a refresh, add a line for any position it does not yet cover.
-
-Last run: 49 rows — 32 open (30 securities + 2 cash) and 17 closed.
-
 ## 4. Write `parqet/parqet_trades.csv`
 
 One row per activity, all portfolios, sorted by `portfolio` then `datetime` ascending. Header:
@@ -168,7 +101,61 @@ realizedGains,realizedGainsNet,currency
 
 Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 
-## 5. Check before you call it done
+## 5. Update `registry/instruments.csv`
+
+One row per instrument, keyed by ISIN (cash gets a `CASH:<portfolio>` id, since it has none). It
+carries `display` (the short label the page prints), `slug` (which fixes the series filename, so
+renaming the label can never point the chart at the wrong file), `sector` (the map's grouping) and
+`type`. **After a refresh, add a row for any position it does not yet cover** — that is the one
+hand-maintenance step left, and it replaces the old `parqet_names.csv` and `parqet_sectors.csv`.
+
+An instrument needs no matching Parqet holding. That is how the benchmark is charted, and how a
+watchlist name would be. `config.json` names the benchmark by ISIN (`benchmarkIsin`).
+
+## 6. Refresh the price series
+
+Price series are driven by `registry/price_sources.csv` — one row per instrument per source,
+ordered by `priority` — and fetched by `update_data_series.py`. Nothing about *how* to fetch an
+instrument lives in the fetched file, and there is no hand-maintained price file left to update.
+
+```bash
+python3 update_data_series.py                  # every instrument in the registry
+python3 update_data_series.py roche            # just this one (slug or ISIN)
+python3 update_data_series.py roche --from 2019-01-01   # also backfill, from that date
+```
+
+**Run the bare form on every refresh**, closed positions included. The script has no idea which
+positions are open or closed — it walks the registry — so a closed position's series keeps
+extending in step with everything else. It also writes `data_series/_latest.csv`, the freshest
+close per instrument, which is what supplies the quote Parqet freezes once a position is sold.
+That file used to be `parqet/parqet_prices.csv` and used to be maintained by hand; it is now a
+by-product of the fetch. Do not recreate it.
+
+Prices are converted to `config.json`'s `currency` **on write**, through the `fx_symbol` named in
+the registry, with the untouched quote kept in `close_raw`. The browser does no FX at all.
+
+### When a position has no series, or a bad one
+
+Add or amend a row in `registry/price_sources.csv`:
+
+| column | meaning |
+|---|---|
+| `isin` | the instrument, matching `registry/instruments.csv` |
+| `priority` | 1 is the truth; a higher number is consulted only for dates the lower one lacks |
+| `source` | `yahoo` today; `manual` for something unquotable (an expired warrant) |
+| `symbol` | the source's own ticker |
+| `quote_currency` | what that listing quotes in — `GBp` is pence, and is handled as such |
+| `fx_symbol` | the pair to convert through, e.g. `EURUSD=X`; blank when already in `currency` |
+
+Resolve an unknown ISIN with `https://query1.finance.yahoo.com/v1/finance/search?q=<ISIN>`, and
+**check the match by name** — that search once returned iShares *S&P SmallCap 600* for the MSCI
+Japan Small Cap ISIN. Ask before fetching.
+
+A thin listing is worth a second row rather than a shrug: Roche's `RHO.DE` both gapped for five
+years and carried stale quotes, so `RO.SW` (CHF, liquid) is its priority 1 and `RHO.DE` the
+fallback. The chart marks any stretch it still cannot fill with a dashed line and a warning.
+
+## 7. Check before you call it done
 
 ```bash
 cd /Users/jjj/git/parqet
@@ -189,12 +176,18 @@ bad = [r for r in tr if r['type'] == 'sell'
 print('sells where gross-tax-fee != net:', len(bad))
 print('total tax', round(sum(f(r,'tax') for r in tr), 2),
       '| current value', round(sum(f(p,'currentValue') for p in pos), 2))
+
+inst = {r['id'] for r in csv.DictReader(open('registry/instruments.csv'))}
+src  = {r['isin'] for r in csv.DictReader(open('registry/price_sources.csv'))}
+held = {p['identifier'] for p in pos if p['identifier']}
+print('positions missing from registry/instruments.csv:', held - inst or 'none')
+print('instruments with no price source:', (held & inst) - src or 'none')
 PY
 ```
 
-All four must hold: no unnamed trades, no trade whose `(portfolio, ISIN)` is missing from the
-positions file, no sell failing the net-amount identity, and totals in the same ballpark as the
-archived files. Then load `http://localhost:8765/portfolio.html` (serve the folder with
+All six must hold: no unnamed trades, no trade whose `(portfolio, ISIN)` is missing from the
+positions file, no sell failing the net-amount identity, nothing missing from the registry, every
+held instrument carrying a price source, and totals in the same ballpark as the archived files. Then load `http://localhost:8765/portfolio.html` (serve the folder with
 `python3 -m http.server 8765`) and confirm the map renders and the realised bar under it shows both
 the open and closed groups — the page fetches with `cache: no-store`, so a plain reload is enough.
 

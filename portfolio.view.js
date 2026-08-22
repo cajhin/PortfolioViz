@@ -547,7 +547,7 @@ const luminance = rgb => {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
 
-// The map's sector: from the hand-maintained parqet_sectors.csv (ISIN → sector), cash gets its
+// The map's sector: from the registry's own sector column (ISIN → sector), cash gets its
 // own bucket, anything the file doesn't cover — a new position, before it's been triaged — falls
 // to "Other" rather than breaking the grouping.
 const sectorOf = d => d.cash ? 'Cash' : (SECTORS.get(d.identifier) || 'Other');
@@ -892,7 +892,7 @@ function renderClosed(over = null) {
 
         // what the shares did after the sale, read from your side — a rise since selling is a
         // loss to you, so the grade is inverted. Closed positions get it too, now that
-        // parqet_prices.csv supplies the price Parqet stopped publishing at the sale.
+        // data_series/_latest.csv supplies the price Parqet stopped publishing at the sale.
         if (!d.isTax && !d.isDiv && d.sinceKnown && d.grossProceeds > 0) {
           // absolute: did the price fall after the sale? benchmark: did selling and holding the
           // index beat holding on? Both are graded so that green means the sale was right.
@@ -1713,16 +1713,20 @@ function load(...texts) {
   show(VIEW);
 }
 
-Promise.all([
-  fetch(CONFIG_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch(CSV_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject(new Error(r.status))),
-  fetch(TRADES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch(NAMES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch(BENCH_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch(PRICES_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
-  fetch(SECTORS_PATH, { cache: 'no-store' }).then(r => r.ok ? r.text() : '').catch(() => ''),
-])
-  .then(texts => load(...texts))                       // same order as the paths above
+// Two rounds, because the benchmark's own file is not knowable until config.json (which names the
+// benchmark by ISIN) and the registry (which maps that ISIN to a file) are both in hand. Only the
+// positions CSV is required; every other text may come back empty and ingest() copes.
+const get = (path, required) => !path ? Promise.resolve('')
+  : fetch(path, { cache: 'no-store' })
+      .then(r => r.ok ? r.text() : (required ? Promise.reject(new Error(r.status)) : ''))
+      .catch(err => { if (required) throw err; return ''; });
+
+Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH)])
+  .then(([configText, instrumentsText]) => Promise.all([
+    configText, get(CSV_PATH, true), get(TRADES_PATH), instrumentsText,
+    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH),
+  ]))
+  .then(texts => load(...texts))                       // ingest()'s argument order
   .catch(err => {
     document.getElementById('loader').hidden = false;
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);

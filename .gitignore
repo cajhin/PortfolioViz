@@ -1,8 +1,19 @@
-# data files — regenerate via REFRESH_PARQET_DATA.md / update_data_series.py, never commit
+# Data, by lifecycle. All of it is gitignored — it carries real position values and holdings.
+#
+#   parqet/       IMPORTED — regenerate via REFRESH_PARQET_DATA.md
+#   data_series/  DERIVED  — regenerate via update_data_series.py
+#   fx/           DERIVED  — same
+#   registry/     CURATED  — NOT regenerable from anything. instruments.csv and price_sources.csv
+#                            are hand/agent-maintained; losing them means rebuilding by hand.
+#                            Back this one up somewhere, or commit it to a private remote.
 *.csv
+parqet/
+registry/
 data_series/
+fx/
 
 # check_portfolio.js records real position values and tooltips here — same data, same rule
 check_baseline.json
 
 .DS_Store
+__pycache__/
