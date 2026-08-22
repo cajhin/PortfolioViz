@@ -103,24 +103,25 @@ Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 
 ## 5. Update `registry/instruments.csv`
 
-One row per instrument, keyed by ISIN (cash gets a `CASH:<portfolio>` id, since it has none). It
-carries `display` (the short label the page prints), `slug` (which fixes the series filename, so
-renaming the label can never point the chart at the wrong file), `sector` (the map's grouping) and
-`type`. **After a refresh, add a row for any position it does not yet cover** — that is the one
-hand-maintenance step left, and it replaces the old `parqet_names.csv` and `parqet_sectors.csv`.
+One row per instrument, with an `id` (equal to its ISIN for a security; cash gets a
+`CASH:<portfolio>` id, since it has none). It carries `display` (the short label the page prints),
+`slug` (which fixes the series filename, so renaming the label can never point the chart at the
+wrong file), `sector` (the map's grouping) and `type`. **After a refresh, add a row for any
+position it does not yet cover** — that is the one hand-maintenance step left, and it replaces the
+old `parqet_names.csv` and `parqet_sectors.csv`.
 
 An instrument needs no matching Parqet holding. That is how the benchmark is charted, and how a
-watchlist name would be. `config.json` names the benchmark by ISIN (`benchmarkIsin`).
+watchlist name gets charted. `config.json` names the benchmark by ISIN (`benchmarkIsin`).
 
 ## 6. Refresh the price series
 
-Price series are driven by `registry/price_sources.csv` — one row per instrument per source,
-ordered by `priority` — and fetched by `update_prices.py`. Nothing about *how* to fetch an
-instrument lives in the fetched file, and there is no hand-maintained price file left to update.
+Price series are driven by `registry/price_sources.csv` — **one row per instrument**, keyed by its
+`id` — and fetched by `update_prices.py`. Nothing about *how* to fetch an instrument lives in the
+fetched file, and there is no hand-maintained price file left to update.
 
 ```bash
 python3 update_prices.py                  # every instrument in the registry
-python3 update_prices.py roche            # just this one (slug or ISIN)
+python3 update_prices.py roche            # just this one (slug or id)
 python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
 ```
 
@@ -136,12 +137,11 @@ the registry, with the untouched quote kept in `close_raw`. The browser does no 
 
 ### When a position has no series, or a bad one
 
-Add or amend a row in `registry/price_sources.csv`:
+Add or amend the one row for it in `registry/price_sources.csv`:
 
 | column | meaning |
 |---|---|
-| `isin` | the instrument, matching `registry/instruments.csv` |
-| `priority` | 1 is the truth; a higher number is consulted only for dates the lower one lacks |
+| `id` | the instrument, matching `registry/instruments.csv` |
 | `source` | `yahoo` today; `manual` for something unquotable (an expired warrant) |
 | `symbol` | the source's own ticker |
 | `quote_currency` | what that listing quotes in — `GBp` is pence, and is handled as such |
@@ -151,9 +151,18 @@ Resolve an unknown ISIN with `https://query1.finance.yahoo.com/v1/finance/search
 **check the match by name** — that search once returned iShares *S&P SmallCap 600* for the MSCI
 Japan Small Cap ISIN. Ask before fetching.
 
-A thin listing is worth a second row rather than a shrug: Roche's `RHO.DE` both gapped for five
-years and carried stale quotes, so `RO.SW` (CHF, liquid) is its priority 1 and `RHO.DE` the
-fallback. The chart marks any stretch it still cannot fill with a dashed line and a warning.
+There is no fallback row and no priority: **one instrument, one source.** A thin listing that needs
+backing by a liquid one is registered as a *second instrument* instead — its own row in
+`instruments.csv`, its own `id` and `slug`, its own row here — never a second row for the same
+`id`. SK Hynix's home listing (`000660.KS`, Seoul) replaced its old Frankfurt line entirely rather
+than sitting alongside it as a fallback, once it turned out 18% of the Frankfurt line's days had no
+real trade behind them.
+
+A gap the chosen source itself cannot fill — a stretch of trading days a thin listing genuinely has
+no quote for — is not this script's problem to solve. The chart handles it: any run of missing
+dates over ~20 calendar days draws as a dashed line, held flat at the last known price, with a
+warning naming the range. Worth a look before spending time hunting a better symbol; the gap may
+already be small enough that nobody would notice it unlabelled.
 
 ## 7. Check before you call it done
 

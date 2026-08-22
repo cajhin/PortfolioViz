@@ -23,13 +23,16 @@ The three data directories differ by **lifecycle**, and that is the distinction 
 and must never be clobbered by an import, and `prices/` + `fx/` are reproducible from
 `registry/price_sources.csv` alone.
 
-`registry/instruments.csv` is keyed by ISIN (cash, which has none, gets a `CASH:<portfolio>` id)
-and is the single answer to "what exists and what is it called". `registry/price_sources.csv` is
-the single answer to "where do this instrument's prices come from" — one row per source, ordered
-by `priority`, so a thin listing can be backed by a liquid one. Prices are converted to the
-portfolio currency **on write**, with the original kept in `close_raw`; nothing in the browser
-does FX. An instrument may be listed with no matching Parqet holding — that is how a benchmark or
-a future watchlist name gets charted.
+`registry/instruments.csv` gives every instrument an `id` (equal to its ISIN for a security; cash,
+which has none, gets `CASH:<portfolio>`) and is the single answer to "what exists and what is it
+called". `registry/price_sources.csv` is the single answer to "where do this instrument's prices
+come from" — keyed by that same `id`, **one row per instrument**, no fallback or priority. A thin
+listing that needs a second source is registered as a second instrument instead (`instruments.csv`
+gets its own row, its own `id`, its own slug — e.g. a `hynix-frankfurt` alongside `hynix`), so
+`price_sources.csv` never has to choose between two rows for one thing. Prices are converted to the
+portfolio currency **on write**, with the original kept in `close_raw`; nothing in the browser does
+FX. An instrument may be listed with no matching Parqet holding — that is how a benchmark or a
+watchlist name gets charted.
 
 `config.json` is committed, not generated — an agent edits it directly to change the as-of
 picker's earliest date, the portfolio currency, or which ISIN is the benchmark. `ingest()` reads it

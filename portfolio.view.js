@@ -303,8 +303,7 @@ function legendPie() {
 // Where a position's prices actually come from, compact enough for a table cell: the provider's
 // initial and its own symbol, e.g. "Y-HY9H.F". The exchange suffix is kept — two listings of one
 // instrument differ only by it (XNAS.DE vs IE00BMFKG444.SG), and that is exactly what this column
-// exists to disambiguate. Only the priority-1 source is shown; a fallback is not where a price
-// normally comes from. Cash, and anything with no quotable source, gets a dash.
+// exists to disambiguate. Cash, and anything with no quotable source, gets a dash.
 const SOURCE_LETTER = { yahoo: 'Y', manual: 'M' };
 function sourceTag(d) {
   const s = SOURCES.get(d.identifier);

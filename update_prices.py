@@ -2,26 +2,26 @@
 """Fetch daily price history into prices/, driven by registry/price_sources.csv.
 
 Nothing about *how* to fetch an instrument lives in the fetched file any more — the registry is
-the single place that maps an ISIN to a source, a symbol and a quote currency, so you can answer
-"what am I tracking, and from where?" by reading one table instead of opening every series.
+the single place that maps an instrument to a source, a symbol and a quote currency, so you can
+answer "what am I tracking, and from where?" by reading one table instead of opening every series.
 
     python3 update_prices.py                       # update every instrument in the registry
-    python3 update_prices.py roche                 # just this one (slug or ISIN)
+    python3 update_prices.py roche                 # just this one (slug or id)
     python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
 
-One instrument may list several sources, ordered by `priority`. Priority 1 is the truth; a lower
-one is only ever consulted for dates the higher one does not have. That is what makes a thin
-listing usable — Roche's RHO.DE has a five-year hole that RO.SW fills — and it is why every row
-records the symbol it came from, so a filled stretch stays visible as such.
+One row per instrument, keyed by its registry `id` — not by ISIN, since a synthetic instrument
+(a benchmark, a second listing kept as its own row for a thin ISIN) may not have one. If a listing
+needs a second source, register it as a second instrument (see registry/instruments.csv) rather
+than adding a fallback row here; nothing here picks between two sources for one instrument.
 
 Prices are converted to the portfolio currency on write, through the `fx_symbol` the registry
 names, and the untouched quote is kept alongside in `close_raw`. Converting here rather than in
 the browser keeps the page's arithmetic single-currency, and keeping the raw means a bad FX day
 can be recomputed rather than re-fetched.
 
-Written per instrument:  prices/<isin>-<slug>.csv   date,close,close_raw,quote_currency,source
-Written once per run:    prices/_latest.csv         isin,date,close,source
-FX series are cached in  fx/<PAIR>.csv                   date,rate
+Written per instrument:  prices/<id>-<slug>.csv   date,close,close_raw,quote_currency,source
+Written once per run:    prices/_latest.csv       id,date,close,source
+FX series are cached in  fx/<PAIR>.csv            date,rate
 """
 import csv, io, json, os, subprocess, sys, time
 from datetime import datetime, timezone
@@ -98,8 +98,8 @@ def drop_placeholder_lead(rows, symbol=""):
     """Discard the run of quotes Yahoo carries forward before a listing actually starts trading.
 
     A dormant listing does not return nothing — it returns its last known quote, every day, on
-    zero volume. SK Hynix's Frankfurt line (HY9H.F) reported an identical 17.60 for 509 straight
-    trading days before real trading began in January 2021, which is not 509 observations.
+    zero volume. SK Hynix's old Frankfurt line (HY9H.F) reported an identical 17.60 for 509
+    straight trading days before real trading began in January 2021, which is not 509 observations.
 
     Both halves of the test carry weight. Zero volume alone would throw away every FX series,
     since Yahoo reports no volume for those at all — but a rate moves every day, so its run is one
@@ -167,53 +167,45 @@ def to_portfolio_ccy(close, quote_ccy, rates, date):
     return round(close / rate, 6)
 
 
-def update_one(inst, srcs, backfill=None):
-    isin, slug = inst["id"], inst["slug"]
-    path = os.path.join(DIR, f"{isin}-{slug}.csv" if slug else f"{isin}.csv")
+def update_one(inst, src, backfill=None):
+    iid, slug = inst["id"], inst["slug"]
+    path = os.path.join(DIR, f"{iid}-{slug}.csv" if slug else f"{iid}.csv")
     rows = read_series(path)
-    have_from = {}                                   # symbol -> latest date already stored for it
-    for d, r in rows.items():
-        s = r.get("source", "")
-        have_from[s] = max(have_from.get(s, ""), d)
-    base = portfolio_currency()
-    added = filled = 0
 
-    for src in sorted(srcs, key=lambda s: int(s["priority"])):
-        symbol, ccy = src["symbol"].strip(), (src["quote_currency"] or base).strip()
-        if src["source"] != "yahoo" or not symbol:
-            continue                                 # manual (or unquotable) — leave its rows be
-        first = int(src["priority"]) == 1
-        # the primary only needs its tail; a fallback exists to fill holes, so it reads the whole
-        # span the first time and only its tail once we already hold rows from it
-        start = backfill or have_from.get(symbol) or (timeline_start() if not first
-                                                      else FALLBACK_START)
-        if backfill and have_from.get(symbol) and backfill > have_from[symbol]:
-            start = have_from[symbol]
-        try:
-            fresh = fetch(symbol, as_stamp(start))
-        except LookupError as err:
-            print(f"  {isin} [{symbol}]: {err}")
+    symbol, ccy = src["symbol"].strip(), (src["quote_currency"] or portfolio_currency()).strip()
+    if src["source"] != "yahoo" or not symbol:
+        # manual (or unquotable, e.g. an expired warrant) — nothing to fetch, keep what's on disk
+        if not rows:
+            print(f"  {iid} [{slug}]: nothing stored")
+            return None
+        last = rows[max(rows)]
+        return {"id": iid, "date": last["date"], "close": last["close"],
+               "source": last.get("source", "")}
+
+    have_from = max(rows) if rows else None
+    # a --from later than what is already stored is not a real backfill request — keep updating
+    # the tail instead of jumping the start date forward and silently truncating older history
+    start = have_from if (backfill and have_from and backfill > have_from) \
+        else backfill or have_from or FALLBACK_START
+    try:
+        fresh = fetch(symbol, as_stamp(start))
+    except LookupError as err:
+        print(f"  {iid} [{symbol}]: {err}")
+        fresh = {}
+
+    rates = fx_series(src["fx_symbol"], timeline_start()) if src["fx_symbol"] else None
+    added = 0
+    for date, raw in fresh.items():
+        close = raw if ccy == portfolio_currency() else to_portfolio_ccy(raw, ccy, rates, date)
+        if close is None:
             continue
-        rates = fx_series(src["fx_symbol"], timeline_start()) if src["fx_symbol"] else None
-        for date, raw in fresh.items():
-            close = raw if ccy == base else to_portfolio_ccy(raw, ccy, rates, date)
-            if close is None:
-                continue
-            prior = rows.get(date)
-            if prior and prior.get("source") not in (None, "", symbol):
-                # a higher-priority symbol already answered for this day; never overwrite it
-                if prior["source"] in [s["symbol"] for s in srcs
-                                       if int(s["priority"]) < int(src["priority"])]:
-                    continue
-            if not prior:
-                added += 1
-                if not first:
-                    filled += 1
-            rows[date] = {"date": date, "close": close, "close_raw": raw,
-                          "quote_currency": ccy, "source": symbol}
+        if date not in rows:
+            added += 1
+        rows[date] = {"date": date, "close": close, "close_raw": raw,
+                      "quote_currency": ccy, "source": symbol}
 
     if not rows:
-        print(f"  {isin} [{slug}]: nothing stored")
+        print(f"  {iid} [{slug}]: nothing stored")
         return None
     os.makedirs(DIR, exist_ok=True)
     with open(path, "w", newline="") as fh:
@@ -224,19 +216,18 @@ def update_one(inst, srcs, backfill=None):
             w.writerow({k: r.get(k, "") for k in
                         ["date", "close", "close_raw", "quote_currency", "source"]})
     span = f"{min(rows)} → {max(rows)}"
-    note = f", {filled} filled from a fallback" if filled else ""
-    print(f"  {isin} [{slug}]: {len(rows)} rows, {span} (+{added} new{note})")
+    print(f"  {iid} [{slug}]: {len(rows)} rows, {span} (+{added} new)")
     last = rows[max(rows)]
-    return {"isin": isin, "date": last["date"], "close": last["close"], "source": last["source"]}
+    return {"id": iid, "date": last["date"], "close": last["close"], "source": last["source"]}
 
 
 def write_latest(latest):
     """The freshest close per instrument — what the page reads instead of a hand-kept price file."""
     path = os.path.join(DIR, "_latest.csv")
     with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["isin", "date", "close", "source"])
+        w = csv.DictWriter(fh, fieldnames=["id", "date", "close", "source"])
         w.writeheader()
-        w.writerows(sorted(latest, key=lambda r: r["isin"]))
+        w.writerows(sorted(latest, key=lambda r: r["id"]))
     print(f"{path}: {len(latest)} instruments")
 
 
@@ -248,12 +239,15 @@ def main():
         backfill = args[i + 1]
         del args[i:i + 2]
     if len(args) > 1:
-        sys.exit(f"usage: {sys.argv[0]} [<slug|isin>] [--from YYYY-MM-DD]")
+        sys.exit(f"usage: {sys.argv[0]} [<slug|id>] [--from YYYY-MM-DD]")
 
     instruments = {r["id"]: r for r in read_registry("instruments.csv")}
     sources = {}
     for s in read_registry("price_sources.csv"):
-        sources.setdefault(s["isin"], []).append(s)
+        if s["id"] in sources:
+            sys.exit(f"registry/price_sources.csv: duplicate row for {s['id']!r} — "
+                     f"one row per instrument now; register a second instrument instead")
+        sources[s["id"]] = s
 
     wanted = list(instruments.values())
     if args:
@@ -264,10 +258,10 @@ def main():
 
     latest = []
     for inst in wanted:
-        srcs = sources.get(inst["id"])
-        if not srcs:
+        src = sources.get(inst["id"])
+        if not src:
             continue                                 # cash, or anything with nothing to fetch
-        row = update_one(inst, srcs, backfill)
+        row = update_one(inst, src, backfill)
         if row:
             latest.append(row)
     if not args and latest:

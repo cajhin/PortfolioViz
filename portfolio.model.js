@@ -66,7 +66,7 @@ const LATEST_PATH = 'prices/_latest.csv';
    reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
     INSTRUMENTS = new Map(),      // registry rows, keyed by ISIN (and by name, for cash)
-    SOURCES = new Map(),          // ISIN → its priority-1 price source, for the Source column
+    SOURCES = new Map(),          // instrument id → its price source row, for the Source column
     BENCH = [], CCY = 'EUR',
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
     VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
@@ -823,20 +823,16 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
   });
   if (benchIsin && INSTRUMENTS.has(benchIsin)) BENCH_LABEL = INSTRUMENTS.get(benchIsin).display;
 
-  // only the priority-1 row per instrument: the table shows where a price actually comes from,
-  // and a fallback is by definition not where it normally comes from
-  SOURCES = new Map();
-  (sourcesText ? parseCSV(sourcesText) : []).forEach(r => {
-    if (!r.isin) return;
-    const prev = SOURCES.get(r.isin);
-    if (!prev || num(r.priority) < num(prev.priority)) SOURCES.set(r.isin, r);
-  });
+  // one row per instrument now — no priority to pick among, so this is a straight load
+  SOURCES = new Map((sourcesText ? parseCSV(sourcesText) : [])
+    .filter(r => r.id)
+    .map(r => [r.id, r]));
 
   // the last close update_prices.py stored per instrument — same shape the hand-kept
   // parqet_prices.csv used to supply, now a by-product of the fetch instead of a chore
   PRICES = new Map((latestText ? parseCSV(latestText) : [])
-    .filter(r => r.isin && r.close !== '' && r.date)
-    .map(r => [r.isin, { price: num(r.close), asof: r.date, symbol: r.source }]));
+    .filter(r => r.id && r.close !== '' && r.date)
+    .map(r => [r.id, { price: num(r.close), asof: r.date, symbol: r.source }]));
   BENCH = (benchText ? parseCSV(splitMeta(benchText).body) : [])
     .map(r => ({ date: r.date, close: num(r.close) }))
     .filter(r => r.date && r.close > 0)
