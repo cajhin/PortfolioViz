@@ -42,8 +42,7 @@ US5951121038,1,yahoo,MU,USD,EURUSD=X,
 US67066G1040,1,yahoo,NVDA,USD,EURUSD=X,
 US67079K1007,1,yahoo,SMR,USD,EURUSD=X,
 US74743L1008,1,yahoo,Q,USD,EURUSD=X,
-US78392B1070,1,yahoo,000660.KS,KRW,EURKRW=X,Seoul home listing — liquid; 1% zero-volume days vs HY9H.F's 18%
-US78392B1070,2,yahoo,HY9H.F,EUR,,thin Frankfurt cross-listing — fallback for days Seoul is shut
+US78392B1070,1,yahoo,000660.KS,KRW,EURKRW=X,Seoul home listing — the only source; the Frankfurt line was too thin to mix in
 US78392B2060,1,yahoo,SKHY,USD,EURUSD=X,
 US81730H1095,1,yahoo,S,USD,EURUSD=X,
 US86800U3023,1,yahoo,SMCI,USD,EURUSD=X,
