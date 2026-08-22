@@ -962,8 +962,11 @@ function attachTipClosed(rows, ctx = null) {
   const taxSplit = ctx ? ctx.taxSplit : TAX_SPLIT;
   const tip = document.getElementById('tip');
   const wrapEl = document.getElementById('closed').closest('.chartwrap');
+  // dividends/taxes are synthetic rows (all portfolios, no single position behind them) — every
+  // other row here is a real position, open or closed, and opens the same chart a map tile does
+  const clickable = d => !d.isDiv && !d.isTax;
   rows.forEach(d => d.nodes.forEach(n => {
-    n.style.cursor = 'default';
+    n.style.cursor = clickable(d) ? 'pointer' : 'default';
     n.addEventListener('pointerenter', e => {
       if (d.isDiv) {
         const byName = new Map();
