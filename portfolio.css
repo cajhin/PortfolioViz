@@ -171,9 +171,13 @@
              text-transform: uppercase; letter-spacing: 0.08em; }
   .mapgrp { font-size: 9px; fill: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
   svg { display: block; width: 100%; height: auto; }
-  .dtvalue { max-height: 200px; margin-top: 8px; }   /* the dialog's own width cap already keeps
-                                                         this near 200px; the rule is the actual
-                                                         guarantee, not an incidental one */
+  .dtvalue { margin-top: 8px; }   /* no max-height: this svg's own viewBox (840x200, same 840
+                                      width the price chart above it uses) already gives it the
+                                      right height:auto through the width:100% rule above — a
+                                      pixel cap here would letterbox it at a *different* scale
+                                      than the price chart the moment the dialog isn't exactly
+                                      the width the cap was calibrated for, throwing the two
+                                      charts' x axes out of alignment */
   .lbl { font-size: 8.4px; fill: var(--text-primary); font-variant-numeric: tabular-nums; }
   .lbl-sub { font-size: 11px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .leader { stroke: var(--border); stroke-width: 1; fill: none; }
@@ -224,16 +228,24 @@
   .detail {
     border: 1px solid var(--border); border-radius: 14px; padding: 0;
     background: var(--surface-1); color: var(--text-primary);
-    width: min(880px, calc(100vw - 32px)); max-width: none;
+    width: min(1144px, calc(100vw - 32px)); max-width: none;   /* 880px * 1.3 — the chart svg is
+    width:100%/height:auto off its own viewBox, so growing the dialog's width alone already
+    grows the chart the same ~30% in height too, in lockstep, without touching its geometry */
   }
   .detail::backdrop { background: rgba(0, 0, 0, .45); }
   .detail header { display: flex; align-items: flex-start; justify-content: space-between;
                    gap: 16px; padding: 16px 18px 10px; }
   .detail .dt-title { font-weight: 600; font-size: 1.05rem; }
+  /* both lines vary in length as the cursor moves across the chart (the hovered day's date gets
+     appended, "no data — held flat" comes and goes, the comparison figures change digit count) —
+     line-height and min-height are both spelled out in plain em here, not calc(), so a second
+     line is always reserved up front and hovering on and off never reflows the range buttons and
+     chart underneath */
   .detail .dt-sub { color: var(--text-secondary); font-size: 0.84rem; margin-top: 2px;
-                    font-variant-numeric: tabular-nums; }
+                    font-variant-numeric: tabular-nums; line-height: 1.3em; min-height: 2.6em; }
   .detail .dt-vals { color: var(--text-primary); font-size: 0.84rem; font-weight: 600;
-                     margin-top: 2px; font-variant-numeric: tabular-nums; }
+                     margin-top: 2px; font-variant-numeric: tabular-nums; line-height: 1.3em;
+                     min-height: 2.6em; }
   .detail .dt-warn { color: var(--income); font-size: 0.78rem; margin-top: 3px; }
   .detail button { appearance: none; border: 0; background: transparent; cursor: pointer;
                    color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px; }

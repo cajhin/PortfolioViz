@@ -1177,6 +1177,7 @@ function openStockPicker(anchorEl, { resetLabel, showHide, currentIdentifier } =
 const RANGE_FROM = {
   all: (d, series) => series.rows[0].date,
   '5y': () => shiftYears(-5),
+  '3y': () => shiftYears(-3),
   '1y': () => shiftYears(-1),
   ytd: () => new Date().getFullYear() + '-01-01',
   buy: d => d.firstActivity || '',
