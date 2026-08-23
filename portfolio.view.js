@@ -1164,6 +1164,7 @@ function openStockPicker(anchorEl, { resetLabel, showHide, currentIdentifier } =
   const rows = [];
   if (resetLabel) rows.push(row('__reset', `${resetLabel} (reset)`, false));
   if (showHide) rows.push(row('__hide', '[hide this]', false));
+  rows.push(row(PORTFOLIO_ID, '[Portfolio]', currentIdentifier === PORTFOLIO_ID));
   candidates.forEach(c => rows.push(row(c.identifier, c.label, currentIdentifier === c.identifier)));
   menu.replaceChildren(...rows);
   body.appendChild(menu);
@@ -1195,6 +1196,10 @@ function shiftYears(n) {
 // stays on the fast in-memory BENCH/BENCH_LABEL path (no fetch, and it tracks a mid-session config
 // change); anything picked by hand carries its own fetched series instead.
 const EXTRA_COLOURS = ['var(--flat)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
+
+// the sentinel identifier for "the whole portfolio" as a comparison line — distinct from any real
+// instrument's identifier (an ISIN or a CASH: id), so it can never collide with one
+const PORTFOLIO_ID = '__portfolio';
 
 function drawDetail(d, series, alignDate, range, custom, extras) {
   const W = 840, H = 300, T = 12, B = 22;
@@ -1269,26 +1274,30 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
 
   secondaries.forEach(s => {
     const anchorRow = at(s.secRows, anchor);
-    if (anchorRow) {
-      // has real data back to the global tie point — read it against that, exactly like every
-      // other line, so they all cross at 0% there by construction
+    // a positive close, not just any row — the portfolio-total line (secRows can legitimately be
+    // 0 before the first position was ever bought) divides by zero exactly like a missing row
+    // would, so both need the same fallback below
+    if (anchorRow && anchorRow.close > 0) {
+      // has real, usable data back to the global tie point — read it against that, exactly like
+      // every other line, so they all cross at 0% there by construction
       s.vals = dates.map(dt => {
         const r = at(s.secRows, dt);
         return r ? (r.close / anchorRow.close - 1) * 100 : null;
       });
     } else {
-      // it didn't exist yet at the tie point (an IPO, or just a later start than the chart's
-      // range) — there's nothing there to compare it against, so instead of resetting it to a
-      // false 0% on its first day, pick it up wherever the primary stock's own line already is
-      // that day: "what if this had been bought instead, right when it became available" is the
-      // fair comparison, and understates nothing the way a fresh 0% start would
-      const first = s.secRows[0];
+      // it didn't exist yet at the tie point (an IPO, a later start than the chart's range, or —
+      // for the portfolio total — before the first position was bought at all) — there's nothing
+      // usable there to compare it against, so instead of resetting it to a false 0% on its first
+      // day, pick it up wherever the primary stock's own line already is that day: "what if this
+      // had been bought instead, right when it became available" is the fair comparison, and
+      // understates nothing the way a fresh 0% start would
+      const first = s.secRows.find(r => r.close > 0);
       const startI = first && xOf(first.date);
       const startFrac = (startI != null) ? stockVals[startI] / 100 : 0;
       s.vals = dates.map((dt, i) => {
         if (!first || dt < first.date) return null;
         const r = at(s.secRows, dt);
-        if (!r) return null;
+        if (!r || !(r.close > 0)) return null;
         return ((1 + startFrac) * (r.close / first.close) - 1) * 100;
       });
     }
@@ -1567,6 +1576,12 @@ function renderDetail() {
       }, async val => {
         if (val === '__hide') { extras.splice(s.entryIndex, 1); renderDetail(); return; }
         if (val === '__reset') { extras[s.entryIndex] = { isDefaultBench: true }; renderDetail(); return; }
+        if (val === PORTFOLIO_ID) {
+          extras[s.entryIndex] = { label: 'Portfolio', identifier: PORTFOLIO_ID,
+                                   series: await portfolioSeries(), isBenchSlot };
+          renderDetail();
+          return;
+        }
         const cand = benchmarkCandidates().find(c => c.identifier === val);
         const ser = await loadSeries(seriesSlug(cand));
         if (!ser) { vals.textContent = `${defaultVals} — no price history for ${cand.label}`; return; }
@@ -1738,6 +1753,11 @@ const addCompareBtn = document.getElementById('dtAddCompare');
 addCompareBtn.addEventListener('click', () => {
   if (!DETAIL) return;
   openStockPicker(addCompareBtn, {}, async val => {
+    if (val === PORTFOLIO_ID) {
+      DETAIL.extras.push({ label: 'Portfolio', identifier: PORTFOLIO_ID, series: await portfolioSeries() });
+      renderDetail();
+      return;
+    }
     const cand = benchmarkCandidates().find(c => c.identifier === val);
     if (!cand) return;
     const ser = await loadSeries(seriesSlug(cand));

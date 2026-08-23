@@ -444,6 +444,86 @@ function valueOverTime(d, series, displayRows) {
   });
 }
 
+// The whole portfolio as one series, day by day — every open or closed non-cash position's lots
+// replayed at each date, priced from that position's own prices file and anchored to Parqet's own
+// latest price the same way valueOverTime is. The calendar is the union of every held position's
+// trading days, so a date only one position actually traded on still lands correctly.
+//
+// Two figures per row, because they answer different questions:
+//   value — what the holdings were worth that day, in portfolio currency
+//   close — a time-weighted return index, 100 on the first day anything was held
+//
+// `close` is the one that makes this comparable to a stock's own chart, and it is deliberately
+// NOT the summed value: paying €100 into a savings plan lifts the value by €100, so charting that
+// would read every contribution as a gain. The index instead asks only "what did yesterday's
+// holdings do today":
+//
+//     r(t) = Σᵢ Sᵢ(t−1)·Pᵢ(t) / Σᵢ Sᵢ(t−1)·Pᵢ(t−1) − 1,     I(t) = I(t−1)·(1 + r(t))
+//
+// which is the standard chain-linked time-weighted return, written so that today's trades never
+// enter the arithmetic at all — only *yesterday's* share counts appear, so a buy, a sell or a
+// deposit is structurally incapable of moving it. Hold nothing but one instrument and this traces
+// that instrument's own chart exactly, whatever the contributions were, which is the point.
+//
+// Price return: dividends are deliberately excluded. prices/ carries Yahoo's raw close, so every
+// other line on the detail chart is a price return too — adding payouts back on this line alone
+// would lift it above the rest by roughly the dividend yield, for a reason that is not performance.
+//
+// Named "close" rather than "index" so the row is shaped like any price series ({rows: [{date,
+// close}]}) and can stand in for a real instrument's wherever one is expected. Computed once and
+// cached module-wide: the FIFO replay is O(positions × dates), cheap once, wasteful to repeat on
+// every range switch. Nothing it reads varies with MODE or the as-of pick, so there is no key.
+let PORTFOLIO_SERIES_CACHE = null;
+async function portfolioSeries() {
+  if (PORTFOLIO_SERIES_CACHE) return PORTFOLIO_SERIES_CACHE;
+  const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
+  const items = (await Promise.all(source.map(async d => {
+    const series = await loadSeries(seriesSlug(d));
+    if (!series || !series.rows.length) return null;
+    const anchorClose = seriesCloseAt(series.rows, d.lastPriceDate) ||
+      series.rows[series.rows.length - 1].close;
+    const factor = (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
+    return { deals: splitAdjustedDeals(d), series, factor };
+  }))).filter(Boolean);
+
+  const dateSet = new Set();
+  items.forEach(({ series }) => series.rows.forEach(r => dateSet.add(r.date)));
+  const dates = [...dateSet].sort();
+
+  const rows = [];
+  let prev = null, index = 100;
+  for (const date of dates) {
+    const held = items.map(({ deals, series, factor }) => {
+      const px = seriesCloseAt(series.rows, date);
+      return { shares: lotShares(survivingLots(deals, { until: date })),
+               px: px == null ? null : px * factor };
+    });
+    const value = held.reduce((t, h) => t + (h.px == null ? 0 : h.shares * h.px), 0);
+
+    if (prev) {
+      // both sums are over *yesterday's* holdings, so a position first bought today contributes
+      // to neither and its first day of return is tomorrow — the end-of-day flow convention. A
+      // position priced on only one of the two days is skipped from both, keeping the ratio
+      // consistent rather than comparing a partial basket against a whole one.
+      let then = 0, now = 0;
+      prev.forEach((p, i) => {
+        if (p.shares <= 1e-9 || p.px == null || held[i].px == null) return;
+        then += p.shares * p.px;
+        now += p.shares * held[i].px;
+      });
+      if (then > 0) index *= now / then;
+    }
+    prev = held;
+    // nothing held yet: no return to record and no value to plot. Once the first position is
+    // bought the series runs unbroken, holding the index flat across any later stretch the
+    // portfolio happens to be empty rather than restarting it.
+    if (rows.length || value > 0) rows.push({ date, close: index, value });
+  }
+
+  PORTFOLIO_SERIES_CACHE = { rows };
+  return PORTFOLIO_SERIES_CACHE;
+}
+
 // The realised side of the same as-of pick: every sell (and its dividends/taxes) booked on or
 // before dateStr, split into "open" (some shares still held on that date) and "closed" (fully
 // sold by then) so renderClosed can draw the same open|closed bar it draws for today, just
