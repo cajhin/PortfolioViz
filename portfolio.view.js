@@ -1461,7 +1461,8 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // one column per date, coloured through the same red/green ramp the map's tiles use — same x
   // positions as the line chart above it (L/R/x carry over unchanged) so the two stay aligned
   // when the range buttons change which days are in view.
-  const VALH = 200;
+  const VALH = 100;   // half of the price chart's own height — the viewBox's aspect ratio, not a
+                       // CSS cap, is what keeps this in horizontal sync with it (see .dtvalue)
   const vals = valueOverTime(d, series, rows);
   const ath = Math.max(0, ...vals.map(v => v.cur));
   const barW = (W - L - R) / Math.max(1, dates.length - 1);

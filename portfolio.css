@@ -171,13 +171,13 @@
              text-transform: uppercase; letter-spacing: 0.08em; }
   .mapgrp { font-size: 9px; fill: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; }
   svg { display: block; width: 100%; height: auto; }
-  .dtvalue { margin-top: 8px; }   /* no max-height: this svg's own viewBox (840x200, same 840
-                                      width the price chart above it uses) already gives it the
-                                      right height:auto through the width:100% rule above — a
-                                      pixel cap here would letterbox it at a *different* scale
-                                      than the price chart the moment the dialog isn't exactly
-                                      the width the cap was calibrated for, throwing the two
-                                      charts' x axes out of alignment */
+  .dtvalue { margin-top: 8px; }   /* no max-height: this svg's own viewBox (840x100, same 840
+                                      width the price chart above it uses, half its height) already
+                                      gives it the right height:auto through the width:100% rule
+                                      above — a pixel cap here would letterbox it at a *different*
+                                      scale than the price chart the moment the dialog isn't
+                                      exactly the width the cap was calibrated for, throwing the
+                                      two charts' x axes out of alignment */
   .lbl { font-size: 8.4px; fill: var(--text-primary); font-variant-numeric: tabular-nums; }
   .lbl-sub { font-size: 11px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .leader { stroke: var(--border); stroke-width: 1; fill: none; }
