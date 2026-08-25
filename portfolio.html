@@ -17,13 +17,18 @@
   </div>
 
   <div id="app" hidden>
+    <!-- reportError()'s own slot. #err below belongs to the file-picker fallback and lives inside
+         the hidden #loader, so a runtime failure written there would never be seen. -->
+    <div class="runtimeerr" id="runtimeErr" hidden></div>
     <div class="card" id="totalsCard">
       <div class="totals">
-        <div class="tile curtile" id="tileCur"><div class="k">Current value</div><div class="v" id="tCur">–</div></div>
+        <div class="tile curtile" id="tileCur"><div class="k" id="kCur">Current value</div><div class="v" id="tCur">–</div></div>
         <div class="tile"><div class="k" id="kPur">Invested (ex cash)</div><div class="v" id="tPur">–</div></div>
         <div class="tile"><div class="k" id="kGain">Unrealised gain</div><div class="v" id="tGain">–</div></div>
-        <div class="tile"><div class="k">Realised pre-tax (incl. closed)</div><div class="v" id="tRel">–</div></div>
+        <div class="tile"><div class="k" id="kRel">Realised pre-tax (incl. closed)</div><div class="v" id="tRel">–</div></div>
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
+        <!-- not a tile: a footnote about the data itself, parked in the space the tiles leave -->
+        <span class="datastamp" id="dataStamp"></span>
       </div>
       <div class="tip" id="curTip"></div>
     </div>
@@ -31,22 +36,48 @@
     <div class="card chartwrap">
       <div class="chartbar">
         <div class="chartbar-left" id="asOfWrap">
-          <label class="asof">As of
-            <!-- min is the pre-load fallback for config.json's timelineStart; load() overwrites it once fetched -->
-            <input type="date" id="asOfDate" min="2019-01-01">
-          </label>
-          <div class="asof-step" id="asOfStep" tabindex="0"
-               title="Scrub the date: ← → a day · ↑ ↓ a month · PgUp/PgDn a year (back on ←/↑/PgUp, forward on →/↓/PgDn)">
-            <button type="button" id="asOfDayBack" aria-label="Previous day">◀</button>
-            <button type="button" id="asOfDayFwd" aria-label="Next day">▶</button>
+          <!-- Quick ranges. Each sets the start relative to whatever the end currently says, so
+               these are shorthand for the From field rather than a mode of their own — the field
+               stays the source of truth and lights whichever button matches what it holds. -->
+          <div class="seg compact" id="rangeSeg" role="group" aria-label="Quick range">
+            <button type="button" id="rngAll" class="on" aria-pressed="true">All</button>
+            <button type="button" id="rng5y" aria-pressed="false">5Y</button>
+            <button type="button" id="rng3y" aria-pressed="false">3Y</button>
+            <button type="button" id="rngY" aria-pressed="false">Y</button>
+            <button type="button" id="rngYtd" aria-pressed="false">YTD</button>
+            <button type="button" id="rng6m" aria-pressed="false">6M</button>
+            <button type="button" id="rng3m" aria-pressed="false">3M</button>
+            <button type="button" id="rngM" aria-pressed="false">M</button>
+            <button type="button" id="rngW" aria-pressed="false">W</button>
+            <button type="button" id="rngD" aria-pressed="false">D</button>
           </div>
-          <button type="button" id="asOfClear" class="asof-clear" title="Back to today" hidden>✕</button>
-          <span class="datastamp" id="dataStamp"></span>
+          <!-- Two ends of one range, and each shows a real date when it is at its default: From
+               sits at config.json's timelineStart, to at today. min/value here are the pre-load
+               fallbacks for that config value; syncAsOfControls() overwrites both once fetched. -->
+          <div class="asof-group">
+            <label class="asof">From
+              <input type="date" id="asFromDate" min="2019-01-01">
+            </label>
+          </div>
+          <div class="asof-group">
+            <label class="asof">to
+              <input type="date" id="asOfDate" min="2019-01-01">
+            </label>
+            <!-- title and aria-labels track the selected span; syncAsOfControls() rewrites them -->
+            <div class="asof-step" id="asOfStep" tabindex="0"
+                 title="Slide the whole range · ← → a day · ↑ ↓ a month · PgUp/PgDn a year">
+              <button type="button" id="asOfDayBack" aria-label="Previous day">◀</button>
+              <button type="button" id="asOfDayFwd" aria-label="Next day">▶</button>
+            </div>
+            <button type="button" id="asOfClear" class="asof-clear" title="Back to today" hidden>✕</button>
+          </div>
         </div>
         <div class="chartbar-right">
           <span id="showEuroSlot"></span>
-          <!-- text is the pre-load fallback for config.json's benchmarkLabel; load() overwrites it once fetched -->
-          <label class="modeswitch"><input type="checkbox" id="relMode"><span id="relModeLabel">Performance vs. MSCI World</span></label>
+          <!-- Fixed text, unlike the tiles and tooltips that name the benchmark from config.json's
+               benchmarkLabel: this is a compact switch, and it matches the short "vs. World" the
+               map and bar tooltips already use for the same comparison. -->
+          <label class="modeswitch"><input type="checkbox" id="relMode"><span id="relModeLabel">vs. World</span></label>
           <div class="seg" role="group" aria-label="Chart type">
             <button type="button" id="btnMap" class="on" aria-pressed="true">Map</button>
             <button type="button" id="btnPie" aria-pressed="false">Pie</button>
@@ -114,12 +145,19 @@
       <div class="dt-body" id="dtBody"></div>
       <footer class="dt-foot">
         <button type="button" id="dtAddCompare" class="dt-addsel" title="Compare against another stock">+ compare…</button>
-        <div class="seg" id="dtRange" role="group" aria-label="Timeframe">
+        <div class="seg compact" id="dtRange" role="group" aria-label="Timeframe">
+          <!-- same windows, same names as the map's range picker; data-range values are the
+               `key` of each entry in RANGE_PRESETS, which is what RANGE_FROM is built from -->
           <button type="button" data-range="all">All</button>
-          <button type="button" data-range="5y">5y</button>
-          <button type="button" data-range="3y">3y</button>
-          <button type="button" data-range="1y">1y</button>
+          <button type="button" data-range="5y">5Y</button>
+          <button type="button" data-range="3y">3Y</button>
+          <button type="button" data-range="1y">Y</button>
           <button type="button" data-range="ytd">YTD</button>
+          <button type="button" data-range="6m">6M</button>
+          <button type="button" data-range="3m">3M</button>
+          <button type="button" data-range="1m">M</button>
+          <button type="button" data-range="1w">W</button>
+          <button type="button" data-range="1d">D</button>
           <button type="button" data-range="buy" class="on">Since buy</button>
         </div>
       </footer>
@@ -151,7 +189,9 @@
       <table id="tblTrades">
         <thead><tr>
           <th>Date</th><th>Portfolio</th><th>Position</th><th>Type</th><th>Shares</th>
-          <th>Price</th><th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th>
+          <th>Price</th>
+          <th title="Where the price stands now against what this trade booked, on today's split scale. Green means the trade beat not making it: a buy whose price has risen, a sale whose price has fallen.">Now %</th>
+          <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th>
         </tr></thead>
         <tbody></tbody>
       </table>

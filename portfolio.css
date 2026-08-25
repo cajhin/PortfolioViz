@@ -114,11 +114,18 @@
   .curtile { cursor: help; }
   .curtile .k { text-decoration: underline dotted; text-underline-offset: 3px; }
 
-  .datastamp { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap; }
+  /* the odd one out in .totals: a note about the data, not a figure, so it sits on the tiles'
+     bottom line rather than aligning its own baseline with theirs, and never grows the row */
+  .datastamp { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap;
+               align-self: flex-end; padding-bottom: 4px; }
 
   .chartwrap { position: relative; overflow: visible; }
   .chartbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: -4px 0 4px; }
   .chartbar-left, .chartbar-right { display: flex; align-items: center; gap: 12px; }
+  .chartbar-left { flex-wrap: wrap; row-gap: 6px; }
+  /* one end of the range and the buttons that belong to it, held closer together than the gap
+     between the two ends — so "From …" and "As of …" read as two controls, not five */
+  .asof-group { display: flex; align-items: center; gap: 6px; }
   .asof { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--text-secondary); }
   .asof input[type="date"] {
     font: inherit; font-size: 0.82rem; color: var(--text-primary); background: var(--surface-1);
@@ -152,6 +159,9 @@
     padding: 5px 16px; line-height: 1.4;
   }
   .seg button + button { border-left: 1px solid var(--border); }
+  /* the quick-range group: one or three characters a button, so the roomy padding the view
+     switcher needs would make it three times wider than the dates it belongs to */
+  .seg.compact button { padding: 5px 7px; min-width: 26px; }
   .seg button.on { background: color-mix(in srgb, var(--text-primary) 8%, transparent); color: var(--text-primary); font-weight: 600; }
   .seg button:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
   /* --map-scale is set on #pie when the as-of map shrinks (area = value, throughout this page);
@@ -224,6 +234,21 @@
   .tip .pf { color: var(--text-muted); font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
   .tip .r { display: flex; justify-content: space-between; gap: 16px; color: var(--text-secondary); }
   .tip .r b { color: var(--text-primary); font-weight: 500; font-variant-numeric: tabular-nums; }
+  /* the price sparkline under the figures: the range picker's window, normalised to its first
+     close. Sized in the svg's own attributes rather than here, so the viewBox maps 1:1 to pixels
+     and the 1.4px stroke stays 1.4px whatever the tooltip's width does. */
+  .tip .sparkwrap { margin: 8px 0 -2px; padding-top: 7px; border-top: 1px solid var(--border); }
+  .tip .spark { display: block; }
+  .tip .spark path { fill: none; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+  .tip .spark.pos path { stroke: var(--series-2); }
+  .tip .spark.neg path { stroke: var(--loss); }
+  .tip .sparkzero { stroke: var(--border); stroke-width: 1; }
+  /* trades inside the window. The stroke is the tooltip's own background, so two dots landing
+     close together still read as two — the same trick the detail chart's .dtmark uses. */
+  .tip .sparkmark { stroke: var(--surface-1); stroke-width: 1.1; }
+  .tip .sparkmark.buy { fill: var(--realized); }
+  .tip .sparkmark.sell { fill: var(--loss); }
+  .tip .sparkmark.both { fill: var(--text-secondary); }
 
   .detail {
     border: 1px solid var(--border); border-radius: 14px; padding: 0;
@@ -266,7 +291,9 @@
   .dtqtick { stroke: var(--text-muted); stroke-width: 1; }   /* darker than .dtgrid — an actual
                                                                  tick mark, not a background line */
   .dtaxis { font-size: 9px; fill: var(--text-muted); font-variant-numeric: tabular-nums; }
-  .dtkey { font-size: 10px; font-weight: 600; }
+  /* the comparison-line labels down the right edge. Small on purpose: "[All]" puts every tracked
+     name on the chart at once, and at 10px they collided into one another long before that. */
+  .dtkey { font-size: 7px; font-weight: 600; }
   .dtanchor { stroke: var(--rim); stroke-width: 0.8; stroke-dasharray: 3 3; }
   .dtzero { stroke: var(--text-muted); stroke-width: 1; }
   .dtcrosshair { stroke: var(--text-secondary); stroke-width: 1; stroke-dasharray: 2 2;
@@ -298,6 +325,9 @@
   .dtpick-opt.on { font-weight: 600; }
   .maprect { cursor: pointer; }
 
+  /* shown only by reportError(), for anything thrown where nothing else would report it */
+  .runtimeerr { border: 1px solid var(--loss); border-radius: 10px; padding: 8px 12px;
+                margin-bottom: 14px; color: var(--loss); font-size: 0.82rem; }
   .loader { border: 1px dashed var(--border); border-radius: 12px; padding: 22px; text-align: center; color: var(--text-secondary); }
   .loader input { margin-top: 10px; }
   .err { color: var(--loss); }

@@ -44,9 +44,12 @@ const src = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('
 ;globalThis.__hooks = {
   items: () => ITEMS, closed: () => CLOSED, pf: () => PF,
   totals, computeAsOf, computeAsOfRealized, openDetail, detail: () => DETAIL,
-  renderPie, renderMap, renderClosed, renderMeta, renderTrades,
+  renderPie, renderMap, renderClosed, renderMeta, renderTrades, renderHeaderTotals,
   setMode: m => { MODE = m; applyMode(ITEMS); applyMode(CLOSED); },
-  setShowMoney: v => { SHOW_MONEY = v; },
+  setShowMoney: v => { SHOW_MONEY = v; TRADES_DRAWN_FOR = null; WATCH_DRAWN_FOR = null; },
+  // the range pick lives in three globals at once — the two dates and the view they only apply
+  // to — so it is set and cleared as one thing rather than three
+  setRange: (from, to) => { VIEW = to || from ? 'map' : VIEW; AS_FROM = from; AS_OF = to; },
   account: () => ({ divTotal: DIV_TOTAL, taxTotal: TAX_TOTAL, taxSplit: TAX_SPLIT,
                     trades: TRADES.length, bench: BENCH.length, names: NAMES.size,
                     sectors: SECTORS.size, indexed: TRADE_INDEX.size }),
@@ -103,6 +106,8 @@ const sandbox = {
   console, Intl, Math, JSON, Promise, Map, Set, Number, String, Array, Object, URLSearchParams,
   setTimeout, clearTimeout, Date: FixedDate,
   innerWidth: 1400, innerHeight: 900,
+  // window-level, for the page's uncaught-error reporter
+  addEventListener() {}, removeEventListener() {},
   location: { search: '' },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   document: {
@@ -112,6 +117,7 @@ const sandbox = {
     querySelector: tbody,
     querySelectorAll: () => [],
     addEventListener() {},
+    removeEventListener() {},          // the stock picker's close path tears its listener down
     documentElement: { dataset: {} },
     body: new El('body'),
   },
@@ -159,14 +165,24 @@ function hoverAll(rows, tag, out) {
       totals: h.totals(h.items()), closedTotals: h.totals(h.closed()),
       items: h.items().map(snap), closed: h.closed().map(snap),
     };
-    for (const day of ['2026-08-14', '2025-06-16', '2023-03-15', '2021-11-15']) {
-      const s = await h.computeAsOf(day), q = await h.computeAsOfRealized(day);
-      out[`${mode}/asOf ${day}`] = {
+    const reconstruct = async (from, day) => {
+      const s = await h.computeAsOf(day, from), q = await h.computeAsOfRealized(day, from);
+      return {
         n: s.items.length, total: r(s.asOfTotal), ratio: r(s.ratio), missing: [...s.missing].sort(),
         items: s.items.map(x => [x.label, r(x.cur), r(x.pur), r(x.ret), r(x.irr)]),
         open: q.open.length, closed: q.closed.length,
         realizedTotal: r(q.realizedTotal), divTotal: r(q.divTotal), taxTotal: r(q.taxTotal),
       };
+    };
+    for (const day of ['2026-08-14', '2025-06-16', '2023-03-15', '2021-11-15']) {
+      out[`${mode}/asOf ${day}`] = await reconstruct(null, day);
+    }
+    // the same reconstruction bounded at both ends: every basis figure re-based onto `from`, and
+    // only the sales booked inside the window counted as realised
+    const RANGES = [['2025-01-02', '2026-08-14'], ['2023-03-15', '2025-06-16'],
+                    ['2021-11-15', '2023-03-15']];
+    for (const [from, day] of RANGES) {
+      out[`${mode}/range ${from}..${day}`] = await reconstruct(from, day);
     }
     for (const money of [true, false]) {
       h.setShowMoney(money);
@@ -179,15 +195,47 @@ function hoverAll(rows, tag, out) {
       const curTip = byId('curTip'); curTip.innerHTML = '';
       byId('tileCur').fire('pointerenter');
       out[`${tag}/chrome`] = {
-        tiles: ['tCur', 'tPur', 'tGain', 'tRel', 'tN', 'kPur', 'kGain'].map(id => byId(id).textContent),
+        tiles: ['tCur', 'tPur', 'tGain', 'tRel', 'tN', 'kCur', 'kPur', 'kGain'].map(id => byId(id).textContent),
         closedNet: byId('closedNet').textContent,
         dataStamp: byId('dataStamp').textContent,
         byPortfolio: curTip.innerHTML,
         legendItems: byId('legend').children.length,
       };
       out[`${tag}/tips`] = tips;
+
+      // the trades table: its own render path, and the only place a trade is measured against
+      // today's price (Now %) rather than against a position's cost
+      h.renderTrades();
+      const trRows = tbody('#tblTrades tbody').children;
+      out[`${tag}/trades`] = {
+        n: trRows.length,
+        head: byId('tradesHead').textContent,
+        first: trRows.slice(0, 12).map(tr => tr.innerHTML),
+      };
     }
     h.setShowMoney(true);
+
+    // the chrome a range pick rewrites: the tile keys and the tooltip rows that say what a basis
+    // figure is measured from, plus the note under the map that spells the window out
+    {
+      const [from, day] = RANGES[0];
+      h.setRange(from, day);
+      const s = await h.computeAsOf(day, from), q = await h.computeAsOfRealized(day, from);
+      const tips = {};
+      h.renderMap(s.items, { ...s, date: day });
+      hoverAll(s.items, 'map', tips);
+      h.renderHeaderTotals(s.items, [], { realizedTotal: q.realizedTotal });
+      h.renderClosed({ open: q.open, closed: q.closed, divTotal: q.divTotal,
+                       divRows: q.divRows, taxTotal: q.taxTotal, taxSplit: q.taxSplit });
+      out[`${mode}/range chrome`] = {
+        tiles: ['tCur', 'tPur', 'tGain', 'tRel', 'tN', 'kCur', 'kPur', 'kGain', 'kRel'].map(id => byId(id).textContent),
+        note: byId('asOfNote').innerHTML,
+        closedNet: byId('closedNet').textContent,
+        dataStamp: byId('dataStamp').textContent,
+        tips,
+      };
+      h.setRange(null, null);
+    }
 
     // the modal price chart: its own code path, and the only one that reads a position's
     // prices file for drawing rather than for the as-of replay
@@ -206,6 +254,40 @@ function hoverAll(rows, tag, out) {
       };
     }
     out[`${mode}/detail`] = detail;
+
+    // the detail chart's timeframe buttons, driven through the real click handler — they share
+    // RANGE_PRESETS with the map's range picker, so a button added there must land here too
+    {
+      const d0 = h.items()[0];
+      await h.openDetail(d0);
+      const spans = {};
+      for (const range of ['all', '5y', '3y', '1y', 'ytd', '6m', '3m', '1m', '1w', '1d', 'buy']) {
+        byId('dtRange').fire('click', { target: { closest: () => ({ dataset: { range } }) } });
+        await new Promise(res => setTimeout(res, 30));
+        const svg = byId('dtBody').children.find(c => c.tagName === 'SVG');
+        spans[range] = svg ? svg.getAttribute('aria-label').replace(/^.*?, /, '') : 'not drawn';
+      }
+      out[`${mode}/detail ranges`] = { position: d0.label, spans };
+    }
+
+    // "[All]" in the + compare picker: driven through the real control, since the whole point of
+    // it is the click path — open the picker, find the row, click it, and see what the chart is
+    // left holding. The aria-label names every line, so it is the record of what got drawn.
+    {
+      await h.openDetail(h.items()[0]);
+      byId('dtAddCompare').fire('click');
+      const menu = byId('dtBody').children.find(c => c.className === 'dtpick');
+      const allRow = menu && menu.children.find(r => r.textContent === '[All]');
+      if (allRow) allRow.fire('click');
+      await new Promise(res => setTimeout(res, 400));      // the onPick handler is async
+      const svg = byId('dtBody').children.find(c => c.tagName === 'SVG');
+      out[`${mode}/compare all`] = {
+        offered: !!allRow,
+        extras: h.detail() ? h.detail().extras.length : 0,
+        lines: svg ? svg.getAttribute('aria-label') : null,
+        nodes: svg ? svg.children.length : 0,
+      };
+    }
   }
 
   const text = JSON.stringify(out, null, 1);

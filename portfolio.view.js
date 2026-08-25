@@ -13,7 +13,7 @@
      tables + headline    the positions/closed/trades tables and the stat tiles
      map                  the sector treemap, its colour ramp, and the realised bar under it
      detail overlay       the per-position price chart in the modal
-     views + controls     show(), the segmented control, the as-of date picker, the key handler
+     views + controls     show(), the segmented control, the From/As-of range pickers, the keys
      startup              MODE sync, load(), and the fetch that starts it all
 
    AREA IS VALUE everywhere it appears — the pie's radii, the map's tiles, the realised bar's
@@ -22,6 +22,26 @@
    or label strip you carve out of a tile has to be paid for out of the layout (squarifyNet), not
    out of the tile, or the smallest positions quietly stop being drawn to scale.
    ============================================================================================= */
+
+/* ---------- errors ----------
+   The page has one visible error slot, #err, and until now only show()'s own try/catch ever
+   reached it. Anything thrown inside an event listener — a tooltip's pointerenter, a button's
+   click — went to the console and nowhere else, which makes a broken hover indistinguishable from
+   a hover that simply does nothing. Route uncaught errors and rejected promises here as well, one
+   line per distinct message so a handler that fires on every mouse move cannot flood it. */
+const SEEN_ERRORS = new Set();
+function reportError(where, err) {
+  const msg = `${where}: ${(err && err.message) || err}`;
+  console.error(where, err);
+  if (SEEN_ERRORS.has(msg)) return;
+  SEEN_ERRORS.add(msg);
+  const slot = document.getElementById('runtimeErr');
+  if (!slot) return;
+  slot.textContent = [...SEEN_ERRORS].join(' · ');
+  slot.hidden = false;
+}
+addEventListener('error', e => reportError('uncaught', e.error || e.message));
+addEventListener('unhandledrejection', e => reportError('unhandled rejection', e.reason));
 
 /* ---------- formatting ---------- */
 let SHOW_MONEY = true;              // the "Show €" switch; off replaces every amount with xxxx
@@ -49,6 +69,25 @@ const fmtMoneyPre = v => SHOW_MONEY ? ccySymbol() + fmt('plain2').format(v) : ma
 const fmtShare = v => fmt('percent').format(v);
 const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
 const fmtPP = v => (v >= 0 ? '+' : '') + v.toFixed(1) + ' pp';
+const deDate = s => new Date(s).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+// A range pick re-bases every basis figure onto its start date (see rebaseLots), so the words for
+// those figures have to move with it: "invested" is no longer what the number means once the
+// comparison starts mid-history. Only the map reconstructs — the pie and the two tables are always
+// live — so this reads null everywhere else and the wording falls back to the lifetime one.
+const rangeFrom = () => (VIEW === 'map' && AS_FROM) ? AS_FROM : null;
+const rangeAt = () => (VIEW === 'map' && AS_OF) ? AS_OF : null;
+const rangeTo = () => rangeAt() || TODAY;
+const purLabel = short => MODE === 'rel' ? `Same money in ${BENCH_LABEL}`
+  : rangeFrom() ? `Value on ${deDate(rangeFrom())}`
+  : (short ? 'Purchase value' : 'Invested (ex cash)');
+const gainLabel = () => MODE === 'rel' ? `Ahead of ${BENCH_LABEL}`
+  : rangeFrom() ? `Gain since ${deDate(rangeFrom())}` : 'Unrealised gain';
+// The other end of the same pair, so the two read together: "Value on 02.01.2025 → Value on
+// 14.08.2026". Only where an end date was actually picked, though. Left alone, the figures are
+// Parqet's own latest quotes — dated by the header's "last data update", which is a few days
+// behind today — so stamping today's date on them would be a small lie for a small gain.
+const curLabel = () => rangeAt() ? `Value on ${deDate(rangeAt())}` : 'Current value';
 
 /* ---------- geometry ---------- */
 const TAU = Math.PI * 2;
@@ -234,6 +273,91 @@ function placeTip(tip, wrapEl, e) {
   tip.style.top = (y - r.top) + 'px';
 }
 
+// A sparkline of the position's own price across the range now selected, drawn into the map and
+// pie tooltips. Built per hover like every other line of that tooltip — the work is a filter and
+// a divide over a few hundred already-parsed rows, which costs less than the string concatenation
+// around it, and it is what lets the graph follow the range picker without re-rendering the map.
+//
+// Returns '' rather than a placeholder when there is nothing to draw: a cash tile, an instrument
+// with no price file, or a series that simply has not arrived yet. A tooltip one row shorter is a
+// better answer than an empty box where a graph should be.
+const SPARK = { w: 208, h: 46, pad: 3, max: 90 };
+function sparkline(d) {
+  try {
+    return sparkSvg(d);
+  } catch (err) {
+    // Decoration must never take the tooltip's figures down with it. This runs inside the
+    // pointerenter handler that builds tip.innerHTML, and anything thrown here would skip the
+    // classList.add('on') below it — the whole popup would vanish over a graph that failed.
+    reportError('sparkline', err);
+    return '';
+  }
+}
+function sparkSvg(d) {
+  if (d.cash) return '';
+  // rangeFrom/rangeTo, not AS_FROM/AS_OF: the pie shares this tooltip and does not reconstruct,
+  // so its figures are live and its graph has to be too, or the two would describe different days
+  const path = pricePath(d, rangeFrom(), rangeTo());
+  if (!path) { warmSeries(d); return ''; }        // not loaded yet — have it ready for next time
+
+  // x is keyed to the position in the *whole* window, not to the drawn point's place in the
+  // strided list — so a trade marker and the line agree about where a date sits even though only
+  // every nth close is actually plotted.
+  const { w, h, pad } = SPARK;
+  const lo = Math.min(...path.map(p => p.pct)), hi = Math.max(...path.map(p => p.pct));
+  const span = hi - lo || 1;                       // a dead-flat line sits on the middle, not at 0/0
+  const x = i => pad + i * (w - 2 * pad) / Math.max(1, path.length - 1);
+  const y = v => h - pad - (v - lo) / span * (h - 2 * pad);
+
+  // stride to at most SPARK.max points: seven years of daily closes is ~1800 of them, and past a
+  // couple of hundred they land closer together than the line is wide. The last point is kept
+  // whatever the stride lands on, so the line always ends where the figures above it say it does.
+  const step = Math.ceil(path.length / SPARK.max);
+  const keep = path.map((p, i) => i).filter(i => i % step === 0);
+  if (keep[keep.length - 1] !== path.length - 1) keep.push(path.length - 1);
+  const dAttr = keep.map((i, n) => `${n ? 'L' : 'M'}${x(i).toFixed(1)} ${y(path[i].pct).toFixed(1)}`).join(' ');
+
+  const last = path[path.length - 1].pct;
+  // the zero line only where zero is actually in view — otherwise it would sit on an edge and
+  // read as the axis rather than as "where this started"
+  const zero = lo <= 0 && hi >= 0
+    ? `<line x1="0" y1="${y(0).toFixed(1)}" x2="${w}" y2="${y(0).toFixed(1)}" class="sparkzero"/>` : '';
+  return `<div class="sparkwrap"><svg class="spark ${last >= 0 ? 'pos' : 'neg'}" ` +
+    `viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">` +
+    `${zero}<path d="${dAttr}"/>${sparkMarks(d, path, x, y)}</svg></div>`;
+}
+
+// The buys and sells that happened inside the window, as dots on the line. One dot per date
+// rather than per trade — a savings plan can book several on one day, and they would stack into
+// an unreadable blob — coloured by what that day held: green bought, red sold, neutral for a day
+// that did both. Each sits on the close the price path shows for its own date (the last close at
+// or before it, so a trade booked on a holiday lands on the session the line actually draws).
+function sparkMarks(d, path, x, y) {
+  const first = path[0].date, last = path[path.length - 1].date;
+  const byDate = new Map();
+  for (const t of dealsOf(d)) {
+    const day = t.datetime.slice(0, 10);
+    if (day < first || day > last) continue;
+    const at = byDate.get(day) || byDate.set(day, { buy: false, sell: false }).get(day);
+    at[t.type === 'sell' ? 'sell' : 'buy'] = true;
+  }
+  if (!byDate.size) return '';
+  return [...byDate].map(([day, kind]) => {
+    const i = lastIndexAtOrBefore(path, day);
+    if (i < 0) return '';
+    const cls = kind.buy && kind.sell ? 'both' : kind.sell ? 'sell' : 'buy';
+    return `<circle class="sparkmark ${cls}" cx="${x(i).toFixed(1)}" cy="${y(path[i].pct).toFixed(1)}" r="2.2"/>`;
+  }).join('');
+}
+
+// Pull a position's price file into the series cache without waiting for it. The tooltip cannot
+// await, so the first hover on a cold cache draws no graph and asks for the file; by the second
+// it is there. renderMap also calls this for everything on screen, which in practice means the
+// first hover already has it.
+function warmSeries(d) {
+  if (!d.cash) loadSeries(seriesSlug(d));
+}
+
 function attachTip(items) {
   const svg = document.getElementById('pie');
   const tip = document.getElementById('tip');
@@ -250,18 +374,18 @@ function attachTip(items) {
         tipHead(d, !d.cash) +
         `<div class="pf">${d.portfolio}</div>` +
         tipRow('Share', fmtShare(d.share)) +
-        (d.cash ? '' :
-          tipRow(MODE === 'rel' ? `Same money in ${BENCH_LABEL}` : 'Purchase value', fmtMoney2(d.pur))) +
-        tipRow('Current value', fmtMoney2(d.cur)) +
+        (d.cash ? '' : tipRow(purLabel(true), fmtMoney2(d.pur))) +
+        tipRow(curLabel(), fmtMoney2(d.cur)) +
         (d.divHeld > 0 ? tipRow('Dividends', fmtMoney2(d.divHeld), 'income') : '') +
         (d.state === 'flat' ? '' :
-          tipRow(MODE === 'rel' ? 'Ahead by' : 'Unrealised',
+          tipRow(MODE === 'rel' ? 'Ahead by' : rangeFrom() ? 'Over the range' : 'Unrealised',
                  `${fmtMoney2(d.gain)} (${fmtPct(d.ret)})`, posNeg(d.gain))) +
         tipIrrRow(d, 'Annualised (CAGR)') +
         (Math.abs(d.relPre) > 0.005
           ? tipSaleRows(d) +
             tipRow('Realised (pre-tax)', fmtMoney2(d.relPre), d.relPre >= 0 ? 'realized' : 'neg')
-          : '');
+          : '') +
+        sparkline(d);
       tip.classList.add('on');
       placeTip(tip, wrapEl, e);
       items.forEach(o => o.nodes.forEach(m => m.style.opacity = o === d ? 1 : 0.35));
@@ -374,6 +498,21 @@ function renderClosedPositions() {
 }
 
 const TYPE_LABEL = { buy: 'Buy', sell: 'Sell', dividend: 'Dividend', fees_taxes: 'Fees/Taxes' };
+
+// The "Now %" cell. The figure is what the price has done since the trade and reads the same way
+// for every row; the colour is the verdict on the trade, which is the opposite reading for a sale.
+// Buying is vindicated by a price that went up, selling by one that came down — so a sale showing
+// +20% is red: those are shares you no longer hold and would rather have. Anything with no price
+// of its own (a dividend, a fee) has nothing to compare and stays blank.
+function nowCell(t) {
+  const vs = tradeVsNow(t);
+  if (!Number.isFinite(vs)) return '<td>–</td>';
+  const ahead = t.type === 'sell' ? -vs : vs;
+  const verdict = t.type === 'sell'
+    ? `Price has ${vs >= 0 ? 'risen' : 'fallen'} ${Math.abs(vs).toFixed(1)}% since this sale — selling ${ahead >= 0 ? 'beat' : 'lost to'} holding on`
+    : `Price is ${Math.abs(vs).toFixed(1)}% ${vs >= 0 ? 'above' : 'below'} what this buy paid`;
+  return `<td class="${ahead >= 0 ? 'pos' : 'neg'}" title="${verdict}">${fmtPct(vs)}</td>`;
+}
 // Built against the raw trade log, which never changes after load() — so an as-of pick and the
 // MODE toggle have nothing to keep in sync here, and the table is drawn once. "Show €" is the
 // one exception: it decides whether the amounts are masked, so it is what the guard tracks.
@@ -395,6 +534,7 @@ function renderTrades() {
       `<td>${TYPE_LABEL[t.type] || t.type}</td>` +
       `<td>${num(t.shares) ? num(t.shares).toLocaleString('de-DE') : '–'}</td>` +
       `<td>${num(t.price) ? fmtMoney2(num(t.price)) : '–'}</td>` +
+      nowCell(t) +
       `<td class="${cls}">${fmtMoney2(num(t.amount))}</td>` +
       `<td class="${cls}">${fmtMoney2(num(t.amountNet))}</td>` +
       `<td>${num(t.fee) > 0.005 ? fmtMoney2(num(t.fee)) : '–'}</td>` +
@@ -440,10 +580,12 @@ function renderWatch() {
 // `opts.realizedTotal`, when given, replaces the live rel/relPre sum for the "Realised pre-tax"
 // tile — as-of items carry no relPre of their own, that figure comes from computeAsOfRealized.
 function renderHeaderTotals(items, closed = [], opts = {}) {
-  document.getElementById('kPur').textContent =
-    MODE === 'rel' ? `Same money in ${BENCH_LABEL}` : 'Invested (ex cash)';
-  document.getElementById('kGain').textContent =
-    MODE === 'rel' ? `Ahead of ${BENCH_LABEL}` : 'Unrealised gain';
+  document.getElementById('kCur').textContent = curLabel();
+  document.getElementById('kPur').textContent = purLabel(false);
+  document.getElementById('kGain').textContent = gainLabel();
+  // a range counts only the sales booked inside it, so the tile is no longer a lifetime total
+  document.getElementById('kRel').textContent =
+    rangeFrom() ? 'Realised pre-tax (in range)' : 'Realised pre-tax (incl. closed)';
   const all = totals(items);
   document.getElementById('tCur').textContent = fmtMoney2(all.cur);
   document.getElementById('tPur').textContent = fmtMoney2(all.pur);
@@ -460,7 +602,6 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
 
   // freshness always comes from the live data, never from an as-of pick's synthetic date
   const asOf = ITEMS.reduce((t, d) => d.lastPriceDate > t ? d.lastPriceDate : t, '');
-  const deDate = s => new Date(s).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const toggle = document.createElement('label');
   toggle.className = 'modeswitch';
   toggle.innerHTML = `<input type="checkbox" id="showMoney"${SHOW_MONEY ? ' checked' : ''}><span>Show €</span>`;
@@ -471,13 +612,11 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
   attachCurTip(items);
   document.getElementById('showEuroSlot').replaceChildren(toggle);
 
-  const stamp = document.getElementById('dataStamp');
-  if (opts.asOfDateStr) {
-    stamp.textContent = `Showing ${deDate(opts.asOfDateStr)}` +
-      `${asOf ? ' · latest data ' + deDate(asOf) : ''}`;
-  } else {
-    stamp.textContent = asOf ? `Last data update: ${deDate(asOf)}` : '';
-  }
+  // Only ever the freshness of the data — which range is on screen is the chart bar's own two
+  // date fields and the note under the map to say, and saying it a third time up here left the
+  // one fact this line exists for competing for the space.
+  document.getElementById('dataStamp').textContent =
+    asOf ? `Last data update: ${deDate(asOf)}` : '';
 }
 
 // The per-portfolio breakdown, now a hover popup over the Current value tile instead of its own
@@ -496,7 +635,7 @@ function attachCurTip(items) {
   const rows = PF.map(p => totals(items.filter(d => d.portfolio === p.name)))
     .map((s, i) => ({ name: PF[i].name, cur: s.cur, gain: s.gain, pur: s.pur }));
   tile.onpointerenter = e => {
-    tip.innerHTML = `<div class="t">Current value by portfolio</div>` +
+    tip.innerHTML = `<div class="t">${curLabel()} by portfolio</div>` +
       rows.map(r => `<div class="r"><span>${r.name}</span>` +
         `<b class="${r.gain >= 0 ? 'pos' : 'neg'}">${fmtMoney(r.cur)}` +
         `${r.pur > 0 ? ' · ' + fmtPct(r.gain / r.pur * 100) : ''}</b></div>`).join('');
@@ -520,12 +659,15 @@ function redrawEverything() {
 }
 
 // Picks live vs. as-of totals for the header tiles and the realised bar together, so the two
-// never disagree about which date they're showing. The pie view has no as-of rendering of its
-// own, so it always falls back to live totals even if a date is still picked underneath.
+// never disagree about which dates they're showing. A start date on its own is enough to take
+// this path: "since March" still needs the whole reconstruction even though the end is today.
+// The pie view has no as-of rendering of its own, so it always falls back to live totals even if
+// a date is still picked underneath.
 async function refreshHeader() {
-  if (AS_OF && VIEW === 'map') {
-    const [snap, real] = await Promise.all([computeAsOf(AS_OF), computeAsOfRealized(AS_OF)]);
-    renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal, asOfDateStr: AS_OF });
+  if ((AS_OF || AS_FROM) && VIEW === 'map') {
+    const to = AS_OF || TODAY;
+    const [snap, real] = await Promise.all([computeAsOf(to, AS_FROM), computeAsOfRealized(to, AS_FROM)]);
+    renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal });
     renderClosed({ open: real.open, closed: real.closed, divTotal: real.divTotal,
                    divRows: real.divRows, taxTotal: real.taxTotal, taxSplit: real.taxSplit });
   } else {
@@ -720,11 +862,17 @@ function renderMap(items, asOf) {
     svg.style.width = (mapScale * 100) + '%';
     svg.style.setProperty('--map-scale', mapScale);
     note.hidden = false;
-    note.innerHTML = `As of <b>${asOf.date}</b>: <b>${fmtMoney2(asOf.asOfTotal)}</b>` +
+    note.innerHTML =
+      (asOf.from ? `From <b>${asOf.from}</b> to <b>${asOf.date}</b>: ` : `As of <b>${asOf.date}</b>: `) +
+      `<b>${fmtMoney2(asOf.asOfTotal)}</b>` +
       ` (${(asOf.ratio * 100).toFixed(0)}% of today's ${fmtMoney(asOf.currentTotal)}) — ` +
       `area scaled to match, since area is value throughout this page. Labels stay full size.` +
+      (asOf.from
+        ? ` Colour is the gain <em>over the range</em>: anything already held on ${asOf.from} counts` +
+          ` from what it was worth that day, anything bought since from what it cost.`
+        : '') +
       (asOf.missing.length
-        ? ` ${asOf.missing.length} held then but omitted for lack of price history: ${asOf.missing.join(', ')}.`
+        ? ` ${asOf.missing.length} ${asOf.from ? 'omitted for lack of price history at one end of the range' : 'held then but omitted for lack of price history'}: ${asOf.missing.join(', ')}.`
         : '');
   } else {
     svg.style.width = '100%';
@@ -733,7 +881,7 @@ function renderMap(items, asOf) {
   }
 
   const g = el('g', {});
-  items.forEach(d => { d.nodes = []; });
+  items.forEach(d => { d.nodes = []; warmSeries(d); });   // for the tooltip's sparkline
   const nudge = 1 / mapScale;
 
   // two-level treemap: sectors first, each position's own tile squarified inside its sector's
@@ -1128,7 +1276,7 @@ function benchmarkCandidates() {
 // front instead, so the whole list is on screen (or one ordinary, instant div-scroll away) the
 // moment it opens. onPick(value) fires with the chosen identifier, "__reset", or "__hide" — never
 // at all if the picker is dismissed by clicking elsewhere.
-function openStockPicker(anchorEl, { resetLabel, showHide, currentIdentifier } = {}, onPick) {
+function openStockPicker(anchorEl, { resetLabel, showHide, showAll, currentIdentifier } = {}, onPick) {
   const candidates = benchmarkCandidates();
   const body = document.getElementById('dtBody');
   const box = anchorEl.getBoundingClientRect();
@@ -1165,6 +1313,9 @@ function openStockPicker(anchorEl, { resetLabel, showHide, currentIdentifier } =
   if (resetLabel) rows.push(row('__reset', `${resetLabel} (reset)`, false));
   if (showHide) rows.push(row('__hide', '[hide this]', false));
   rows.push(row(PORTFOLIO_ID, '[Portfolio]', currentIdentifier === PORTFOLIO_ID));
+  // only where a line is being *added*: the label pickers swap one line for another, and "all"
+  // has no meaning as a replacement for a single line
+  if (showAll) rows.push(row(ALL_ID, '[All]', false));
   candidates.forEach(c => rows.push(row(c.identifier, c.label, currentIdentifier === c.identifier)));
   menu.replaceChildren(...rows);
   body.appendChild(menu);
@@ -1175,18 +1326,21 @@ function openStockPicker(anchorEl, { resetLabel, showHide, currentIdentifier } =
   setTimeout(() => document.addEventListener('mousedown', onOutside, true), 0);
 }
 
-const RANGE_FROM = {
-  all: (d, series) => series.rows[0].date,
-  '5y': () => shiftYears(-5),
-  '3y': () => shiftYears(-3),
-  '1y': () => shiftYears(-1),
-  ytd: () => new Date().getFullYear() + '-01-01',
-  buy: d => d.firstActivity || '',
-};
-function shiftYears(n) {
-  const t = new Date();
-  t.setFullYear(t.getFullYear() + n);
-  return t.toISOString().slice(0, 10);
+// The detail chart's timeframe buttons are the map's range picker, same windows under the same
+// names, built straight off RANGE_PRESETS so the two cannot drift apart as one gains a button.
+// Two differences, both inherent to a single-position chart:
+//   • measured off the series' own last day rather than off today, so a listing whose prices stop
+//     early still shows its last month instead of an empty window;
+//   • "since buy", which only means anything when there is one position to have bought.
+// drawDetail clamps whatever comes back to the series' first row, so a window reaching further
+// back than the data simply shows all of it.
+// A function, not a lookup table built up front: RANGE_PRESETS is declared with the controls far
+// below, so anything evaluated here at load time would read it before it exists. Resolved per call
+// instead, which costs a find over ten entries once per redraw.
+function rangeStartFor(range, d, series) {
+  const p = RANGE_PRESETS.find(q => q.key === range);
+  if (!p) return d.firstActivity || '';               // 'buy', and anything unrecognised
+  return p.from ? p.from(series.rows[series.rows.length - 1].date) : series.rows[0].date;
 }
 
 // custom, when given, is a { from, to } drag-selected window that overrides the range buttons
@@ -1200,6 +1354,7 @@ const EXTRA_COLOURS = ['var(--flat)', 'var(--series-2)', 'var(--series-3)', 'var
 // the sentinel identifier for "the whole portfolio" as a comparison line — distinct from any real
 // instrument's identifier (an ISIN or a CASH: id), so it can never collide with one
 const PORTFOLIO_ID = '__portfolio';
+const ALL_ID = '__all';           // "everything at once" — offered by the + compare picker only
 
 function drawDetail(d, series, alignDate, range, custom, extras) {
   const W = 840, H = 300, T = 12, B = 22;
@@ -1207,11 +1362,17 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   if (custom) {
     ({ from, to } = custom);
   } else {
-    const pick = (RANGE_FROM[range] || RANGE_FROM.buy)(d, series);
+    const pick = rangeStartFor(range, d, series);
     from = pick && pick > series.rows[0].date ? pick : series.rows[0].date;
     to = series.rows[series.rows.length - 1].date;
   }
-  let rows = series.rows.filter(r => r.date >= from && r.date <= to);
+  // The same rows the map's range picker measures from — "last close at or before" each end, not
+  // "first close on or after" the start. Otherwise a window opening on a weekend or a holiday
+  // begins one session late here and on time there, and "3M" quietly means two different windows
+  // depending on which chart is asking. It is also the row the percentages are relative to.
+  const iFrom = Math.max(0, lastIndexAtOrBefore(series.rows, from));
+  const iTo = lastIndexAtOrBefore(series.rows, to);
+  let rows = iTo > iFrom ? series.rows.slice(iFrom, iTo + 1) : [];
   if (rows.length < 2) return null;
   // colour is keyed by what a line IS, not by its position in the list: the neutral grey stays
   // reserved for the real benchmark specifically, so a plain stock never inherits "the benchmark's
@@ -1444,15 +1605,24 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     return { node, trades, day, close: rows[i].close, aligned: anchor === dates[i] };
   }).filter(Boolean);
 
-  // place the end labels at their line, then push apart if they would collide, keeping both inside
-  const MIN_GAP = 13;
+  // Place the end labels at their line, then push apart if they would collide, keeping both
+  // inside. MIN_GAP tracks .dtkey's font size — enough to clear the glyphs, and no more.
+  //
+  // It is the *preferred* gap, not a floor: "[All]" puts every tracked name on the chart at once,
+  // far more labels than the height can seat at that spacing, and pushing them apart regardless
+  // would run the surplus off the bottom where the viewBox clips it away entirely. Compressing to
+  // whatever the chart actually has keeps every line named, which matters more than the breathing
+  // room does — with few enough labels to fit, this is exactly MIN_GAP and nothing changes.
+  const MIN_GAP = 9;
+  const top0 = T + 8, bottom0 = H - B - 2;
+  const gap = keys.length > 1 ? Math.min(MIN_GAP, (bottom0 - top0) / (keys.length - 1)) : MIN_GAP;
   keys.forEach(k => { k.y = y(k.v); });
   keys.sort((a, b) => a.y - b.y);
   for (let i = 1; i < keys.length; i++)
-    if (keys[i].y - keys[i - 1].y < MIN_GAP) keys[i].y = keys[i - 1].y + MIN_GAP;
-  const overflow = keys[keys.length - 1].y - (H - B - 2);
+    if (keys[i].y - keys[i - 1].y < gap) keys[i].y = keys[i - 1].y + gap;
+  const overflow = keys[keys.length - 1].y - bottom0;
   if (overflow > 0) keys.forEach(k => { k.y -= overflow; });
-  const top = (T + 8) - keys[0].y;
+  const top = top0 - keys[0].y;
   if (top > 0) keys.forEach(k => { k.y += top; });
   keys.forEach(k => {
     if (Math.abs(k.y - y(k.v)) > 1.5)                    // moved: draw a leader to its line
@@ -1752,9 +1922,24 @@ document.getElementById('dtRange').addEventListener('click', e => {
 const addCompareBtn = document.getElementById('dtAddCompare');
 addCompareBtn.addEventListener('click', () => {
   if (!DETAIL) return;
-  openStockPicker(addCompareBtn, {}, async val => {
+  openStockPicker(addCompareBtn, { showAll: true }, async val => {
     if (val === PORTFOLIO_ID) {
       DETAIL.extras.push({ label: 'Portfolio', identifier: PORTFOLIO_ID, series: await portfolioSeries() });
+      renderDetail();
+      return;
+    }
+    if (val === ALL_ID) {
+      // Every comparison there is, drawn at once. It *replaces* the set rather than adding to it,
+      // since picking it twice would otherwise draw everything a second time — and it leaves out
+      // the position being viewed, which is already the chart's own line. Anything with no series
+      // to load is simply absent; the chart is open and there is nowhere to report it but the
+      // console. Every load is cached, so a second [All] on another position is instant.
+      const cands = benchmarkCandidates().filter(c => c.identifier !== DETAIL.d.identifier);
+      const [pf, ...sers] = await Promise.all(
+        [portfolioSeries(), ...cands.map(c => loadSeries(seriesSlug(c)))]);
+      DETAIL.extras = [{ label: 'Portfolio', identifier: PORTFOLIO_ID, series: pf }].concat(
+        cands.map((c, i) => sers[i] && { label: c.label, identifier: c.identifier, series: sers[i] })
+             .filter(Boolean));
       renderDetail();
       return;
     }
@@ -1796,7 +1981,8 @@ async function show(view) {
   document.getElementById('tip').classList.remove('on');
   // as-of reconstruction only exists for the map — disable the actual controls (not just the
   // hidden wrapper) so they can't be triggered by a stray focus/keypress on the other frames
-  ['asOfDate', 'asOfDayBack', 'asOfDayFwd', 'asOfClear'].forEach(id => {
+  ['asOfDate', 'asFromDate', 'asOfDayBack', 'asOfDayFwd', 'asOfClear',
+   ...RANGE_PRESETS.map(p => p.id)].forEach(id => {
     document.getElementById(id).disabled = view !== 'map';
   });
   document.getElementById('asOfStep').tabIndex = view === 'map' ? 0 : -1;
@@ -1811,10 +1997,11 @@ async function show(view) {
       // the table's own numbers are always live — an as-of pick only ever affects map/pie
     } else if (view === 'pie') {
       renderPie(ITEMS);
-    } else if (AS_OF) {
-      const snap = await computeAsOf(AS_OF);
+    } else if (AS_OF || AS_FROM) {
+      const to = AS_OF || TODAY;
+      const snap = await computeAsOf(to, AS_FROM);
       if (renderToken !== SHOW_TOKEN) return;           // a newer date/view was picked meanwhile
-      renderMap(snap.items, { ...snap, date: AS_OF });
+      renderMap(snap.items, { ...snap, date: to });
     } else {
       renderMap(ITEMS);
     }
@@ -1839,18 +2026,164 @@ document.getElementById('btnTrades').addEventListener('click', () => show('trade
 document.getElementById('btnWatch').addEventListener('click', () => show('watch'));
 const TODAY = new Date().toISOString().slice(0, 10);
 const isWeekend = dateStr => [0, 6].includes(new Date(dateStr + 'T00:00:00Z').getUTCDay());
-document.getElementById('asOfDate').max = TODAY;
-document.getElementById('asOfDate').value = TODAY;   // "cleared" reads as today, not blank
-document.getElementById('asOfDate').addEventListener('change', e => {
-  // picking today's date is the same as clearing — no point re-deriving what's already live
-  AS_OF = (e.target.value && e.target.value !== TODAY) ? e.target.value : null;
+
+// The two pickers are one range, so neither is written on its own: every handler sets AS_FROM /
+// AS_OF and then calls this, which is the single place that decides what the two fields, their
+// bounds and their clear buttons should say. That keeps the impossible states off the screen —
+// a start after the end, or a ✕ offering to clear something already clear.
+//
+// Both ends read as a real date when nothing is picked, rather than one of them going blank: the
+// range starts life at config.json's timelineStart → today, which is the widest window the page
+// has data for. Null is still how "at the default" is stored — AS_FROM null means "at or before
+// timelineStart", AS_OF null means "today" — so the cheap whole-history path is what runs until
+// the user actually narrows the window.
+//
+// The quick-range buttons are shorthand for the start field, not a mode beside it, so nothing
+// remembers which one was pressed: whichever preset's date matches what the field now holds is
+// the one that lights up, and a hand-picked date that matches none of them lights none. That way
+// typing a date, scrubbing the end, and clicking a button all leave the group telling the truth.
+function syncAsOfControls() {
+  if (AS_SPAN) AS_FROM = presetStart(AS_SPAN);    // a span re-measures itself off the end
+  const from = document.getElementById('asFromDate'), to = document.getElementById('asOfDate');
+  from.value = AS_FROM || TIMELINE_START;              // read now: load() has resolved it by here
+  to.value = AS_OF || TODAY;
+  from.min = TIMELINE_START;
+  from.max = prevWeekday(AS_OF || TODAY);              // a start *at* the end is not a window
+  // only a hand-picked start floors the end; a span's start gets out of the way by following it
+  to.min = (!AS_SPAN && AS_FROM) ? AS_FROM : TIMELINE_START;
+  to.max = TODAY;
+  RANGE_PRESETS.forEach(p => {
+    const btn = document.getElementById(p.id);
+    btn.classList.toggle('on', p === AS_SPAN);
+    btn.setAttribute('aria-pressed', p === AS_SPAN);
+    btn.title = `${p.title} — from ${presetStart(p) || TIMELINE_START}`;
+  });
+  const unit = rangeUnit();
+  document.getElementById('asOfDayBack').setAttribute('aria-label', `Previous ${unit}`);
+  document.getElementById('asOfDayFwd').setAttribute('aria-label', `Next ${unit}`);
+  document.getElementById('asOfStep').title =
+    `Slide the whole range by one ${unit} · ← → a day · ↑ ↓ a month · PgUp/PgDn a year`;
   document.getElementById('asOfClear').hidden = !AS_OF;
+}
+
+// `iso` moved by whole months and then days, in UTC. setUTCMonth alone overflows FORWARD past the
+// target month when the current day doesn't exist there (Mar 31 − 1mo would land on Mar 3, not
+// Feb) — clamping to that month's last day instead is what "a month back" actually means.
+function shiftDate(iso, months, days) {
+  const d = new Date(iso + 'T00:00:00Z');
+  if (months) {
+    const day = d.getUTCDate();
+    d.setUTCDate(1);
+    d.setUTCMonth(d.getUTCMonth() + months);
+    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, lastDay));
+  }
+  if (days) d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+// A market has no close on a weekend, so a start date landing on one would silently be read as
+// the previous Friday anyway. Say so in the field rather than letting the two disagree.
+const weekdayAtOrBefore = iso => isWeekend(iso) ? prevWeekday(iso) : iso;
+// One weekday back — the newest start that still leaves a window with a day in it.
+const prevWeekday = iso => weekdayAtOrBefore(shiftDate(iso, 0, -1));
+
+// The quick-range buttons, in the order they sit on the bar. Each is a span measured back from
+// whatever the *end* currently says, not from today, so moving the end and clicking again
+// re-measures the same window from there.
+// One row per button on the bar, in the order they sit there. Three fields, because a range and
+// the step that slides it are not always the same thing:
+//   from  places the start, given wherever the end now is — null for "the whole history"
+//   step  the [months, days] one ◀ ▶ click slides the window by
+//   unit  what that step is called, for the buttons' tooltip and aria-labels
+// For a fixed span the two agree, and one click lands on the neighbouring window. "Year to date"
+// is the one that needs them apart: its start is a date on the calendar rather than a distance
+// back, and stepping it by a year is what gives you the same stretch of the year before.
+const RANGE_PRESETS = [
+  { id: 'rngAll', key: 'all', unit: 'day', title: 'The whole history',
+    from: null, step: [0, 1] },
+  { id: 'rng5y', key: '5y', unit: '5 years', title: 'Five years back from the end date',
+    from: to => shiftDate(to, -60, 0), step: [60, 0] },
+  { id: 'rng3y', key: '3y', unit: '3 years', title: 'Three years back from the end date',
+    from: to => shiftDate(to, -36, 0), step: [36, 0] },
+  { id: 'rngY', key: '1y', unit: 'year', title: 'One year back from the end date',
+    from: to => shiftDate(to, -12, 0), step: [12, 0] },
+  // 1 January is never a trading day, so the basis lands on the previous year's last close —
+  // which is what year-to-date should measure from, or the first session of January is missed
+  { id: 'rngYtd', key: 'ytd', unit: 'year', title: 'From 1 January of the end date\'s year',
+    from: to => to.slice(0, 4) + '-01-01', step: [12, 0] },
+  { id: 'rng6m', key: '6m', unit: '6 months', title: 'Six months back from the end date',
+    from: to => shiftDate(to, -6, 0), step: [6, 0] },
+  { id: 'rng3m', key: '3m', unit: '3 months', title: 'Three months back from the end date',
+    from: to => shiftDate(to, -3, 0), step: [3, 0] },
+  { id: 'rngM', key: '1m', unit: 'month', title: 'One month back from the end date',
+    from: to => shiftDate(to, -1, 0), step: [1, 0] },
+  { id: 'rngW', key: '1w', unit: 'week', title: 'One week back from the end date',
+    from: to => shiftDate(to, 0, -7), step: [0, 7] },
+  { id: 'rngD', key: '1d', unit: 'day', title: 'One day back from the end date',
+    from: to => shiftDate(to, 0, -1), step: [0, 1] },
+];
+const DAY = [0, 1];                  // a hand-picked window has no named width; it slides by a day
+const rangeStep = () => (AS_SPAN && AS_SPAN.step) || DAY;
+const rangeUnit = () => (AS_SPAN && AS_SPAN.unit) || 'day';
+
+// Which quick range is in force, or null when the start was picked by hand. A preset is a
+// *relationship* to the end date rather than a one-off assignment — move the end and a week still
+// means a week, re-measured from wherever the end now sits — so it has to outlive the click that
+// set it. Picking a date in the From field drops it, unless that date happens to be exactly what
+// some preset would have set, in which case it is adopted and the highlight tells the truth.
+let AS_SPAN = RANGE_PRESETS[0];      // "All": the whole history, which is also the page's default
+
+// What a preset would set the start to, given where the end is now. Null means the whole history —
+// which is what "All" is, and equally what a span reaching back past timelineStart collapses to.
+function presetStart(p) {
+  if (!p || !p.from) return null;
+  const to = AS_OF || TODAY;
+  const at = clampDate(weekdayAtOrBefore(p.from(to)), TIMELINE_START, prevWeekday(to));
+  return at > TIMELINE_START ? at : null;
+}
+
+// A native date field's segment spinners wrap inside the segment and ignore min/max entirely:
+// stepping the day down from the 1st lands on the 31st of the same month, which can easily fall
+// outside the window the picker allows. So an out-of-bounds value is clamped, never rejected —
+// rejecting it would leave the field showing whatever the default renders as, which is the far end
+// of the range, and a step of one day would look like a jump of seven years.
+const clampDate = (v, lo, hi) => !v ? null : v < lo ? lo : v > hi ? hi : v;
+
+document.getElementById('asFromDate').addEventListener('change', e => {
+  // A start on a Saturday or Sunday is measured from the Friday close regardless — every figure
+  // here reads the last close at or before it — so snap the field to that Friday and say so,
+  // rather than showing a date no market ever traded on. The quick-range buttons already do this;
+  // this is the same rule for a hand-picked date. (A market *holiday* still reads back to the
+  // previous session the same way, but the calendar to detect one is per-exchange and this page
+  // has no single answer for it, so those dates stay as typed.)
+  const snapped = weekdayAtOrBefore(clampDate(e.target.value, TIMELINE_START, TODAY) || '');
+  // clamped down to timelineStart is exactly what "the whole history" means, so it reads as null
+  const v = clampDate(snapped, TIMELINE_START, prevWeekday(AS_OF || TODAY));
+  AS_FROM = (v && v > TIMELINE_START) ? v : null;
+  // a hand-picked date that lands exactly where a preset would is that preset, so the buttons
+  // never show a window as unnamed when it has a perfectly good name
+  AS_SPAN = RANGE_PRESETS.find(q => presetStart(q) === AS_FROM) || null;
+  syncAsOfControls();
+  if (VIEW === 'map') show('map');
+});
+RANGE_PRESETS.forEach(p => document.getElementById(p.id).addEventListener('click', () => {
+  AS_SPAN = p;                                         // syncAsOfControls derives AS_FROM from it
+  syncAsOfControls();
+  if (VIEW === 'map') show('map');
+}));
+document.getElementById('asOfDate').addEventListener('change', e => {
+  // same clamp, same reason — and picking today is the same as clearing, no point re-deriving
+  // what is already live. The floor is timelineStart rather than the start date: letting the end
+  // land on or before the start is how the range is deliberately given up, handled just below.
+  const v = clampDate(e.target.value, TIMELINE_START, TODAY);
+  AS_OF = (v && v !== TODAY) ? v : null;
+  if (AS_FROM && AS_FROM >= (AS_OF || TODAY)) AS_FROM = null;   // the end moved past the start
+  syncAsOfControls();
   if (VIEW === 'map') show('map');
 });
 document.getElementById('asOfClear').addEventListener('click', () => {
   AS_OF = null;
-  document.getElementById('asOfDate').value = TODAY;
-  document.getElementById('asOfClear').hidden = true;
+  syncAsOfControls();
   if (VIEW === 'map') show('map');
 });
 
@@ -1862,18 +2195,8 @@ document.getElementById('asOfClear').addEventListener('click', () => {
 // startup chain, far below) has resolved TIMELINE_START to its real value
 let asOfRenderTimer = null;
 function shiftAsOf(days, months) {
-  const base = new Date((AS_OF || TODAY) + 'T00:00:00Z');
-  if (months) {
-    // setMonth alone overflows FORWARD past the target month when the current day doesn't
-    // exist there (Mar 31 − 1mo would land on Mar 3, not Feb) — clamp to that month's last day
-    // instead, which is what stepping "a month back" actually means
-    const day = base.getUTCDate();
-    base.setUTCDate(1);
-    base.setUTCMonth(base.getUTCMonth() + months);
-    const lastDay = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 0)).getUTCDate();
-    base.setUTCDate(Math.min(day, lastDay));
-  }
-  if (days) base.setUTCDate(base.getUTCDate() + days);
+  const to0 = AS_OF || TODAY;
+  const base = new Date(shiftDate(to0, months, days) + 'T00:00:00Z');
 
   // a market has no data on a weekend; land on the nearest workday in the direction we were
   // already stepping, so "back a day" from Monday reaches Friday rather than bouncing to Sunday
@@ -1883,14 +2206,31 @@ function shiftAsOf(days, months) {
   let iso = base.toISOString().slice(0, 10);
   if (iso > TODAY) iso = TODAY;
   if (iso < TIMELINE_START) iso = TIMELINE_START;
-  document.getElementById('asOfDate').value = iso;
+  // The whole window slides, not just its end. A span's start re-derives itself off the end in
+  // syncAsOfControls, so only a hand-picked one is carried here — and carrying it by the gap in
+  // whole days, rather than by re-applying the step, holds the width exactly through whatever
+  // clamping the end just went through. It is deliberately not snapped to a weekday the way a
+  // span's start is: a span recomputes from the end each time and so cannot drift, while a
+  // repeatedly snapped gap would widen the window a little on every press.
+  let from = AS_FROM;
+  if (!AS_SPAN && AS_FROM) {
+    const gap = (Date.parse(to0) - Date.parse(AS_FROM)) / 864e5;
+    from = clampDate(shiftDate(iso, 0, -gap), TIMELINE_START, prevWeekday(iso));
+    if (!(from > TIMELINE_START)) from = null;
+    if (from && from >= iso) return;                   // no room left to slide into
+  }
   AS_OF = iso === TODAY ? null : iso;
-  document.getElementById('asOfClear').hidden = !AS_OF;
+  if (!AS_SPAN) AS_FROM = from;
+  syncAsOfControls();
   clearTimeout(asOfRenderTimer);
   asOfRenderTimer = setTimeout(() => { if (VIEW === 'map') show('map'); }, 150);
 }
-document.getElementById('asOfDayBack').addEventListener('click', () => shiftAsOf(-1, 0));
-document.getElementById('asOfDayFwd').addEventListener('click', () => shiftAsOf(1, 0));
+// ◀ ▶ slide by the width of the range now showing, so one click lands on the neighbouring
+// window with no overlap. The arrow keys keep their own fixed steps — they are how you move by a
+// day while a year is selected — and go through the same slide.
+const slideRange = dir => { const [months, days] = rangeStep(); shiftAsOf(days * dir, months * dir); };
+document.getElementById('asOfDayBack').addEventListener('click', () => slideRange(-1));
+document.getElementById('asOfDayFwd').addEventListener('click', () => slideRange(1));
 const ASOF_KEYS = {
   ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
   PageUp: [0, -12], PageDown: [0, 12],
@@ -1918,10 +2258,10 @@ MODE = document.getElementById('relMode').checked ? 'rel' : 'abs';
 // ingest() builds the model; this draws it. Split so the model can be exercised without a DOM.
 function load(...texts) {
   ingest(...texts);
-  // config.json only ever changes two labels a browser has no other way to pick up early: the
-  // date picker's own native floor, and the mode-switch text baked into the static HTML
-  document.getElementById('asOfDate').min = TIMELINE_START;
-  document.getElementById('relModeLabel').textContent = `Performance vs. ${BENCH_LABEL}`;
+  // config.json only ever changes one thing a browser has no other way to pick up early: the date
+  // pickers' own native floor — which syncAsOfControls writes, along with the rest of their state,
+  // from the range as it now stands. (The mode switch's own text is fixed; see portfolio.html.)
+  syncAsOfControls();
   renderMeta(ITEMS, CLOSED);
   show(VIEW);
 }

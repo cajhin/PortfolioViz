@@ -17,9 +17,10 @@
      FIFO lots            the shared share-retirement walk every cost-basis figure is built on
      colour from name     a position's hue, derived from its own name
      XIRR                 cash flows out of the trade log, and the bisection solver over them
-     price series         prices/*.csv, and the "last close at or before" lookup
+     price series         prices/*.csv, the "last close at or before" lookup, and pricePath
      splits               undoing Parqet's post-split restatement of historical share counts
-     as of                the portfolio rebuilt as it stood on a past date
+     trade vs. now        what the price has done since a trade, on today's split scale
+     as of                the portfolio rebuilt as it stood on a past date, or between two
      benchmark            "what if this money had gone into the index instead" — four flavours
      dividends            attributing income to the lots that earned it
      display names        trimming legal boilerplate off a position's full name
@@ -36,6 +37,8 @@
      prices/  DERIVED   reproducible from registry/price_sources.csv alone
    Every close in prices/ is already in the portfolio currency — update_prices.py
    converts on write and keeps the untouched quote alongside — so nothing here does FX.
+   prices/ also outranks the export on price: anywhere _latest.csv is fresher than Parqet's own
+   lastPriceDate, build() takes its close and recomputes the position's current value from it.
    ============================================================================================= */
 
 /* ---------- files ---------- */
@@ -48,8 +51,9 @@ const TRADES_PATH = 'parqet/activities.csv';
 const INSTRUMENTS_PATH = 'registry/instruments.csv';
 const PRICE_SOURCES_PATH = 'registry/price_sources.csv';
 // prices/ is derived: reproducible from registry/price_sources.csv by update_prices.py.
-// _latest.csv is the freshest close per instrument, which is what fills the quote Parqet freezes
-// on a position once it is sold.
+// _latest.csv is the freshest close per instrument, and it is the price of record for every
+// position it covers — the Parqet export is a snapshot from whenever it was pulled, so its quotes
+// are usually the older pair. build() takes the close and recomputes the position's value with it.
 const LATEST_PATH = 'prices/_latest.csv';
 
 /* ---------- state ----------
@@ -61,6 +65,9 @@ const LATEST_PATH = 'prices/_latest.csv';
    CSVs. MODE / VIEW / AS_OF are what the three controls in the chart bar currently say; the
    view syncs MODE from the checkbox at startup, since a browser restores a checkbox's ticked
    state across a reload on its own and this script would otherwise disagree with the screen.
+   AS_FROM is the other end of the same pick: with it set the map answers "what happened between
+   these two dates" rather than "what has happened up to this date", and every basis figure is
+   re-based onto that start date (see rebaseLots).
    TIMELINE_START / BENCH_LABEL start at sensible defaults and are overwritten by ingest() from
    config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
@@ -71,6 +78,7 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
     VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
     AS_OF = null,                                      // an ISO date, or null for "today"
+    AS_FROM = null,                                    // an ISO date, or null for "beginning of time"
     PF = [],                                           // [{ name }] — portfolios in draw order
     TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
     TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World';
@@ -267,6 +275,40 @@ async function loadSeries(slug) {
   return out;
 }
 
+// The synchronous half of loadSeries: whatever is already cached for this slug, or null. For a
+// caller that cannot await — a pointerenter handler building a tooltip — and would rather draw
+// nothing than block the hover.
+const seriesIfLoaded = slug => SERIES_CACHE.get(slug) || null;
+
+// This position's own price across a window, as a percentage from the window's first close — the
+// figures behind the sparkline in the map's tooltip. Null when there is no cached series, or too
+// little of it inside the window to draw a line.
+//
+// No anchoring here, deliberately, though every other reader of a prices series applies it: each
+// point is divided by the same first close, so the factor that lines the series up with Parqet's
+// own last price cancels out of the ratio. It would move every number and no part of the shape.
+//
+// Prices only — this is the instrument's path, not the holding's. What the position did over the
+// range depends on when its lots were bought and is already the tile's own colour and figure;
+// this is the line behind that, and it is the same line whether one share was held or a thousand.
+function pricePath(d, fromStr, toStr) {
+  const series = seriesIfLoaded(seriesSlug(d));
+  if (!series) return null;
+  const all = series.rows;
+  // Both ends are the *same* rows the range arithmetic uses: seriesCloseAt is "last close at or
+  // before", so a window starting on a Sunday — or on a market holiday — is measured from the
+  // Friday before it. Slicing from the first row on-or-after the start instead would drop that
+  // very row, and with it any gap between it and the next session: the line would then be missing
+  // exactly the move the percentage above it is reporting. Anchor and line must be one row.
+  const lo = fromStr ? Math.max(0, lastIndexAtOrBefore(all, fromStr)) : 0;
+  const hi = toStr ? lastIndexAtOrBefore(all, toStr) : all.length - 1;
+  if (hi < 0 || hi - lo < 1) return null;
+  const rows = all.slice(lo, hi + 1);
+  const base = rows[0].close;
+  if (!(base > 0)) return null;
+  return rows.map(r => ({ date: r.date, pct: (r.close - base) / base * 100 }));
+}
+
 /* ---------- "nearest trading day" lookup ----------
    Markets are shut on weekends and holidays, so every date this page is asked about has to fall
    back to the last close at or before it. One binary search over any date-sorted {date, …} array
@@ -356,15 +398,50 @@ function asOfIrr(lots, cur, dateStr) {
   return xirr(flows);
 }
 
-/* ---------- as of: the portfolio on a past date ---------- */
+/* ---------- as of: the portfolio between two past dates ---------- */
+// Parqet's own last known price is the ground truth for what a position is worth "today", but the
+// closes in prices/ come from a different provider whose level can sit a little apart from it.
+// This is the multiplier that lines that series up with Parqet, so a reconstruction of today
+// reproduces the live map exactly. Every reader of a prices series applies it.
+function anchorFactor(d, series) {
+  const anchorClose = seriesCloseAt(series.rows, d.lastPriceDate) ||
+    series.rows[series.rows.length - 1].close;
+  return (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
+}
+
+// Lots re-based onto a range's start date: anything already held then is treated as though it had
+// been bought that morning at that day's close, so the gain it had accumulated before the range
+// belongs to the range before this one and is not booked into this one. Lots bought *inside* the
+// range keep the price and the date they were really bought at, which is what makes a mid-range
+// purchase count from its own cost rather than from a price it never traded at.
+//
+// This one rewrite is the whole of "measure the range and not the whole history": every figure
+// downstream — cost basis, gain, return, the benchmark counterfactual, XIRR — is some walk over
+// these lots, so re-basing them re-bases all of it at once.
+//
+// closeAtFrom must already be anchored (see anchorFactor) — it stands in for money paid. With no
+// start date, or no close to re-base onto, the lots are handed back exactly as they came, and the
+// caller falls back to measuring from what was actually paid.
+function rebaseLots(lots, fromStr, closeAtFrom) {
+  if (!fromStr || !(closeAtFrom > 0)) return lots;
+  return lots.map(l => l.at.slice(0, 10) < fromStr
+    ? { shares: l.shares, price: closeAtFrom, at: fromStr }
+    : l);
+}
+
 // The portfolio as it stood on a past date: replay each position's trades up to that day (FIFO,
 // same walk as the split/dividend helpers) to get shares actually held, price them from that
 // position's own prices file, and value the remaining cost at what was actually paid. Cash
 // and any position lacking a series that day are left out and named in the result, since neither
 // can be honestly reconstructed from what this page has on hand.
+//
+// With `fromStr` given the same replay answers a narrower question — what these holdings did
+// *between* the two dates — by re-basing the surviving lots onto the start date first. Shares are
+// still those held on `dateStr`; only what they are measured against moves.
 const AS_OF_CACHE = new Map();
-async function computeAsOf(dateStr) {
-  const cacheKey = dateStr + '|' + MODE;                // re-picking "vs. World" must not hit a stale cache
+async function computeAsOf(dateStr, fromStr = null) {
+  // re-picking "vs. World", or either end of the range, must not hit a stale cache
+  const cacheKey = dateStr + '|' + (fromStr || '') + '|' + MODE;
   if (AS_OF_CACHE.has(cacheKey)) return AS_OF_CACHE.get(cacheKey);
 
   const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
@@ -374,12 +451,7 @@ async function computeAsOf(dateStr) {
   // after the first request, so re-picking a date, or reopening the map later, is instant)
   const held = source.map(d => {
     const lots = survivingLots(splitAdjustedDeals(d), { until: dateStr });
-    const sharesAtD = lotShares(lots);
-    const costAtD = lotCost(lots);
-    // "Performance vs. MSCI World": the same lots' cost, grown in the index instead, up to this
-    // date — same measure the live map uses, just bounded to dateStr rather than today
-    const benchAtD = MODE === 'rel' && sharesAtD > 1e-9 ? benchValueOfLots(lots, dateStr) : NaN;
-    return { d, sharesAtD, costAtD, benchAtD, lots };
+    return { d, sharesAtD: lotShares(lots), heldLots: lots };
   }).filter(h => h.sharesAtD > 1e-9);                   // not yet bought, or already sold out, by then
 
   const seriesFor = new Map(await Promise.all(
@@ -387,15 +459,26 @@ async function computeAsOf(dateStr) {
 
   const out = [];
   const missing = new Set();
-  for (const { d, sharesAtD, costAtD, benchAtD, lots } of held) {
+  for (const { d, sharesAtD, heldLots } of held) {
     const series = seriesFor.get(d);
     const closeAtD = series && seriesCloseAt(series.rows, dateStr);
     if (!series || closeAtD == null) { missing.add(d.label || d.name); continue; }
+    const factor = anchorFactor(d, series);
 
-    // anchor to Parqet's own last known price, so "today" reproduces the live map exactly
-    const anchorClose = seriesCloseAt(series.rows, d.lastPriceDate) ||
-      series.rows[series.rows.length - 1].close;
-    const factor = (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
+    // Only a position that was already held on the start date needs a price there — one bought
+    // inside the range is measured from what it cost, which needs no series that far back. When it
+    // *is* needed and missing, the position drops out: measuring it from its original purchase
+    // while every neighbour is measured from the start date would quietly mix two questions.
+    const needsFrom = fromStr && heldLots.some(l => l.at.slice(0, 10) < fromStr);
+    const closeAtFrom = needsFrom ? seriesCloseAt(series.rows, fromStr) : null;
+    if (needsFrom && closeAtFrom == null) { missing.add(d.label || d.name); continue; }
+    const lots = needsFrom ? rebaseLots(heldLots, fromStr, closeAtFrom * factor) : heldLots;
+
+    const costAtD = lotCost(lots);
+    // "Performance vs. MSCI World": the same lots' cost, grown in the index instead, up to this
+    // date — same measure the live map uses, just bounded to dateStr rather than today (and, on a
+    // range pick, starting from the start date's value rather than from the original purchase)
+    const benchAtD = MODE === 'rel' ? benchValueOfLots(lots, dateStr) : NaN;
 
     const cur = sharesAtD * closeAtD * factor;
     // in "vs. World" mode, fall back to actual cost for any lot the benchmark couldn't price —
@@ -418,7 +501,7 @@ async function computeAsOf(dateStr) {
 
   const currentTotal = ITEMS.reduce((t, x) => t + x.cur, 0);   // today's true total, incl. cash
   const result = {
-    items: out, asOfTotal: grand, currentTotal,
+    items: out, asOfTotal: grand, currentTotal, from: fromStr,
     ratio: currentTotal > 0 ? grand / currentTotal : 1,
     missing: [...missing],
   };
@@ -427,15 +510,13 @@ async function computeAsOf(dateStr) {
 }
 
 // The same per-date value computeAsOf works out for one pick, walked across every day already on
-// screen instead — what the value bar under the detail overlay chart reads. anchorClose mirrors
-// computeAsOf() exactly: Parqet's own last known price is the ground truth for "today", so this
-// and the live map agree on the position's current value even though the prices close comes
-// from a different provider. Synchronous — series is already loaded by the time a chart draws.
+// screen instead — what the value bar under the detail overlay chart reads. It anchors the series
+// the same way computeAsOf() does, so this and the live map agree on the position's current value
+// even though the prices close comes from a different provider. Synchronous — the series is
+// already loaded by the time a chart draws.
 function valueOverTime(d, series, displayRows) {
   const deals = splitAdjustedDeals(d);
-  const anchorClose = seriesCloseAt(series.rows, d.lastPriceDate) ||
-    series.rows[series.rows.length - 1].close;
-  const factor = (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
+  const factor = anchorFactor(d, series);
   return displayRows.map(r => {
     const lots = survivingLots(deals, { until: r.date });
     const shares = lotShares(lots), cost = lotCost(lots);
@@ -480,10 +561,7 @@ async function portfolioSeries() {
   const items = (await Promise.all(source.map(async d => {
     const series = await loadSeries(seriesSlug(d));
     if (!series || !series.rows.length) return null;
-    const anchorClose = seriesCloseAt(series.rows, d.lastPriceDate) ||
-      series.rows[series.rows.length - 1].close;
-    const factor = (d.lastPrice > 0 && anchorClose > 0) ? d.lastPrice / anchorClose : 1;
-    return { deals: splitAdjustedDeals(d), series, factor };
+    return { deals: splitAdjustedDeals(d), series, factor: anchorFactor(d, series) };
   }))).filter(Boolean);
 
   const dateSet = new Set();
@@ -525,26 +603,52 @@ async function portfolioSeries() {
 }
 
 // The realised side of the same as-of pick: every sell (and its dividends/taxes) booked on or
-// before dateStr, split into "open" (some shares still held on that date) and "closed" (fully
-// sold by then) so renderClosed can draw the same open|closed bar it draws for today, just
-// bounded to what had actually happened by dateStr. Unlike computeAsOf, this needs no split
-// rescaling: it never compares against the external price series, only trades' own booked
-// amounts, and those net out correctly on their own historical share scale regardless of any
-// later split.
+// before dateStr — or, on a range pick, strictly inside the range — split into "open" (some shares
+// still held on the end date) and "closed" (fully sold by then) so renderClosed can draw the same
+// open|closed bar it draws for today, just bounded to what had actually happened.
+//
+// Without a start date this touches no price file at all and walks the trades' own booked share
+// counts, which need no split rescaling: only the amounts matter, and those net out correctly on
+// whatever historical share scale they were booked at.
+//
+// A start date changes that, and it is the one thing here that costs a fetch. Shares still held on
+// that date are re-based onto its close (same rule as computeAsOf, so the realised and unrealised
+// halves of a range agree about where it begins), and pricing shares against the external series
+// only lines up on today's split scale — hence the split-adjusted walk below. The raw list is kept
+// alongside it, because "sold N shares at X" is a booked fact the tooltip prints next to its own
+// split factor and must stay on the scale it was booked at.
 const AS_OF_REALIZED_CACHE = new Map();
-async function computeAsOfRealized(dateStr) {
-  const cacheKey = dateStr + '|' + MODE;
+async function computeAsOfRealized(dateStr, fromStr = null) {
+  const cacheKey = dateStr + '|' + (fromStr || '') + '|' + MODE;
   if (AS_OF_REALIZED_CACHE.has(cacheKey)) return AS_OF_REALIZED_CACHE.get(cacheKey);
 
   const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
+  // One anchored close per position, on the range's start date — fetched only for the positions
+  // that actually held something then, so a range whose start predates the whole portfolio costs
+  // no requests at all. A position with no series that far back simply stays out of the Map, and
+  // rebaseLots leaves its lots at what was paid.
+  const priceAtFrom = new Map();
+  if (fromStr) await Promise.all(source.map(async d => {
+    if (!survivingLots(splitAdjustedDeals(d), { until: fromStr }).length) return;
+    const series = await loadSeries(seriesSlug(d));
+    const close = series && seriesCloseAt(series.rows, fromStr);
+    if (close != null) priceAtFrom.set(d, close * anchorFactor(d, series));
+  }));
+
   const rows = [];
   for (const d of source) {
-    const trades = dealsOf(d);
-    const lots = [];
+    const booked = dealsOf(d);
+    // same array, same order, share counts on the price series' scale — indices line up
+    const trades = fromStr ? splitAdjustedDeals(d) : booked;
+    const lots = fromStr
+      ? rebaseLots(survivingLots(trades, { until: fromStr }), fromStr, priceAtFrom.get(d))
+      : [];
     let realized = 0, taxSell = 0, costSold = 0, soldShares = 0, grossProceeds = 0;
     let lastSell = '', sellCount = 0, activityCount = 0, benchProceeds = 0, benchKnown = true;
-    for (const t of trades) {
-      if (t.datetime.slice(0, 10) > dateStr) break;      // sorted — nothing after matters
+    for (let i = 0; i < trades.length; i++) {
+      const t = trades[i], day = t.datetime.slice(0, 10);
+      if (day > dateStr) break;                          // sorted — nothing after matters
+      if (fromStr && day <= fromStr) continue;           // already folded into the re-based lots
       const sh0 = num(t.shares);
       if (!sh0) continue;
       activityCount++;
@@ -562,7 +666,7 @@ async function computeAsOfRealized(dateStr) {
       costSold += costOut;
       realized += (num(t.amount) - num(t.fee)) - costOut;
       taxSell += num(t.tax);
-      soldShares += sh0;
+      soldShares += num(booked[i].shares);               // as booked, never re-scaled
       grossProceeds += num(t.amount);
       sellCount++;
       if (t.datetime > lastSell) lastSell = t.datetime;
@@ -581,9 +685,13 @@ async function computeAsOfRealized(dateStr) {
     });
   }
 
+  const inRange = t => {
+    const day = t.datetime.slice(0, 10);
+    return day <= dateStr && (!fromStr || day > fromStr);
+  };
   const result = {
     open: rows.filter(d => !d.sold), closed: rows.filter(d => d.sold),
-    ...incomeAndTax(TRADES.filter(t => t.datetime.slice(0, 10) <= dateStr)),
+    ...incomeAndTax(TRADES.filter(inRange)),
     realizedTotal: rows.reduce((t, d) => t + d.relPre, 0),
   };
   AS_OF_REALIZED_CACHE.set(cacheKey, result);
@@ -718,6 +826,46 @@ function splitFactor(d) {
   return Math.abs(ratio - snap) / snap < 0.08 ? snap : 1;   // unrecognised → leave it alone
 }
 
+/* ---------- a trade against today's price ---------- */
+// The trades table's "Now %": where the price stands now against what this trade booked, as a
+// percentage of the trade price. Two things have to be lined up before that subtraction means
+// anything.
+//
+// The unit — `price` is what was paid per share on the day, so a trade made before a split is
+// quoted on a scale today's price is not. The booked price is restated onto today's scale first,
+// the same correction the realised-bar tooltip already prints next to a sale.
+//
+// The position — a trade is only comparable to the last price of the holding it belongs to, found
+// by portfolio *and* identifier like everything else here. A closed position works too: Parqet
+// stops quoting one at the sale, and prices/_latest.csv fills that in above.
+//
+// The sign is deliberately the same for both directions: the number answers "what has the price
+// done since", which is one question however the trade went. Whether that counts as a *good*
+// trade is the opposite verdict for a sale as for a buy, and that is the renderer's business.
+//
+// Keyed by the trade object itself, and built in one pass the first time it is asked for: the
+// table wants this for every row, and re-deriving a position's split scale per row would be
+// O(trades × trades). Nothing it reads changes after ingest(), so there is no key.
+let TRADE_VS_NOW_CACHE = null;
+function tradeVsNow(t) {
+  if (!TRADE_VS_NOW_CACHE) {
+    TRADE_VS_NOW_CACHE = new Map();
+    for (const d of [...ITEMS, ...CLOSED]) {
+      if (d.cash || !(d.lastPrice > 0)) continue;
+      // same array, same order — splitAdjustedDeals maps over dealsOf(d), so indices line up and
+      // the ratio of the two share counts is exactly this trade's scale onto today
+      const booked = dealsOf(d), adjusted = splitAdjustedDeals(d);
+      booked.forEach((deal, i) => {
+        const scale = num(adjusted[i].shares) / num(deal.shares);
+        const paid = num(deal.price) / scale;
+        if (paid > 0 && scale > 0) TRADE_VS_NOW_CACHE.set(deal, (d.lastPrice - paid) / paid * 100);
+      });
+    }
+  }
+  const v = TRADE_VS_NOW_CACHE.get(t);
+  return v === undefined ? NaN : v;
+}
+
 /* ---------- display names ---------- */
 // No fund flag comes out of Parqet — assetType is "security" for stocks and ETFs alike — so read it
 // off the full name. Overridable later by a column in registry/instruments.csv if a fund hides it.
@@ -778,17 +926,33 @@ function build(rows) {
   });
 
   items.forEach(d => {
-    // Closed positions only, deliberately. _latest.csv now covers every tracked instrument, not
-    // just the sold ones the hand-kept price file used to carry — but for a position Parqet still
-    // quotes, Parqet is the truth: its currentValue and its lastPrice have to describe the same
-    // moment, or "as of today" stops reproducing the live map. A sold position is the one case
-    // Parqet stops quoting, which is what this is for.
-    const fresh = d.sold ? PRICES.get(d.identifier) : null;
-    if (fresh && (!d.lastPriceDate || fresh.asof > d.lastPriceDate)) {
+    // prices/ is the price of record wherever it is fresher than the export, which is the normal
+    // case: positions.csv is a snapshot from whenever Parqet was last pulled, while
+    // update_prices.py runs on its own schedule and usually carries several more sessions.
+    //
+    // Taking the quote means taking the value with it. This used to apply to sold positions only,
+    // on the grounds that currentValue and lastPrice have to describe the same moment — true, and
+    // the fix is to recompute the value rather than to keep the stale quote. Parqet's currentValue
+    // is exactly shares × lastPrice (they agree to the cent on every open position in the export),
+    // so shares × the fresh close is the same figure a few days later, and the two stay in step.
+    // Leaving cur on the old quote while the series moved on is what made a range pick and the
+    // live map disagree about what a position is worth *today*.
+    //
+    // Share counts need no adjustment: Parqet's `shares` is the holding as it stands now, and the
+    // provider's closes are split-adjusted to that same current-day scale.
+    const fresh = d.cash ? null : PRICES.get(d.identifier);
+    if (fresh && fresh.price > 0 && (!d.lastPriceDate || fresh.asof > d.lastPriceDate)) {
       d.lastPrice = fresh.price;
       d.lastPriceDate = fresh.asof;
       d.priceSource = fresh.symbol;   // nothing renders this; it's here to inspect in devtools
                                       // when a hand-maintained price looks wrong
+      // applyMode() recomputes gain/ret/state from cur below, but not before this loop finishes —
+      // keep the object self-consistent in between rather than briefly reporting a gain that
+      // belongs to the old quote.
+      d.cur = d.shares * fresh.price;
+      d.gain = d.cur - d.pur;
+      d.ret = d.pur > 0 ? d.gain / d.pur * 100 : 0;
+      d.state = !(d.pur > 0) || Math.abs(d.gain) < 0.005 ? 'flat' : (d.gain > 0 ? 'gain' : 'loss');
     }
     d.label = displayName(d);
     d.fund = isFund(d);
