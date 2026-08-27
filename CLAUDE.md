@@ -12,7 +12,7 @@ config.json             settings — timeline start, portfolio currency, which I
 check_portfolio.js      regression check for both scripts (see below)
 update_prices.py   fetches price history per registry/price_sources.csv
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
-registry/*.csv          CURATED — instruments.csv, price_sources.csv; gitignored, not regenerable
+registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
 parqet/*.csv            IMPORTED — positions and trades; gitignored, regenerate them
 prices/*.csv       DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
 fx/*.csv                DERIVED — one file per currency pair, for the conversion on write
@@ -75,5 +75,11 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-The CSVs and `check_baseline.json` hold real position values and are gitignored — never commit
-them, and don't paste figures from them into commit messages or issues.
+`parqet/`, `prices/`, `fx/` and `check_baseline.json` hold real position values and are gitignored
+— never commit them, and don't paste figures from them into commit messages or issues.
+
+`registry/*.csv` is the exception and **is** committed: two small tables no import can rebuild, and
+losing them would cost real work. They carry no amounts — only what each instrument is and where
+its prices come from — though `instruments.csv` does enumerate which instruments are held. The
+`.gitignore` reads `*.csv` and then negates that one directory, so a new CSV anywhere else is
+ignored by default.
