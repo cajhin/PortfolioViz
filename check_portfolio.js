@@ -44,7 +44,7 @@ const src = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('
 ;globalThis.__hooks = {
   items: () => ITEMS, closed: () => CLOSED, pf: () => PF,
   totals, computeAsOf, computeAsOfRealized, openDetail, detail: () => DETAIL,
-  renderPie, renderMap, renderClosed, renderMeta, renderTrades, renderHeaderTotals,
+  renderPie, renderMap, renderClosed, renderMeta, renderTrades, renderWatch, renderHeaderTotals,
   setMode: m => { MODE = m; applyMode(ITEMS); applyMode(CLOSED); },
   setShowMoney: v => { SHOW_MONEY = v; TRADES_DRAWN_FOR = null; WATCH_DRAWN_FOR = null; },
   // the range pick lives in three globals at once — the two dates and the view they only apply
@@ -207,6 +207,16 @@ function hoverAll(rows, tag, out) {
       // today's price (Now %) rather than against a position's cost
       h.renderTrades();
       const trRows = tbody('#tblTrades tbody').children;
+      // the watchlist: registry instruments with no holding behind them, and the only view whose
+      // "last close" comes from prices/_latest.csv rather than from a position
+      h.renderWatch();
+      const wRows = tbody('#tblWatch tbody').children;
+      out[`${tag}/watch`] = {
+        n: wRows.length,
+        head: byId('watchHead').textContent,
+        rows: wRows.map(tr => tr.innerHTML.replace(/style="[^"]*"/g, 'style=…')),
+      };
+
       out[`${tag}/trades`] = {
         n: trRows.length,
         head: byId('tradesHead').textContent,
