@@ -245,6 +245,18 @@ function benchSeriesPath(configText, instrumentsText) {
   return row && row.slug ? `prices/${row.id}-${row.slug}.csv` : '';
 }
 
+// The money that has actually left the account and stayed out: everything paid in, less everything
+// taken back out, over the whole activity log. Buys and costs count in; sales, dividends and
+// interest count out — the same signs XIRR uses.
+//
+// Deliberately not the same thing as the "Invested" tile, which is the cost basis of what is held
+// *now*. Sell something for more than it cost and buy the next thing with the proceeds, and that
+// basis grows while the money put in has not moved: the tile counts the enlarged stake, this counts
+// only the original one. The gap between them is profit that has been put back to work.
+function netCapital(rows = TRADES) {
+  return -rows.reduce((t, x) => t + (SIGN[x.type] ?? 0) * num(x.amountNet), 0);
+}
+
 /* ---------- price series ---------- */
 const SERIES_CACHE = new Map();
 // The series file for a position: "<isin>-<slug>", both straight off the registry row. The slug

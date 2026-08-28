@@ -770,6 +770,7 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
     redrawEverything();
   });
   attachCurTip(items);
+  attachPurTip(all);
   document.getElementById('showEuroSlot').replaceChildren(toggle);
 
   // Only ever the freshness of the data — which range is on screen is the chart bar's own two
@@ -784,6 +785,53 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
 // Reassigning .onpointer* (rather than addEventListener) is deliberate: this tile is a static
 // DOM node re-rendered against fresh `items` on every header refresh, so a plain addEventListener
 // would stack a new listener — closing over stale `items` — on every as-of pick.
+// The Invested tile explains itself on hover: the tile is the cost basis of what is held now, and
+// the money actually put in to get there is a different, smaller number once anything has been sold
+// at a profit and the proceeds redeployed. Cost is that money; Gain is what the tile has grown by
+// beyond it, which is realised profit still at work.
+//
+// Only where the tile really is showing invested capital. In "vs. World" mode it holds the
+// benchmark counterfactual, and on a range pick a market value on the start date — differencing
+// either against a lifetime cash total would produce a figure that means nothing, so the popup
+// says what the tile is instead of inventing one.
+function attachPurTip(all) {
+  const tile = document.getElementById('tilePur');
+  const tip = document.getElementById('curTip');
+  const wrapEl = document.getElementById('totalsCard');
+  tile.onpointerenter = e => {
+    // Cost is bounded to whatever date the tiles are showing, so that on a past pick it is the
+    // money put in *by then* rather than by today — otherwise the value would be historic and the
+    // capital current, and Total Gain would count contributions the snapshot never held.
+    const end = rangeAt();
+    const cost = netCapital(end ? TRADES.filter(t => t.datetime.slice(0, 10) <= end) : TRADES);
+    // Invested only means invested in plain mode; the portfolio's value is what it is either way,
+    // so Total Gain survives a mode the middle two rows cannot.
+    const plain = MODE !== 'rel' && !rangeFrom();
+    const gain = all.pur - cost, total = all.cur - cost;
+    const pct = (v) => cost > 0 ? fmtPct(v / cost * 100) : '–';
+    tip.innerHTML = `<div class="t">Invested vs. money put in</div>` +
+      tipRow('Cost', fmtMoney2(cost)) +
+      (plain
+        ? tipRow('Invested', fmtMoney2(all.pur)) +
+          tipRow('Gain', fmtMoney2(gain), posNeg(gain)) +
+          tipRow('% Gain', pct(gain), posNeg(gain))
+        : '') +
+      tipRow('Total Gain', fmtMoney2(total), posNeg(total)) +
+      tipRow('% Total Gain', pct(total), posNeg(total)) +
+      `<div class="full">Cost is everything paid in less everything taken back out. ` +
+      (plain
+        ? `Invested is the cost basis of what is held now — bigger by whatever realised profit has ` +
+          `been put back to work. `
+        : `The tile itself is showing “${purLabel(false)}”, not invested capital, so it is left out ` +
+          `of the comparison. `) +
+      `Total Gain is the whole portfolio measured against that money.</div>`;
+    tip.classList.add('on');
+    placeTip(tip, wrapEl, e);
+  };
+  tile.onpointermove = e => placeTip(tip, wrapEl, e);
+  tile.onpointerleave = () => tip.classList.remove('on');
+}
+
 function attachCurTip(items) {
   const tile = document.getElementById('tileCur');
   // its own tip node, a child of totalsCard — #tip lives inside .chartwrap instead, so

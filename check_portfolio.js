@@ -196,11 +196,15 @@ function hoverAll(nodes, rows, tag, out) {
       h.renderMeta(h.items(), h.closed());
       const curTip = byId('curTip'); curTip.innerHTML = '';
       byId('tileCur').fire('pointerenter');
+      const byPortfolio = curTip.innerHTML;
+      curTip.innerHTML = '';
+      byId('tilePur').fire('pointerenter');       // the Invested tile's own breakdown
       out[`${tag}/chrome`] = {
         tiles: ['tCur', 'tPur', 'tGain', 'tRel', 'tN', 'kCur', 'kPur', 'kGain'].map(id => byId(id).textContent),
         closedNet: byId('closedNet').textContent,
         dataStamp: byId('dataStamp').textContent,
-        byPortfolio: curTip.innerHTML,
+        byPortfolio,
+        investedTip: curTip.innerHTML,
         legendItems: byId('legend').children.length,
       };
       out[`${tag}/tips`] = tips;
@@ -238,7 +242,10 @@ function hoverAll(nodes, rows, tag, out) {
       h.renderHeaderTotals(s.items, [], { realizedTotal: q.realizedTotal });
       h.renderClosed({ open: q.open, closed: q.closed, divTotal: q.divTotal,
                        divRows: q.divRows, taxTotal: q.taxTotal, taxSplit: q.taxSplit });
+      const rTip = byId('curTip'); rTip.innerHTML = '';
+      byId('tilePur').fire('pointerenter');      // Cost must be bounded to the range's end date
       out[`${mode}/range chrome`] = {
+        investedTip: rTip.innerHTML,
         tiles: ['tCur', 'tPur', 'tGain', 'tRel', 'tN', 'kCur', 'kPur', 'kGain', 'kRel'].map(id => byId(id).textContent),
         note: byId('asOfNote').innerHTML,
         closedNet: byId('closedNet').textContent,
