@@ -141,10 +141,12 @@ const FIELDS = ['portfolio', 'label', 'identifier', 'shares', 'cur', 'pur', 'pur
   'benchValue', 'soldShares', 'grossProceeds', 'sellCount', 'taxSell', 'share', 'core', 'years'];
 const snap = d => Object.fromEntries(FIELDS.map(k => [k, r(d[k])]).concat([['flows', d.flows.length]]));
 
-// hover every node the renderers hung on a position and keep what the tooltip showed
-function hoverAll(rows, tag, out) {
+// hover every node a renderer hung on a position and keep what the tooltip showed. `nodes` is the
+// Map that renderer returned — position → its elements *in that chart* — so hovering the map reads
+// the map's tiles even for a position the realised bar also drew.
+function hoverAll(nodes, rows, tag, out) {
   const tip = byId('tip');
-  rows.forEach(d => (d.nodes || []).forEach((n, i) => {
+  rows.forEach(d => (nodes.get(d) || []).forEach((n, i) => {
     tip.innerHTML = '';
     n.fire('pointerenter');
     if (tip.innerHTML) out[`${tag} ${d.label || d.name} #${i}`] = tip.innerHTML;
@@ -188,9 +190,9 @@ function hoverAll(rows, tag, out) {
       h.setShowMoney(money);
       const tag = `${mode}/${money ? 'eur' : 'masked'}`;
       const tips = {};
-      h.renderMap(h.items(), null);   hoverAll(h.items(), 'map', tips);
-      h.renderPie(h.items());         hoverAll(h.items(), 'pie', tips);
-      h.renderClosed();               hoverAll([...h.closed(), ...h.items()], 'bar', tips);
+      hoverAll(h.renderMap(h.items(), null), h.items(), 'map', tips);
+      hoverAll(h.renderPie(h.items()), h.items(), 'pie', tips);
+      hoverAll(h.renderClosed(), [...h.closed(), ...h.items()], 'bar', tips);
       h.renderMeta(h.items(), h.closed());
       const curTip = byId('curTip'); curTip.innerHTML = '';
       byId('tileCur').fire('pointerenter');
@@ -232,8 +234,7 @@ function hoverAll(rows, tag, out) {
       h.setRange(from, day);
       const s = await h.computeAsOf(day, from), q = await h.computeAsOfRealized(day, from);
       const tips = {};
-      h.renderMap(s.items, { ...s, date: day });
-      hoverAll(s.items, 'map', tips);
+      hoverAll(h.renderMap(s.items, { ...s, date: day }), s.items, 'map', tips);
       h.renderHeaderTotals(s.items, [], { realizedTotal: q.realizedTotal });
       h.renderClosed({ open: q.open, closed: q.closed, divTotal: q.divTotal,
                        divRows: q.divRows, taxTotal: q.taxTotal, taxSplit: q.taxSplit });

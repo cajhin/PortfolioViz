@@ -167,7 +167,7 @@
   /* --map-scale is set on #pie when the as-of map shrinks (area = value, throughout this page);
      dividing by it keeps label text at a constant on-screen size instead of shrinking with the tiles */
   .maplbl { font-size: calc(9px / var(--map-scale, 1)); fill: #ffffff; font-weight: 600; paint-order: stroke; }
-  .maplbl.dark { fill: #12120f; }        /* funds and cash */
+  .maplbl.dark { fill: #12120f; }        /* funds */
   .mapsub { font-size: calc(8px / var(--map-scale, 1)); font-variant-numeric: tabular-nums; }
   .sectorbg { pointer-events: none; }
   .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700; fill: #12120f;

@@ -72,7 +72,7 @@ const LATEST_PATH = 'prices/_latest.csv';
    config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
-    INSTRUMENTS = new Map(),      // registry rows, keyed by ISIN (and by name, for cash)
+    INSTRUMENTS = new Map(),      // registry rows, keyed by ISIN
     SOURCES = new Map(),          // instrument id → its price source row, for the Source column
     BENCH = [], CCY = 'EUR',
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
@@ -431,9 +431,9 @@ function rebaseLots(lots, fromStr, closeAtFrom) {
 
 // The portfolio as it stood on a past date: replay each position's trades up to that day (FIFO,
 // same walk as the split/dividend helpers) to get shares actually held, price them from that
-// position's own prices file, and value the remaining cost at what was actually paid. Cash
-// and any position lacking a series that day are left out and named in the result, since neither
-// can be honestly reconstructed from what this page has on hand.
+// position's own prices file, and value the remaining cost at what was actually paid. A position
+// lacking a series that day is left out and named in the result, since it cannot be honestly
+// reconstructed from what this page has on hand.
 //
 // With `fromStr` given the same replay answers a narrower question — what these holdings did
 // *between* the two dates — by re-basing the surviving lots onto the start date first. Shares are
@@ -444,7 +444,7 @@ async function computeAsOf(dateStr, fromStr = null) {
   const cacheKey = dateStr + '|' + (fromStr || '') + '|' + MODE;
   if (AS_OF_CACHE.has(cacheKey)) return AS_OF_CACHE.get(cacheKey);
 
-  const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
+  const source = [...ITEMS, ...CLOSED];
 
   // the lot replay is cheap and synchronous; do it first so only positions actually held on
   // this date ever trigger a fetch, then load every needed series in parallel (each cached
@@ -487,7 +487,7 @@ async function computeAsOf(dateStr, fromStr = null) {
     const gain = cur - pur;
     out.push({
       portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
-      core: d.core, cash: false, fund: d.fund, shares: sharesAtD,
+      core: d.core, fund: d.fund, shares: sharesAtD,
       cur, pur, gain, ret: pur > 0 ? gain / pur * 100 : 0,
       state: pur <= 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss'),
       irr: asOfIrr(lots, cur, dateStr), divHeld: 0, firstActivity: d.firstActivity,
@@ -499,7 +499,7 @@ async function computeAsOf(dateStr, fromStr = null) {
   out.forEach(x => { x.share = grand > 0 ? x.cur / grand : 0; });
   out.sort((a, b) => b.cur - a.cur);
 
-  const currentTotal = ITEMS.reduce((t, x) => t + x.cur, 0);   // today's true total, incl. cash
+  const currentTotal = ITEMS.reduce((t, x) => t + x.cur, 0);   // today's true total
   const result = {
     items: out, asOfTotal: grand, currentTotal, from: fromStr,
     ratio: currentTotal > 0 ? grand / currentTotal : 1,
@@ -525,7 +525,7 @@ function valueOverTime(d, series, displayRows) {
   });
 }
 
-// The whole portfolio as one series, day by day — every open or closed non-cash position's lots
+// The whole portfolio as one series, day by day — every open or closed position's lots
 // replayed at each date, priced from that position's own prices file and anchored to Parqet's own
 // latest price the same way valueOverTime is. The calendar is the union of every held position's
 // trading days, so a date only one position actually traded on still lands correctly.
@@ -557,7 +557,7 @@ function valueOverTime(d, series, displayRows) {
 let PORTFOLIO_SERIES_CACHE = null;
 async function portfolioSeries() {
   if (PORTFOLIO_SERIES_CACHE) return PORTFOLIO_SERIES_CACHE;
-  const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
+  const source = [...ITEMS, ...CLOSED];
   const items = (await Promise.all(source.map(async d => {
     const series = await loadSeries(seriesSlug(d));
     if (!series || !series.rows.length) return null;
@@ -622,7 +622,7 @@ async function computeAsOfRealized(dateStr, fromStr = null) {
   const cacheKey = dateStr + '|' + (fromStr || '') + '|' + MODE;
   if (AS_OF_REALIZED_CACHE.has(cacheKey)) return AS_OF_REALIZED_CACHE.get(cacheKey);
 
-  const source = [...ITEMS, ...CLOSED].filter(d => !d.cash);
+  const source = [...ITEMS, ...CLOSED];
   // One anchored close per position, on the range's start date — fetched only for the positions
   // that actually held something then, so a range whose start predates the whole portfolio costs
   // no requests at all. A position with no series that far back simply stays out of the Map, and
@@ -681,7 +681,6 @@ async function computeAsOfRealized(dateStr, fromStr = null) {
       soldShares, grossProceeds, lastSell, sellCount,
       sellPrice: soldShares > 0 ? grossProceeds / soldShares : NaN,
       split: d.split ?? 1, taxSell, divSold: 0, sinceKnown: false, flows: [], activityCount,
-      cash: false,
     });
   }
 
@@ -715,7 +714,7 @@ const benchNow = () => BENCH.length ? BENCH[BENCH.length - 1].close : NaN;
 // here — every euro is counted exactly once across the two views.
 // TODO: dividends and fee/tax bookings are ignored entirely; they belong to neither side yet.
 function benchAlternative(d) {
-  if (!BENCH.length || d.cash) return NaN;
+  if (!BENCH.length) return NaN;
   const deals = dealsOf(d);
   if (!deals.length) return NaN;
   const lots = survivingLots(deals);
@@ -725,7 +724,7 @@ function benchAlternative(d) {
 // What each sale actually made, measured against the index instead of against cost: proceeds minus
 // what the sold lots' own money would have grown to in the benchmark between buying and selling.
 function realisedAlpha(d) {
-  if (!BENCH.length || d.cash) return NaN;
+  if (!BENCH.length) return NaN;
   const lots = [];
   let alpha = 0, sold = false, unpriced = false;
   for (const t of dealsOf(d)) {
@@ -851,7 +850,7 @@ function tradeVsNow(t) {
   if (!TRADE_VS_NOW_CACHE) {
     TRADE_VS_NOW_CACHE = new Map();
     for (const d of [...ITEMS, ...CLOSED]) {
-      if (d.cash || !(d.lastPrice > 0)) continue;
+      if (!(d.lastPrice > 0)) continue;
       // same array, same order — splitAdjustedDeals maps over dealsOf(d), so indices line up and
       // the ratio of the two share counts is exactly this trade's scale onto today
       const booked = dealsOf(d), adjusted = splitAdjustedDeals(d);
@@ -897,7 +896,7 @@ function holdingYears(iso) {
 // Parqet gives no per-activity cash flows, so this is a CAGR from the first activity date,
 // not a true XIRR — for a position bought in several tranches it understates the real IRR.
 function annualised(d) {
-  if (d.cash || !(d.pur > 0) || !(d.cur > 0) || !Number.isFinite(d.years)) return NaN;
+  if (!(d.pur > 0) || !(d.cur > 0) || !Number.isFinite(d.years)) return NaN;
   return ((d.cur / d.pur) ** (1 / d.years) - 1) * 100;
 }
 
@@ -907,15 +906,19 @@ const nameColor = name => `hsl(${nameHue(name).toFixed(1)}deg var(--core-s) var(
 function build(rows) {
   CCY = rows[0]?.currency || 'EUR';
 
-  const items = rows.map(r => {
+  // Cash accounts are dropped here and exist nowhere downstream. They have no price series and no
+  // dated balance history, so they could never be reconstructed for a past date — every as-of pick
+  // already filtered them out, which left the same portfolio worth two different amounts depending
+  // on whether a range was selected. The only cash equivalent held here is Berkshire, and that is
+  // an ordinary security needing nothing special.
+  const items = rows.filter(r => (r.assetType || '').toLowerCase() !== 'cash').map(r => {
     const cur = num(r.currentValue), pur = num(r.purchaseValue);
     const gain = cur - pur;
-    const cash = (r.assetType || '').toLowerCase() === 'cash';
-    const state = cash || pur === 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss');
+    const state = pur === 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss');
     return {
       portfolio: r.portfolio || 'Portfolio', name: r.name, shares: num(r.shares),
-      cur, pur, purAbs: pur, gain, ret: pur > 0 ? gain / pur * 100 : 0, cash, state,
-      rel: cash ? 0 : num(r.realizedGainNet),
+      cur, pur, purAbs: pur, gain, ret: pur > 0 ? gain / pur * 100 : 0, state,
+      rel: num(r.realizedGainNet),
       firstActivity: r.earliestActivityDate || '',
       identifier: r.identifier || '',
       lastPrice: num(r.lastPrice),
@@ -940,7 +943,7 @@ function build(rows) {
     //
     // Share counts need no adjustment: Parqet's `shares` is the holding as it stands now, and the
     // provider's closes are split-adjusted to that same current-day scale.
-    const fresh = d.cash ? null : PRICES.get(d.identifier);
+    const fresh = PRICES.get(d.identifier);
     if (fresh && fresh.price > 0 && (!d.lastPriceDate || fresh.asof > d.lastPriceDate)) {
       d.lastPrice = fresh.price;
       d.lastPriceDate = fresh.asof;
@@ -977,7 +980,7 @@ function build(rows) {
       ? d.soldShares * d.split * d.lastPrice - d.grossProceeds : NaN;
     // Parqet stops quoting a position once it is closed: if the price is no younger than the
     // last sale there is nothing to compare against, and the figure would be noise
-    d.benchAlt = d.cash ? NaN : benchAlternative(d);
+    d.benchAlt = benchAlternative(d);
     d.alpha = realisedAlpha(d);
     const divs = splitDividends(d);
     d.divHeld = divs.held > DIV_FLOOR * (d.purAbs || Infinity) ? divs.held : 0;
@@ -1020,21 +1023,17 @@ function applyMode(items) {
     d.pur = Number.isFinite(base) ? base : d.purAbs;
     d.gain = d.cur + (d.divHeld || 0) - d.pur;      // income the shares paid out counts as return
     d.ret = d.pur > 0 ? d.gain / d.pur * 100 : 0;
-    d.state = (d.cash || !(d.pur > 0) || Math.abs(d.gain) < 0.005) ? 'flat'
-            : (d.gain > 0 ? 'gain' : 'loss');
-    d.core = d.cash ? 'var(--flat)' : nameColor(d.label);
+    d.state = (!(d.pur > 0) || Math.abs(d.gain) < 0.005) ? 'flat' : (d.gain > 0 ? 'gain' : 'loss');
+    d.core = nameColor(d.label);
   });
 }
 const barValue = d => (d.isTax || d.isDiv) ? d.relPre
   : (MODE === 'rel' ? (Number.isFinite(d.alpha) ? d.alpha : 0) : d.relPre);
 
-// cash sits outside invested/gain: Parqet reports its "purchase value" as cumulative deposits
 function totals(rows) {
   const cur = rows.reduce((s, d) => s + d.cur, 0);
-  const inv = rows.filter(d => !d.cash);
-  const pur = inv.reduce((s, d) => s + d.pur, 0);
-  return { cur, pur, gain: inv.reduce((s, d) => s + d.cur, 0) - pur,
-           rel: inv.reduce((s, d) => s + (d.relPre ?? d.rel), 0) };
+  const pur = rows.reduce((s, d) => s + d.pur, 0);
+  return { cur, pur, gain: cur - pur, rel: rows.reduce((s, d) => s + (d.relPre ?? d.rel), 0) };
 }
 
 /* ---------- ingest ----------
@@ -1051,9 +1050,9 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
     if (cfg.benchmarkIsin) benchIsin = cfg.benchmarkIsin;
   } catch { /* keep defaults */ }
 
-  // one registry row per instrument, indexed by ISIN and — for cash, which carries none — by the
-  // exact name Parqet reports. NAMES/SECTORS stay as they were so every reader downstream is
-  // unchanged; only where they are filled from has moved.
+  // one registry row per instrument, indexed by ISIN. NAMES/SECTORS stay as they were so every
+  // reader downstream is unchanged; only where they are filled from has moved. The by-name index
+  // that used to sit here existed for cash alone, which carries no ISIN and is no longer tracked.
   INSTRUMENTS = new Map();
   NAMES = new Map();
   SECTORS = new Map();
@@ -1061,7 +1060,6 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
     if (!r.id) return;
     INSTRUMENTS.set(r.id, r);
     if (r.isin) INSTRUMENTS.set(r.isin, r);
-    if (!r.isin && r.name) INSTRUMENTS.set(r.name, r);      // cash: matched on its Parqet name
     if (r.display) NAMES.set(r.isin || r.name, r.display);
     if (r.isin && r.sector) SECTORS.set(r.isin, r.sector);
   });

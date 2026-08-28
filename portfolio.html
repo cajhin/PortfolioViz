@@ -3,7 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Parqet Portfolios</title>
+<title>Portfolio</title>
+<!-- Tab icon: a stylized j on the page's own accent blue, inline as a data URI so the page stays
+     four files with nothing to fetch. A solid tile rather than a bare glyph, so it reads the same
+     against a light or a dark tab strip without needing a prefers-color-scheme variant. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Ccircle cx='21.2' cy='7.5' r='2.4' fill='%23fff'/%3E%3Cpath d='M21.2 12.5V20a5.2 5.2 0 0 1-10.4 0' fill='none' stroke='%23fff' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="portfolio.css">
 </head>
 <body>
@@ -23,7 +27,7 @@
     <div class="card" id="totalsCard">
       <div class="totals">
         <div class="tile curtile" id="tileCur"><div class="k" id="kCur">Current value</div><div class="v" id="tCur">–</div></div>
-        <div class="tile"><div class="k" id="kPur">Invested (ex cash)</div><div class="v" id="tPur">–</div></div>
+        <div class="tile"><div class="k" id="kPur">Invested</div><div class="v" id="tPur">–</div></div>
         <div class="tile"><div class="k" id="kGain">Unrealised gain</div><div class="v" id="tGain">–</div></div>
         <div class="tile"><div class="k" id="kRel">Realised pre-tax (incl. closed)</div><div class="v" id="tRel">–</div></div>
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
@@ -65,7 +69,7 @@
             </label>
             <!-- title and aria-labels track the selected span; syncAsOfControls() rewrites them -->
             <div class="asof-step" id="asOfStep" tabindex="0"
-                 title="Slide the whole range · ← → a day · ↑ ↓ a month · PgUp/PgDn a year">
+                 title="Slide the whole range · ← → a day · ↓ ↑ a month · PgDn/PgUp a year (back on ← ↓ PgDn, forward on → ↑ PgUp)">
               <button type="button" id="asOfDayBack" aria-label="Previous day">◀</button>
               <button type="button" id="asOfDayFwd" aria-label="Next day">▶</button>
             </div>
@@ -103,12 +107,10 @@
         the gain. A position that
         lost is drawn the same way, only outwards: its light core runs out to the rim as the
         <b>current value</b> and the light red band <em>beyond</em> the rim — area-true to the purchase
-        value — is the loss. Cash accounts are
-        grey and flat: Parqet reports their “purchase value” as cumulative deposits rather than a cost
-        basis, so they are left out of the invested and gain figures. Wedges worth at least 0.3% of the total are labelled where the
+        value — is the loss. Wedges worth at least 0.3% of the total are labelled where the
         column has room; the table below lists every position. Outside all of that, a green band
         shows <b>realised</b> gains from sales (area-true, same scale); a dark red band shows a realised
-        loss. Cash rows carry no realised band — Parqet books deposits and withdrawals there.
+        loss.
       </div>
       <div class="key" id="keyMap">
         Each tile is one position, its <em>area</em> proportional to the position's <b>current value</b> —
@@ -123,7 +125,7 @@
         modest yearly rate shows a bar lighter than its body, and a recent flyer shows a darker one.
         The annualised figure is a CAGR from the position's first activity date — Parqet exposes no
         per-trade cash flows, so it approximates IRR and understates positions bought in several
-        tranches. Cash sits at neutral grey. Hover a tile for the exact figures.
+        tranches. Hover a tile for the exact figures.
       </div>
       </div>
     </div>

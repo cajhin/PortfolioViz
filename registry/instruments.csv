@@ -24,12 +24,10 @@ US0887861088,US0887861088,bicycle,Bicycle Therapeutics ADR,Bicycle,security,EUR,
 DE000SHA0100,DE000SHA0100,schaeffler,Schaeffler,Schaeffler,security,EUR,Other,
 US0846707026,US0846707026,berkshireb,Berkshire Hathaway 'B',Berkshire B,security,EUR,Cash,share class kept
 US1858991011,US1858991011,clevelandcliffs,Cleveland-Cliffs,Cleveland-Cliffs,security,EUR,Other,
-CASH:traderepublic,,,Verrechnungskonto,Cash,cash,EUR,Cash,matched by name — cash rows carry no ISIN
 IE00B4L5Y983,IE00B4L5Y983,msciworld,iShares Core MSCI World UCITS ETF - USD ACC,MSCI World,security,EUR,Other,
 IE00BMTX2B82,IE00BMTX2B82,aexetf,iShs-AEX UCITS ETF Reg. Shs EUR Acc. oN,AEX ETF,security,EUR,Other,
 JP3979200007,JP3979200007,lasertec,LASERTEC CORP.,Lasertec,security,EUR,Semiconductors,
 US02156V1098,US02156V1098,oklo,Oklo,Oklo,security,EUR,AI Supply,
-CASH:comdirect,,,Girokonto,Cash,cash,EUR,Cash,matched by name — cash rows carry no ISIN
 US3373451026,US3373451026,nasdaq100tech,First Tr.NASDAQ-100 Tech.In.Fd Registered Shares o.N.,Nasdaq-100 Tech,security,EUR,Other,First Trust NASDAQ-100 Technology Sector Index Fund
 IE00B3YLTY66,IE00B3YLTY66,acwiimi,State Street SPDR MSCI ACWI IMI UCITS ETF (Acc),ACWI IMI,security,EUR,Other,
 US8740391003,US8740391003,tsmc,TSMC (ADR),TSMC,security,EUR,Semiconductors,
@@ -39,7 +37,7 @@ IE00BMFKG444,IE00BMFKG444,nasdaq100etf,Xtrackers Nasdaq 100 UCITS ETF 1C,Nasdaq 
 IE00B2QWDY88,IE00B2QWDY88,japansmallcap,iShares MSCI Japan SmallCap UCITS ETF - USD DIS,Japan SmallCap,security,EUR,Other,
 US55024U1097,US55024U1097,lumentum,Lumentum,Lumentum,security,EUR,Optical,
 US5949181045,US5949181045,microsoft,Microsoft,Microsoft,security,EUR,Hyperscaler,
-IE00B9M6SJ31,IE00B9M6SJ31,globalcorpbond,iShares Global Corp Bond EUR Hedged UCITS ETF - DIS H,Global Corp Bond,security,EUR,Other,
+IE00B9M6SJ31,IE00B9M6SJ31,globalcorpbond,iShares Global Corp Bond EUR Hedged UCITS ETF - DIS H,Global Corp Bond,security,EUR,Cash,
 DE0008430026,DE0008430026,munichre,Münchener Rück,Munich Re,security,EUR,Other,
 IE00BHZRQZ17,IE00BHZRQZ17,indiaetf,Franklin FTSE India UCITS ETF - USD ACC,India ETF,security,EUR,Other,
 DE000FD08PD3,DE000FD08PD3,nvidiacall,Call auf Nvidia [Société Générale],NVIDIA call,security,EUR,Semiconductors,warrant

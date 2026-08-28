@@ -80,7 +80,7 @@ const rangeAt = () => (VIEW === 'map' && AS_OF) ? AS_OF : null;
 const rangeTo = () => rangeAt() || TODAY;
 const purLabel = short => MODE === 'rel' ? `Same money in ${BENCH_LABEL}`
   : rangeFrom() ? `Value on ${deDate(rangeFrom())}`
-  : (short ? 'Purchase value' : 'Invested (ex cash)');
+  : (short ? 'Purchase value' : 'Invested');
 const gainLabel = () => MODE === 'rel' ? `Ahead of ${BENCH_LABEL}`
   : rangeFrom() ? `Gain since ${deDate(rangeFrom())}` : 'Unrealised gain';
 // The other end of the same pair, so the two read together: "Value on 02.01.2025 → Value on
@@ -136,10 +136,10 @@ function renderPie(items) {
   const g = el('g', {});
   const labels = el('g', {});
 
+  const nodes = nodeMap();
   items.forEach(d => {
     const a0 = d.a0 + GAP / 2, a1 = Math.max(d.a1 - GAP / 2, d.a0 + GAP / 2 + 0.0005);
     const stroke = { stroke: 'var(--surface-1)', 'stroke-width': 0.75, 'stroke-linejoin': 'round' };
-    d.nodes = [];
 
     // outer band — the gain (inside the rim) or the loss (protruding past it)
     if (d.rOut - d.rIn > 0.5) {
@@ -147,14 +147,14 @@ function renderPie(items) {
         d: wedge(cx, cy, d.rIn, d.rOut, a0, a1),
         fill: d.state === 'loss' ? 'var(--loss-light)' : 'var(--gain-light)', ...stroke,
       });
-      g.appendChild(outer); d.nodes.push(outer);
+      g.appendChild(addNode(nodes, d, outer));
     }
-    // inner disc — purchase value (gainers) or current value (losers and cash)
+    // inner disc — purchase value (gainers) or current value (losers)
     const inner = el('path', {
       d: wedge(cx, cy, 0, Math.max(d.rIn, 0.5), a0, a1),
       fill: d.core, ...stroke,
     });
-    g.appendChild(inner); d.nodes.push(inner);
+    g.appendChild(addNode(nodes, d, inner));
 
     // realized result — outermost band, green when positive, hatched red when negative
     if (d.rRel - d.rOut > 0.5) {
@@ -162,7 +162,7 @@ function renderPie(items) {
         d: wedge(cx, cy, d.rOut, d.rRel, a0, a1),
         fill: d.rel > 0 ? 'var(--realized)' : 'var(--loss-deep)', ...stroke,
       });
-      g.appendChild(rel); d.nodes.push(rel);
+      g.appendChild(addNode(nodes, d, rel));
     }
   });
 
@@ -225,15 +225,26 @@ function renderPie(items) {
     'a band beyond it a loss, and the outermost bands realised results');
   svg.replaceChildren(g, dividers, rim, labels);
 
-  attachTip(items);
+  attachTip(items, nodes);
 
   legendPie();
+  return nodes;
 }
 
 /* ---------- shared chrome: tooltip fragments and placement ----------
    The map/pie tiles and the realised bar describe the same positions from two angles, so the
    rows they have in common are built here once. Each returns HTML, or '' when the fact doesn't
    apply to this position — callers just concatenate and never test for themselves. */
+// Every chart hangs its own SVG elements off the positions it draws, and more than one chart can
+// be showing the same position object at once — the map and the realised bar both draw a position
+// you have sold part of. A `nodes` slot on the position itself cannot hold both: whichever chart
+// drew last would win, and the loser's hover would then dim elements belonging to a different
+// chart while its own tiles sat untouched. Each renderer keeps its own Map instead, position →
+// its elements *in that chart*, and hands it to the matching attach function.
+const nodeMap = () => new Map();
+const addNode = (map, d, n) => { (map.get(d) || map.set(d, []).get(d)).push(n); return n; };
+const nodesOf = (map, d) => map.get(d) || [];
+
 const posNeg = v => v >= 0 ? 'pos' : 'neg';
 const tipRow = (label, value, cls) =>
   `<div class="r"><span>${label}</span><b${cls ? ` class="${cls}"` : ''}>${value}</b></div>`;
@@ -278,9 +289,9 @@ function placeTip(tip, wrapEl, e) {
 // a divide over a few hundred already-parsed rows, which costs less than the string concatenation
 // around it, and it is what lets the graph follow the range picker without re-rendering the map.
 //
-// Returns '' rather than a placeholder when there is nothing to draw: a cash tile, an instrument
-// with no price file, or a series that simply has not arrived yet. A tooltip one row shorter is a
-// better answer than an empty box where a graph should be.
+// Returns '' rather than a placeholder when there is nothing to draw: an instrument with no price
+// file, or a series that simply has not arrived yet. A tooltip one row shorter is a better answer
+// than an empty box where a graph should be.
 const SPARK = { w: 208, h: 46, pad: 3, max: 90 };
 function sparkline(d) {
   try {
@@ -294,7 +305,6 @@ function sparkline(d) {
   }
 }
 function sparkSvg(d) {
-  if (d.cash) return '';
   // rangeFrom/rangeTo, not AS_FROM/AS_OF: the pie shares this tooltip and does not reconstruct,
   // so its figures are live and its graph has to be too, or the two would describe different days
   const path = pricePath(d, rangeFrom(), rangeTo());
@@ -355,10 +365,10 @@ function sparkMarks(d, path, x, y) {
 // it is there. renderMap also calls this for everything on screen, which in practice means the
 // first hover already has it.
 function warmSeries(d) {
-  if (!d.cash) loadSeries(seriesSlug(d));
+  loadSeries(seriesSlug(d));
 }
 
-function attachTip(items) {
+function attachTip(items, nodes) {
   const svg = document.getElementById('pie');
   const tip = document.getElementById('tip');
   // #tip lives inside #chartBody, but #chartBody isn't positioned — its containing block is
@@ -367,14 +377,14 @@ function attachTip(items) {
   // rendering the tooltip that much too high — close enough to slide over the cursor that started
   // it. .closest('.chartwrap') is the same fix renderClosed() already needed for this same tip.
   const wrapEl = svg.closest('.chartwrap');
-  items.forEach(d => d.nodes.forEach(n => {
+  items.forEach(d => nodesOf(nodes, d).forEach(n => {
     n.style.cursor = 'default';
     n.addEventListener('pointerenter', e => {
       tip.innerHTML =
-        tipHead(d, !d.cash) +
+        tipHead(d, true) +
         `<div class="pf">${d.portfolio}</div>` +
         tipRow('Share', fmtShare(d.share)) +
-        (d.cash ? '' : tipRow(purLabel(true), fmtMoney2(d.pur))) +
+        tipRow(purLabel(true), fmtMoney2(d.pur)) +
         tipRow(curLabel(), fmtMoney2(d.cur)) +
         (d.divHeld > 0 ? tipRow('Dividends', fmtMoney2(d.divHeld), 'income') : '') +
         (d.state === 'flat' ? '' :
@@ -388,12 +398,12 @@ function attachTip(items) {
         sparkline(d);
       tip.classList.add('on');
       placeTip(tip, wrapEl, e);
-      items.forEach(o => o.nodes.forEach(m => m.style.opacity = o === d ? 1 : 0.35));
+      items.forEach(o => nodesOf(nodes, o).forEach(m => m.style.opacity = o === d ? 1 : 0.35));
     });
     n.addEventListener('pointermove', e => placeTip(tip, wrapEl, e));
     n.addEventListener('pointerleave', () => {
       tip.classList.remove('on');
-      items.forEach(o => o.nodes.forEach(m => m.style.opacity = 1));
+      items.forEach(o => nodesOf(nodes, o).forEach(m => m.style.opacity = 1));
     });
   }));
 }
@@ -418,7 +428,6 @@ function legendPie() {
     mk('var(--loss-light)', 'var(--loss-light)', 'Unrealised loss — light red band beyond the rim'),
     mk('var(--realized)', 'var(--realized)', 'Realised gain — green band outside'),
     mk('var(--loss-deep)', 'var(--loss-deep)', 'Realised loss — dark red band outside'),
-    mk('var(--flat)', 'var(--flat)', 'Cash — flat'),
     mk('var(--rim)', 'var(--rim)', 'Black radial line — portfolio boundary'),
   );
 }
@@ -427,7 +436,7 @@ function legendPie() {
 // Where a position's prices actually come from, compact enough for a table cell: the provider's
 // initial and its own symbol, e.g. "Y-HY9H.F". The exchange suffix is kept — two listings of one
 // instrument differ only by it (XNAS.DE vs IE00BMFKG444.SG), and that is exactly what this column
-// exists to disambiguate. Cash, and anything with no quotable source, gets a dash.
+// exists to disambiguate. Anything with no quotable source gets a dash.
 const SOURCE_LETTER = { yahoo: 'Y', manual: 'M' };
 function sourceTag(d) {
   const s = SOURCES.get(d.identifier);
@@ -448,14 +457,13 @@ function renderMeta(items, closed = []) {
         `<td class="src">${sourceTag(d)}</td>` +
         `<td class="posname"><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
         `<td>${d.shares.toLocaleString('de-DE')}</td>` +
-        `<td>${d.cash ? '–' : fmtMoney2(d.pur)}</td><td>${fmtMoney2(d.cur)}</td>` +
+        `<td>${fmtMoney2(d.pur)}</td><td>${fmtMoney2(d.cur)}</td>` +
         `<td class="${cls}">${d.state === 'flat' ? '–' : fmtMoney2(d.gain)}</td>` +
         `<td class="${cls}">${d.state === 'flat' ? '–' : fmtPct(d.ret)}</td>` +
         `<td class="${d.relPre > 0 ? 'realized' : d.relPre < 0 ? 'neg' : ''}">` +
         `${Math.abs(d.relPre) > 0.005 ? fmtMoney2(d.relPre) : '–'}</td>`;
-      // cash has no price series, so nothing to chart — every real position opens it on a click
       // scoped to its own name cell, not the whole row, so the surrounding figures stay plain text
-      if (!d.cash) tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
+      tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
       trs.push(tr);
     });
     const s = totals(rows);
@@ -550,9 +558,9 @@ let WATCH_DRAWN_FOR = null;
 function renderWatch() {
   if (WATCH_DRAWN_FOR === SHOW_MONEY) return;
   WATCH_DRAWN_FOR = SHOW_MONEY;
-  const held = new Set([...ITEMS, ...CLOSED].filter(d => !d.cash).map(d => d.identifier));
+  const held = new Set([...ITEMS, ...CLOSED].map(d => d.identifier));
   const rows = [...new Set(INSTRUMENTS.values())]
-    .filter(inst => inst.type !== 'cash' && !held.has(inst.id) && !held.has(inst.isin))
+    .filter(inst => !held.has(inst.id) && !held.has(inst.isin))
     .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
   document.getElementById('watchHead').textContent =
     `${rows.length} tracked, never held`;
@@ -561,7 +569,7 @@ function renderWatch() {
     // enough of a position-shaped object for openDetail()/sourceTag() to work on: no trades will
     // ever match tradeKey(d), so the value bar is correctly all-zero rather than wrong
     const d = { identifier: inst.id, name: inst.name, label: inst.display || inst.name,
-               portfolio: 'Watchlist', cash: false };
+               portfolio: 'Watchlist' };
     const last = PRICES.get(inst.id);
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
@@ -598,7 +606,7 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
   const rEl = document.getElementById('tRel');
   rEl.textContent = fmtMoney2(rel);
   rEl.className = 'v ' + (rel >= 0 ? 'realized' : 'neg');
-  document.getElementById('tN').textContent = items.filter(d => !d.cash).length;
+  document.getElementById('tN').textContent = items.length;
 
   // freshness always comes from the live data, never from an as-of pick's synthetic date
   const asOf = ITEMS.reduce((t, d) => d.lastPriceDate > t ? d.lastPriceDate : t, '');
@@ -714,20 +722,20 @@ function grade(v, cap) {
   const x = Math.min(Math.abs(v), cap);
   return (x / (x + GRADE_HALF)) / (cap / (cap + GRADE_HALF));
 }
-function gradeColor(v, cash) {
+function gradeColor(v) {
   const st = mapStops();
-  if (cash || !Number.isFinite(v)) return rgb(st.zero);
+  if (!Number.isFinite(v)) return rgb(st.zero);
   const arm = v >= 0 ? st.up : st.down;
   return rgb(lerp(st.zero, arm.full, grade(v, v >= 0 ? GRADE_UP : GRADE_DOWN)));
 }
 const barColor = d => MODE === 'rel'
-  ? gradeColor(d.ret, d.cash)
-  : gradeColor(Number.isFinite(d.irr) ? d.irr : d.ret, d.cash);
+  ? gradeColor(d.ret)
+  : gradeColor(Number.isFinite(d.irr) ? d.irr : d.ret);
 
 // the bar is the result measured against the tile it sits in — the current value.
 // +100% return → half the tile; −50% return → the loss equals the current value, so the whole tile.
 function barShare(d) {
-  if (d.cash || d.state === 'flat' || d.cur <= 0) return 0;
+  if (d.state === 'flat' || d.cur <= 0) return 0;
   return Math.min(1, Math.abs(d.gain) / d.cur);
 }
 const luminance = rgb => {
@@ -740,15 +748,17 @@ const luminance = rgb => {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
 
-// The map's sector: from the registry's own sector column (ISIN → sector), cash gets its
-// own bucket, anything the file doesn't cover — a new position, before it's been triaged — falls
-// to "Other" rather than breaking the grouping.
-const sectorOf = d => d.cash ? 'Cash' : (SECTORS.get(d.identifier) || 'Other');
+// The map's sector: from the registry's own sector column (ISIN → sector). Anything the file
+// doesn't cover — a new position, before it's been triaged — falls to "Other" rather than
+// breaking the grouping.
+const sectorOf = d => SECTORS.get(d.identifier) || 'Other';
 
 // Fixed order so a sector's colour and position among its peers stay put across sessions — only
 // the sectors that actually appear are drawn, but their relative order never depends on which
 // ones happen to be present today. Anything not listed here (a sector added to the CSV later)
 // still gets a colour, just hashed rather than hand-picked.
+// "Cash" here is a *sector*, not the asset type that was removed — the bucket for holdings kept
+// as cash equivalents rather than for a bank balance. It sits last, after Other.
 const SECTOR_ORDER = ['Optical', 'Hyperscaler', 'Semiconductors', 'Cybersecurity', 'AI Supply',
   'Other', 'Cash'];
 function sectorHue(name) {
@@ -881,7 +891,8 @@ function renderMap(items, asOf) {
   }
 
   const g = el('g', {});
-  items.forEach(d => { d.nodes = []; warmSeries(d); });   // for the tooltip's sparkline
+  const nodes = nodeMap();
+  items.forEach(warmSeries);                             // for the tooltip's sparkline
   const nudge = 1 / mapScale;
 
   // two-level treemap: sectors first, each position's own tile squarified inside its sector's
@@ -933,22 +944,28 @@ function renderMap(items, asOf) {
     layTiles(sr, bySector.get(sr.item)).forEach((t, i) => {
       const d = t.item;
       const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
-      const fill = gradeColor(d.state === 'flat' ? NaN : d.ret, d.cash);
+      const fill = gradeColor(d.state === 'flat' ? NaN : d.ret);
       if (i === 0) firstTile = t;   // top-left tile: the sector label overlays it, below
       // no stroke on either layer — the 1px layout gap is the separator (showing the sector's
       // own background colour through), so the bar can never look wider than the tile it sits in
+      // The body is the whole tile and the only thing here that takes a pointer: it carries the
+      // click, the pointer cursor and — through attachTip — the tooltip. Everything drawn over it
+      // below opts out with pointer-events, so the hit target is the tile as you see it rather
+      // than whatever fraction of it the overlays happen to leave uncovered. Those overlays are
+      // still in `nodes`, because dimming a tile has to dim all of it.
       const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
                                 class: 'maprect' });
       rect.addEventListener('click', () => openDetail(d));
-      g.appendChild(rect); d.nodes.push(rect);
+      g.appendChild(addNode(nodes, d, rect));
 
       // income band at the head of the tile: dividends the held shares paid, against tile value
       if (d.divHeld > 0 && d.cur > 0 && h > 6) {
         const ih = Math.max(1.5, Math.min(h / 3, h * d.divHeld / d.cur));
         const band = el('rect', {
           x: t.x + 0.5, y: t.y + 0.5, width: w, height: ih, fill: 'var(--income)',
+          'pointer-events': 'none',
         });
-        g.appendChild(band); d.nodes.push(band);
+        g.appendChild(addNode(nodes, d, band));
       }
 
       const share = barShare(d);            // also decides the label's headroom, further down
@@ -956,13 +973,13 @@ function renderMap(items, asOf) {
         const bh = Math.max(1.5, h * share);
         const bar = el('rect', {
           x: t.x + 0.5, y: t.y + 0.5 + (h - bh), width: w, height: bh,
-          fill: barColor(d),
+          fill: barColor(d), 'pointer-events': 'none',
         });
-        g.appendChild(bar); d.nodes.push(bar);
+        g.appendChild(addNode(nodes, d, bar));
       }
 
       if (w > 4 && h > 7) {
-        const dark = d.fund || d.cash;          // funds and cash in black ink, everything else white
+        const dark = d.fund;                    // funds in black ink, everything else white
         const cx = t.x + w / 2;
         const free = h * (1 - share);                       // headroom above the bar
         const cy = t.y + (free > 26 ? free / 2 : h / 2);
@@ -983,7 +1000,7 @@ function renderMap(items, asOf) {
             x: cx, y: cy + 10 * nudge, 'text-anchor': 'middle',
             class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
           });
-          sub.textContent = d.cash ? fmtMoney(d.cur) : fmtPct(d.ret);
+          sub.textContent = fmtPct(d.ret);
           g.appendChild(sub);
         }
       }
@@ -1003,8 +1020,9 @@ function renderMap(items, asOf) {
 
   svg.setAttribute('aria-label', 'Treemap of all positions grouped by sector, area by current value, colour by return');
   svg.replaceChildren(g);
-  attachTip(items);
+  attachTip(items, nodes);
   legendMap();
+  return nodes;
 }
 
 // paint the legend through the same curve, so the swatch shows where the contrast sits
@@ -1025,14 +1043,15 @@ function gradientStops() {
 function renderClosed(over = null) {
   const wrap = document.getElementById('closedWrap');
   const svg = document.getElementById('closed');
-  const has = d => Math.abs(barValue(d)) > 0.005 && !d.cash;
+  const has = d => Math.abs(barValue(d)) > 0.005;
   const closed = (over ? over.closed : CLOSED).filter(has);
   const open = (over ? over.open : ITEMS).filter(has);
   const divTotal = over ? over.divTotal : DIV_TOTAL;
   const taxTotal = over ? over.taxTotal : TAX_TOTAL;
   const divRows = over ? over.divRows : DIV_ROWS;
   const taxSplit = over ? over.taxSplit : TAX_SPLIT;
-  if (!closed.length && !open.length) { wrap.hidden = true; return; }
+  const nodes = nodeMap();
+  if (!closed.length && !open.length) { wrap.hidden = true; return nodes; }
   wrap.hidden = false;
 
   // y is the bar's own top padding, inside the svg, below the "Realized gains" header that sits
@@ -1045,10 +1064,10 @@ function renderClosed(over = null) {
                                    .sort((a, b) => Math.abs(barValue(b)) - Math.abs(barValue(a)));
   const divRow = divTotal > 0.005
     ? { name: 'Dividends', label: 'Dividends', portfolio: 'all portfolios', relPre: divTotal,
-        isDiv: true, sold: true, flows: [], nodes: [] }
+        isDiv: true, sold: true, flows: [] }
     : null;
   const taxRow = taxTotal > 0.005
-    ? { name: 'Taxes', label: 'Taxes', portfolio: 'all portfolios', relPre: -taxTotal, isTax: true, flows: [], nodes: [] }
+    ? { name: 'Taxes', label: 'Taxes', portfolio: 'all portfolios', relPre: -taxTotal, isTax: true, flows: [] }
     : null;
   const sub = (label, rows) => ({ label: `${label} · ${rows.length}`, rows });
 
@@ -1091,8 +1110,7 @@ function renderClosed(over = null) {
         const fill = d.isTax ? gradeColor(-60, false)
           : d.isDiv ? 'var(--income)' : gradeColor(pct, false);
         const rect = el('rect', { x, y, width: Math.max(0, w - 0.75), height: h, fill });
-        g.appendChild(rect);
-        d.nodes = [rect];
+        g.appendChild(addNode(nodes, d, rect));
 
         // what the shares did after the sale, read from your side — a rise since selling is a
         // loss to you, so the grade is inverted. Closed positions get it too, now that
@@ -1107,7 +1125,7 @@ function renderClosed(over = null) {
             x, y: y + h + STRIP_Y, width: Math.max(0, w - 0.75), height: STRIP_H,
             fill: gradeColor(MODE === 'rel' ? pct : -pct, false),
           });
-          g.appendChild(strip); d.nodes.push(strip);
+          g.appendChild(addNode(nodes, d, strip));
         }
         if (w > 46) {
           const dark = luminance(fill) > 0.55;
@@ -1156,10 +1174,11 @@ function renderClosed(over = null) {
     ` · net ${fmtMoney(wins + loss - taxTotal)}`;
   netEl.className = wins + loss - taxTotal >= 0 ? 'realized' : 'neg';
 
-  attachTipClosed(ordered, { divTotal, divRows, taxTotal, taxSplit });
+  attachTipClosed(ordered, nodes, { divTotal, divRows, taxTotal, taxSplit });
+  return nodes;
 }
 
-function attachTipClosed(rows, ctx = null) {
+function attachTipClosed(rows, nodes, ctx = null) {
   const divTotal = ctx ? ctx.divTotal : DIV_TOTAL;
   const divRows = ctx ? ctx.divRows : DIV_ROWS;
   const taxTotal = ctx ? ctx.taxTotal : TAX_TOTAL;
@@ -1169,7 +1188,7 @@ function attachTipClosed(rows, ctx = null) {
   // dividends/taxes are synthetic rows (all portfolios, no single position behind them) — every
   // other row here is a real position, open or closed, and opens the same chart a map tile does
   const clickable = d => !d.isDiv && !d.isTax;
-  rows.forEach(d => d.nodes.forEach(n => {
+  rows.forEach(d => nodesOf(nodes, d).forEach(n => {
     n.style.cursor = clickable(d) ? 'pointer' : 'default';
     n.addEventListener('pointerenter', e => {
       if (d.isDiv) {
@@ -1221,13 +1240,13 @@ function attachTipClosed(rows, ctx = null) {
       }
       tip.classList.add('on');
       placeTip(tip, wrapEl, e);
-      rows.forEach(o => o.nodes.forEach(m => m.style.opacity = o === d ? 1 : 0.35));
+      rows.forEach(o => nodesOf(nodes, o).forEach(m => m.style.opacity = o === d ? 1 : 0.35));
     });
     n.addEventListener('pointermove', e => placeTip(tip, wrapEl, e));
     if (clickable(d)) n.addEventListener('click', () => openDetail(d));
     n.addEventListener('pointerleave', () => {
       tip.classList.remove('on');
-      rows.forEach(o => o.nodes.forEach(m => m.style.opacity = 1));
+      rows.forEach(o => nodesOf(nodes, o).forEach(m => m.style.opacity = 1));
     });
   }));
 }
@@ -1253,18 +1272,18 @@ function legendMap() {
 // Both lines rebased to 100 at the first date shown, so shape is comparable regardless of price.
 // Clicking a trade marker re-anchors the benchmark to that date instead, so the two lines meet there.
 
-// Every open or closed, non-cash position — the pool clicking the benchmark's own label can pick
+// Every open or closed position — the pool clicking the benchmark's own label can pick
 // a replacement from. Deduped by identifier: the same ISIN can appear twice (open in one
 // portfolio, closed in another — POET Technologies does), and it should only offer once.
 function benchmarkCandidates() {
   const seen = new Map();
   [...ITEMS, ...CLOSED].forEach(d => {
-    if (!d.cash && !seen.has(d.identifier)) seen.set(d.identifier, d);
+    if (!seen.has(d.identifier)) seen.set(d.identifier, d);
   });
   // every registry instrument tracked but never held gets a shot too — the same pool renderWatch()
   // lists under "Watch": comparing against a name you don't own is exactly what that tab is for
   [...new Set(INSTRUMENTS.values())]
-    .filter(inst => inst.type !== 'cash' && !seen.has(inst.id) && !seen.has(inst.isin))
+    .filter(inst => !seen.has(inst.id) && !seen.has(inst.isin))
     .forEach(inst => seen.set(inst.id, { identifier: inst.id, label: inst.display || inst.name }));
   return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -1352,7 +1371,7 @@ function rangeStartFor(range, d, series) {
 const EXTRA_COLOURS = ['var(--flat)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
 
 // the sentinel identifier for "the whole portfolio" as a comparison line — distinct from any real
-// instrument's identifier (an ISIN or a CASH: id), so it can never collide with one
+// instrument's identifier, which is always an ISIN, so it can never collide with one
 const PORTFOLIO_ID = '__portfolio';
 const ALL_ID = '__all';           // "everything at once" — offered by the + compare picker only
 
@@ -2062,7 +2081,8 @@ function syncAsOfControls() {
   document.getElementById('asOfDayBack').setAttribute('aria-label', `Previous ${unit}`);
   document.getElementById('asOfDayFwd').setAttribute('aria-label', `Next ${unit}`);
   document.getElementById('asOfStep').title =
-    `Slide the whole range by one ${unit} · ← → a day · ↑ ↓ a month · PgUp/PgDn a year`;
+    `Slide the whole range by one ${unit} · ← → a day · ↓ ↑ a month · PgDn/PgUp a year ` +
+    `(back on ← ↓ PgDn, forward on → ↑ PgUp)`;
   document.getElementById('asOfClear').hidden = !AS_OF;
 }
 
@@ -2084,8 +2104,13 @@ function shiftDate(iso, months, days) {
 // A market has no close on a weekend, so a start date landing on one would silently be read as
 // the previous Friday anyway. Say so in the field rather than letting the two disagree.
 const weekdayAtOrBefore = iso => isWeekend(iso) ? prevWeekday(iso) : iso;
-// One weekday back — the newest start that still leaves a window with a day in it.
+const weekdayAtOrAfter = iso => isWeekend(iso) ? nextWeekday(iso) : iso;
+// One weekday back — the newest start that still leaves a window with a day in it — and its
+// mirror. Which of the two a stray weekend uses depends on where the edit was heading: snapping
+// backwards is right for a date arrived at going back, and pins the field for one going forward.
 const prevWeekday = iso => weekdayAtOrBefore(shiftDate(iso, 0, -1));
+const nextWeekday = iso => weekdayAtOrAfter(shiftDate(iso, 0, 1));
+const weekdaySnap = (iso, forward) => forward ? weekdayAtOrAfter(iso) : weekdayAtOrBefore(iso);
 
 // The quick-range buttons, in the order they sit on the bar. Each is a span measured back from
 // whatever the *end* currently says, not from today, so moving the end and clicking again
@@ -2150,13 +2175,19 @@ function presetStart(p) {
 const clampDate = (v, lo, hi) => !v ? null : v < lo ? lo : v > hi ? hi : v;
 
 document.getElementById('asFromDate').addEventListener('change', e => {
-  // A start on a Saturday or Sunday is measured from the Friday close regardless — every figure
-  // here reads the last close at or before it — so snap the field to that Friday and say so,
-  // rather than showing a date no market ever traded on. The quick-range buttons already do this;
-  // this is the same rule for a hand-picked date. (A market *holiday* still reads back to the
-  // previous session the same way, but the calendar to detect one is per-exchange and this page
-  // has no single answer for it, so those dates stay as typed.)
-  const snapped = weekdayAtOrBefore(clampDate(e.target.value, TIMELINE_START, TODAY) || '');
+  // A start on a Saturday or Sunday is measured from a weekday close regardless — every figure
+  // here reads the last close at or before it — so snap the field to a real trading day rather
+  // than showing a date no market ever traded on. (A market *holiday* still reads back the same
+  // way, but the calendar to detect one is per-exchange and this page has no single answer, so
+  // those dates stay as typed.)
+  //
+  // Which way it snaps has to follow the edit. A native date field's segment spinners report no
+  // direction, so infer it from the date the field was already showing: stepping the day up from a
+  // Friday means Monday, stepping down means Thursday. Always snapping backwards pins the field —
+  // every press forward lands on Saturday and bounces straight back to the Friday it came from,
+  // so the date can never be walked past a weekend at all.
+  const forward = e.target.value > (AS_FROM || TIMELINE_START);
+  const snapped = weekdaySnap(clampDate(e.target.value, TIMELINE_START, TODAY) || '', forward);
   // clamped down to timelineStart is exactly what "the whole history" means, so it reads as null
   const v = clampDate(snapped, TIMELINE_START, prevWeekday(AS_OF || TODAY));
   AS_FROM = (v && v > TIMELINE_START) ? v : null;
@@ -2231,9 +2262,11 @@ function shiftAsOf(days, months) {
 const slideRange = dir => { const [months, days] = rangeStep(); shiftAsOf(days * dir, months * dir); };
 document.getElementById('asOfDayBack').addEventListener('click', () => slideRange(-1));
 document.getElementById('asOfDayFwd').addEventListener('click', () => slideRange(1));
+// [days, months] per key. One direction rule across both axes: left and down go back, right and
+// up go forward — up moves the range towards today the way it raises a value anywhere else.
 const ASOF_KEYS = {
-  ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
-  PageUp: [0, -12], PageDown: [0, 12],
+  ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowDown: [0, -1], ArrowUp: [0, 1],
+  PageDown: [0, -12], PageUp: [0, 12],
 };
 // on document, not the scrub wrapper: works whether that control is focused, some unrelated
 // button is, or nothing is focused at all. The native date input keeps its own arrow-key segment
