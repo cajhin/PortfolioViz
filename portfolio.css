@@ -207,6 +207,18 @@
   td:nth-child(2) { white-space: normal; }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr.sub td { background: color-mix(in srgb, var(--text-primary) 4%, transparent); font-weight: 600; }
+  /* Sortable headers. The caret is always in the box and merely invisible until the column is
+     sorted, so clicking one never shifts the header text sideways. It sits inside the cell's own
+     padding rather than adding to it, which keeps a header flush with the column it labels. */
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: var(--text-primary); }
+  th.sortable::after {
+    content: '▲'; display: inline-block; width: 0.8em; margin-left: 4px;
+    font-size: 0.85em; opacity: 0;
+  }
+  th.sorted { color: var(--text-primary); }
+  th.sorted::after { opacity: 0.8; }
+  th.sorted.desc::after { content: '▼'; }
   .pos { color: var(--series-2); }
   .realized { color: var(--realized); }
   .income { color: var(--income); }

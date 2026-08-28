@@ -264,8 +264,12 @@ async function loadSeries(slug) {
     const r = await fetch(`prices/${slug}.csv`, { cache: 'no-store' });
     if (r.ok) {
       const file = splitMeta(await r.text());
+      // raw/ccy are the quote before update_prices.py converted it — carried so a price can be
+      // shown in the currency it actually trades in alongside the portfolio-currency figure.
+      // Absent from a hand-maintained file, so every reader has to tolerate 0 and ''.
       const rows = parseCSV(file.body)
-        .map(x => ({ date: x.date, close: num(x.close) }))
+        .map(x => ({ date: x.date, close: num(x.close),
+                     raw: num(x.close_raw), ccy: x.quote_currency || '' }))
         .filter(x => x.date && x.close > 0)
         .sort((a, b) => a.date < b.date ? -1 : 1);
       if (rows.length) out = { rows, meta: file.meta };
@@ -291,21 +295,27 @@ const seriesIfLoaded = slug => SERIES_CACHE.get(slug) || null;
 // Prices only — this is the instrument's path, not the holding's. What the position did over the
 // range depends on when its lots were bought and is already the tile's own colour and figure;
 // this is the line behind that, and it is the same line whether one share was held or a thousand.
-function pricePath(d, fromStr, toStr) {
+// The slice of a position's cached series covering a window, or null when there is no series or
+// too little of it inside the window.
+//
+// Both ends are the *same* rows the range arithmetic uses: seriesCloseAt is "last close at or
+// before", so a window starting on a Sunday — or on a market holiday — is measured from the Friday
+// before it. Slicing from the first row on-or-after the start instead would drop that very row,
+// and with it any gap between it and the next session: anything drawn or quoted from it would be
+// missing exactly the move the percentage beside it reports. Anchor and window must be one row.
+function priceWindow(d, fromStr, toStr) {
   const series = seriesIfLoaded(seriesSlug(d));
   if (!series) return null;
   const all = series.rows;
-  // Both ends are the *same* rows the range arithmetic uses: seriesCloseAt is "last close at or
-  // before", so a window starting on a Sunday — or on a market holiday — is measured from the
-  // Friday before it. Slicing from the first row on-or-after the start instead would drop that
-  // very row, and with it any gap between it and the next session: the line would then be missing
-  // exactly the move the percentage above it is reporting. Anchor and line must be one row.
   const lo = fromStr ? Math.max(0, lastIndexAtOrBefore(all, fromStr)) : 0;
   const hi = toStr ? lastIndexAtOrBefore(all, toStr) : all.length - 1;
-  if (hi < 0 || hi - lo < 1) return null;
-  const rows = all.slice(lo, hi + 1);
+  return (hi < 0 || hi - lo < 1) ? null : all.slice(lo, hi + 1);
+}
+
+function pricePath(d, fromStr, toStr) {
+  const rows = priceWindow(d, fromStr, toStr);
+  if (!rows || !(rows[0].close > 0)) return null;
   const base = rows[0].close;
-  if (!(base > 0)) return null;
   return rows.map(r => ({ date: r.date, pct: (r.close - base) / base * 100 }));
 }
 
@@ -488,6 +498,11 @@ async function computeAsOf(dateStr, fromStr = null) {
     out.push({
       portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
       core: d.core, fund: d.fund, shares: sharesAtD,
+      // purAbs is what these shares actually cost, before any re-basing or benchmark substitution
+      // — the money that left the account. `pur` is what the range or the vs.-World mode measures
+      // against, which on a range pick is a market value rather than a purchase, so only purAbs
+      // divides into an average price paid.
+      purAbs: lotCost(heldLots),
       cur, pur, gain, ret: pur > 0 ? gain / pur * 100 : 0,
       state: pur <= 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss'),
       irr: asOfIrr(lots, cur, dateStr), divHeld: 0, firstActivity: d.firstActivity,

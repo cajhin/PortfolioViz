@@ -62,6 +62,27 @@ function fmt(shape) {
   return f;
 }
 const ccySymbol = () => fmt('money0').formatToParts(0).find(part => part.type === 'currency').value;
+// The symbol for a quote currency that isn't the portfolio's.
+//
+// Only an all-uppercase code is handed to Intl. Not every code in registry/price_sources.csv is
+// ISO 4217: a London listing quotes in GBp — pence — and Intl does not reject that, it matches
+// GBP case-insensitively and hands back "£". Printing a pence figure behind a pound sign would be
+// wrong by a factor of a hundred, so a minor-unit code stands in for its own symbol instead. The
+// same holds for ZAc, ILA and the rest of that family.
+const FOREIGN_SYMBOLS = new Map();
+function foreignSymbol(ccy) {
+  if (!FOREIGN_SYMBOLS.has(ccy)) {
+    let sym = ccy;
+    if (ccy === ccy.toUpperCase()) {
+      try {
+        sym = new Intl.NumberFormat('de-DE', { style: 'currency', currency: ccy })
+          .formatToParts(0).find(part => part.type === 'currency').value;
+      } catch { /* not a currency Intl knows; the code itself reads fine */ }
+    }
+    FOREIGN_SYMBOLS.set(ccy, sym);
+  }
+  return FOREIGN_SYMBOLS.get(ccy);
+}
 const masked = () => `xxxx ${ccySymbol()}`;
 const fmtMoney = v => SHOW_MONEY ? fmt('money0').format(v) : masked();
 const fmtMoney2 = v => SHOW_MONEY ? fmt('money2').format(v) : masked();
@@ -70,6 +91,15 @@ const fmtShare = v => fmt('percent').format(v);
 const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
 const fmtPP = v => (v >= 0 ? '+' : '') + v.toFixed(1) + ' pp';
 const deDate = s => new Date(s).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+// One close, in the portfolio currency, with the quote it was converted from beside it — the only
+// place on the page the untouched number is visible. Omitted where there is nothing to add: an
+// instrument that already trades in the portfolio currency, a hand-maintained file with no raw
+// column, or "Show €" switched off, where revealing the figure in brackets would defeat the mask.
+function fmtClose(row) {
+  const main = fmtMoneyPre(row.close);
+  if (!SHOW_MONEY || !(row.raw > 0) || !row.ccy || row.ccy === CCY) return main;
+  return `${main} (${foreignSymbol(row.ccy)}${fmt('plain2').format(row.raw)})`;
+}
 
 // A range pick re-bases every basis figure onto its start date (see rebaseLots), so the words for
 // those figures have to move with it: "invested" is no longer what the number means once the
@@ -248,6 +278,10 @@ const nodesOf = (map, d) => map.get(d) || [];
 const posNeg = v => v >= 0 ? 'pos' : 'neg';
 const tipRow = (label, value, cls) =>
   `<div class="r"><span>${label}</span><b${cls ? ` class="${cls}"` : ''}>${value}</b></div>`;
+// `withPrice` puts the current quote and its date beside the name. The map and pie tooltips no
+// longer want it: they carry a Purchase price / End price pair of their own further down, and the
+// header quote was the same number a second time. The realised bar has no such pair, so its
+// tooltip is the one place the quote still earns its space.
 const tipHead = (d, withPrice) =>
   `<div class="t">${d.label || d.name}` +
   (withPrice && d.lastPrice > 0 ? ` <span class="quote">${fmtMoneyPre(d.lastPrice)}` +
@@ -292,6 +326,24 @@ function placeTip(tip, wrapEl, e) {
 // Returns '' rather than a placeholder when there is nothing to draw: an instrument with no price
 // file, or a series that simply has not arrived yet. A tooltip one row shorter is a better answer
 // than an empty box where a graph should be.
+// What a share cost and what it is worth: the volume-weighted price actually paid for the shares
+// still held, against the close at the end of the window the tooltip describes — the same close
+// the sparkline below ends on, so the figure and the line agree about which window is on screen.
+//
+// The two come from different places and can appear independently. The paid price is purAbs over
+// the share count, both of which describe the shares held *now* (or on the range's end date), so
+// it follows partial sales without a walk of its own; it carries no foreign quote because the
+// trade log books in the portfolio currency and there is no original number to show. The end
+// price needs a cached series and is blank until one arrives, exactly as the graph is.
+function priceRows(d) {
+  const rows = priceWindow(d, rangeFrom(), rangeTo());
+  const paid = (d.purAbs > 0 && d.shares > 0) ? d.purAbs / d.shares : NaN;
+  return (Number.isFinite(paid) ? tipRow('Purchase price', fmtMoneyPre(paid)) : '') +
+         // "To" italicised to name the picker it comes from — this is the close on whatever the
+         // chart bar's `to` field says, not simply the latest one on file
+         (rows ? tipRow('<em>To</em> price', fmtClose(rows[rows.length - 1])) : '');
+}
+
 const SPARK = { w: 208, h: 46, pad: 3, max: 90 };
 function sparkline(d) {
   try {
@@ -381,11 +433,12 @@ function attachTip(items, nodes) {
     n.style.cursor = 'default';
     n.addEventListener('pointerenter', e => {
       tip.innerHTML =
-        tipHead(d, true) +
+        tipHead(d, false) +
         `<div class="pf">${d.portfolio}</div>` +
         tipRow('Share', fmtShare(d.share)) +
         tipRow(purLabel(true), fmtMoney2(d.pur)) +
         tipRow(curLabel(), fmtMoney2(d.cur)) +
+        priceRows(d) +
         (d.divHeld > 0 ? tipRow('Dividends', fmtMoney2(d.divHeld), 'income') : '') +
         (d.state === 'flat' ? '' :
           tipRow(MODE === 'rel' ? 'Ahead by' : rangeFrom() ? 'Over the range' : 'Unrealised',
@@ -444,6 +497,101 @@ function sourceTag(d) {
   const letter = SOURCE_LETTER[s.source] || (s.source || '?').slice(0, 1).toUpperCase();
   return s.symbol ? `${letter}-${s.symbol}` : letter;
 }
+/* ---------- sortable tables ----------
+   Click a header to sort, click again to reverse. One implementation for all four tables, working
+   on the rendered <tr> nodes rather than on the data behind them. The tables hold different objects
+   — positions, closed positions, trades, registry rows — so a comparator per column per table would
+   be four times the code and four chances for a column and its comparator to drift apart. What a
+   cell says is what it sorts by.
+
+   Subtotal rows are not sorted and not moved. In the positions table they delimit the portfolio
+   groups, so rows are sorted *within* each group and the subtotal stays pinned at the end of its
+   own — the grouping the table is built around survives. A table without them is simply one group.
+
+   The sort outlives a re-render: every renderer re-fills its tbody and then calls applySort, so
+   flipping "Show €" or picking a date doesn't silently drop the order back to the default. */
+const SORTS = new Map();                  // table id → { col, dir } while a sort is in force
+
+// A cell's text as something orderable, or null for "no value" — a dash is the absence of a figure,
+// not a small one, so those rows sit at the bottom whichever direction is asked for.
+//
+// Two number conventions land here and both have to parse: German (1.924,90) out of Intl, and plain
+// dot-decimals (+150.1%) out of toFixed. Whichever separator appears *last* is the decimal one; with
+// only dots present, a run of three-digit groups is thousands and anything else is a decimal point.
+function cellValue(td) {
+  const t = (td ? td.textContent : '').trim();
+  if (!t || t === '\u2013' || t === '-') return null;
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t;             // ISO dates already sort lexically
+  const num = t.replace(/[^\d.,+-]/g, '');
+  if (/\d/.test(num)) {
+    const comma = num.lastIndexOf(','), dot = num.lastIndexOf('.');
+    const plain = comma > dot ? num.replace(/\./g, '').replace(',', '.')
+      : (comma < 0 && /^[+-]?\d{1,3}(\.\d{3})+$/.test(num)) ? num.replace(/\./g, '')
+      : num.replace(/,/g, '');
+    const v = parseFloat(plain);
+    if (Number.isFinite(v)) return v;
+  }
+  return t.toLowerCase();
+}
+
+const isSubRow = tr => tr.className === 'sub' || (tr.classList && tr.classList.contains('sub'));
+
+function rowSorter(col, dir) {
+  return (r1, r2) => {
+    const a = cellValue(r1.children[col]), b = cellValue(r2.children[col]);
+    if (a === null || b === null) return a === b ? 0 : (a === null ? 1 : -1);
+    if (typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
+    return String(a).localeCompare(String(b), 'de') * dir;
+  };
+}
+
+function applySort(id) {
+  const st = SORTS.get(id);
+  const tbody = document.querySelector(`#${id} tbody`);
+  if (!tbody) return;
+  markSortHeaders(id, st);
+  if (!st) return;
+  const out = [], group = [];
+  const flush = tail => {
+    group.sort(rowSorter(st.col, st.dir));
+    out.push(...group, ...(tail ? [tail] : []));
+    group.length = 0;
+  };
+  for (const tr of [...tbody.children]) isSubRow(tr) ? flush(tr) : group.push(tr);
+  flush(null);
+  tbody.replaceChildren(...out);
+}
+
+function markSortHeaders(id, st) {
+  const ths = document.querySelectorAll(`#${id} thead th`);
+  ths.forEach((th, i) => {
+    th.classList.toggle('sorted', !!st && st.col === i);
+    th.classList.toggle('desc', !!st && st.col === i && st.dir < 0);
+  });
+}
+
+// Wired once at startup. The first click on a column picks the direction that column is most often
+// wanted in — biggest first for figures, A→Z for names — decided from the data rather than from a
+// hand-kept list of which column is which; a second click reverses whatever that was.
+function makeSortable(id) {
+  document.querySelectorAll(`#${id} thead th`).forEach((th, i) => {
+    th.classList.add('sortable');
+    th.addEventListener('click', () => {
+      const st = SORTS.get(id);
+      let dir;
+      if (st && st.col === i) dir = -st.dir;
+      else {
+        const first = [...document.querySelector(`#${id} tbody`).children]
+          .filter(tr => !isSubRow(tr)).map(tr => cellValue(tr.children[i]))
+          .find(v => v !== null);
+        dir = typeof first === 'number' ? -1 : 1;
+      }
+      SORTS.set(id, { col: i, dir });
+      applySort(id);
+    });
+  });
+}
+
 function renderMeta(items, closed = []) {
   const tb = document.querySelector('#tbl tbody');
   const trs = [];
@@ -476,6 +624,7 @@ function renderMeta(items, closed = []) {
     trs.push(tr);
   });
   tb.replaceChildren(...trs);
+  applySort('tbl');
   renderClosedPositions();
 
   renderHeaderTotals(ITEMS, CLOSED);
@@ -503,6 +652,7 @@ function renderClosedPositions() {
     tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
     return tr;
   }));
+  applySort('tblClosedPositions');
 }
 
 const TYPE_LABEL = { buy: 'Buy', sell: 'Sell', dividend: 'Dividend', fees_taxes: 'Fees/Taxes' };
@@ -549,6 +699,7 @@ function renderTrades() {
       `<td>${num(t.tax) > 0.005 ? fmtMoney2(num(t.tax)) : '–'}</td>`;
     return tr;
   }));
+  applySort('tblTrades');
 }
 
 // Every registry instrument with no matching holding, open or closed — the point of a row here
@@ -581,6 +732,7 @@ function renderWatch() {
       `<td>${last ? fmtMoney2(last.price) : '–'}</td>`;
     return tr;
   }));
+  applySort('tblWatch');
 }
 
 // The stat-tile row + per-portfolio breakdown, split out of renderMeta so an as-of pick can
@@ -2291,6 +2443,8 @@ MODE = document.getElementById('relMode').checked ? 'rel' : 'abs';
 // ingest() builds the model; this draws it. Split so the model can be exercised without a DOM.
 function load(...texts) {
   ingest(...texts);
+  // headers are static markup, so this is wired once rather than after every render
+  ['tbl', 'tblClosedPositions', 'tblTrades', 'tblWatch'].forEach(makeSortable);
   // config.json only ever changes one thing a browser has no other way to pick up early: the date
   // pickers' own native floor — which syncAsOfControls writes, along with the rest of their state,
   // from the range as it now stands. (The mode switch's own text is fixed; see portfolio.html.)
