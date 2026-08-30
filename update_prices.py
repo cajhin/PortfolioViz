@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch daily price history into prices/, driven by registry/price_sources.csv.
+"""Fetch daily price history into gen_prices/, driven by registry/price_sources.csv.
 
 Nothing about *how* to fetch an instrument lives in the fetched file any more — the registry is
 the single place that maps an instrument to a source, a symbol and a quote currency, so you can
@@ -19,16 +19,16 @@ names, and the untouched quote is kept alongside in `close_raw`. Converting here
 the browser keeps the page's arithmetic single-currency, and keeping the raw means a bad FX day
 can be recomputed rather than re-fetched.
 
-Written per instrument:  prices/<id>-<slug>.csv   date,close,close_raw,quote_currency,source
-Written once per run:    prices/_latest.csv       id,date,close,source
-FX series are cached in  fx/<PAIR>.csv            date,rate
+Written per instrument:  gen_prices/<id>-<slug>.csv   date,close,close_raw,quote_currency,source
+Written once per run:    gen_prices/_latest.csv       id,date,close,source
+FX series are cached in  gen_fx/<PAIR>.csv            date,rate
 """
 import csv, io, json, os, subprocess, sys, time
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DIR = os.path.join(ROOT, "prices")
-FX_DIR = os.path.join(ROOT, "fx")
+DIR = os.path.join(ROOT, "gen_prices")
+FX_DIR = os.path.join(ROOT, "gen_fx")
 REGISTRY = os.path.join(ROOT, "registry")
 UA = "Mozilla/5.0"
 FALLBACK_START = "2019-08-20"

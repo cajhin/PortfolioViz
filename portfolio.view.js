@@ -1314,7 +1314,7 @@ function renderClosed(over = null) {
 
         // what the shares did after the sale, read from your side — a rise since selling is a
         // loss to you, so the grade is inverted. Closed positions get it too, now that
-        // prices/_latest.csv supplies the price Parqet stopped publishing at the sale.
+        // gen_prices/_latest.csv supplies the price Parqet stopped publishing at the sale.
         if (!d.isTax && !d.isDiv && d.sinceKnown && d.grossProceeds > 0) {
           // absolute: did the price fall after the sale? benchmark: did selling and holding the
           // index beat holding on? Both are graded so that green means the sale was right.
@@ -2010,7 +2010,7 @@ function renderDetail() {
   }
   if (!drawn) {
     const slug = seriesSlug(d);
-    body.innerHTML = `<div class="empty">no data — add <code>prices/${slug || '…'}.csv</code>` +
+    body.innerHTML = `<div class="empty">no data — add <code>gen_prices/${slug || '…'}.csv</code>` +
       ` and run <code>python3 update_prices.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }

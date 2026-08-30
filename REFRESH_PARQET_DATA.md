@@ -4,8 +4,8 @@ Task for an agent with the **Parqet MCP tools** and write access to `/Users/jjj/
 
 Goal: archive the two current CSVs under their download timestamp, then pull fresh data from Parqet
 and write new ones with **exactly the same schema**. `portfolio.html` reads
-`parqet/positions.csv` and `parqet/activities.csv` — do not edit the HTML, and do not
-rename those two working filenames or move them out of `parqet/`.
+`private-parqet/positions.csv` and `private-parqet/activities.csv` — do not edit the HTML, and do not
+rename those two working filenames or move them out of `private-parqet/`.
 
 ---
 
@@ -14,7 +14,7 @@ rename those two working filenames or move them out of `parqet/`.
 The "dl-timestamp" is the file's own modification time — that is when the data was downloaded.
 
 ```bash
-cd /Users/jjj/git/parqet/parqet
+cd /Users/jjj/git/parqet/private-parqet
 for f in positions activities; do
   [ -f "$f.csv" ] || continue
   ts=$(date -r "$f.csv" +%Y%m%d-%H%M)      # macOS/BSD date
@@ -28,13 +28,9 @@ it. Archived files stay in this directory; the page ignores anything but the two
 
 ## 2. Pull fresh data
 
-Portfolio IDs (confirm with `parqet_list_portfolios` — re-read them if any call 404s):
-
-| Portfolio | ID |
-|---|---|
-| Trade Republic | `6927025189ee83d59e7e2327` |
-| Comdirect | `692705df48dadacc8cdfd393` |
-| Schwab | `6a16f9f33e9d674fc51dfed0` |
+Portfolio IDs are not hardcoded here — they are per-account and this file is committed. Call
+`parqet_list_portfolios` first to get the three current IDs (Trade Republic, Comdirect, Schwab),
+and re-read them if any later call 404s.
 
 Three calls give everything:
 
@@ -57,7 +53,7 @@ Gotchas that will bite you:
 - Prices move during the day. Pull the positions and the activities in one sitting so the two files
   agree, and note that `currentValue` is a snapshot.
 
-## 3. Write `parqet/positions.csv`
+## 3. Write `private-parqet/positions.csv`
 
 One row per position, **open and closed**, plus the cash accounts. Header, in order:
 
@@ -80,7 +76,7 @@ lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,a
   `assetType == "cash"` and leaves it out of invested/gain figures.
 - Numbers: plain decimals, `.` separator, no thousands separator, no currency symbol.
 
-## 4. Write `parqet/activities.csv`
+## 4. Write `private-parqet/activities.csv`
 
 One row per activity, all portfolios, sorted by `portfolio` then `datetime` ascending. Header:
 
@@ -127,9 +123,9 @@ python3 update_prices.py roche --from 2019-01-01   # also backfill, from that da
 
 **Run the bare form on every refresh**, closed positions included. The script has no idea which
 positions are open or closed — it walks the registry — so a closed position's series keeps
-extending in step with everything else. It also writes `prices/_latest.csv`, the freshest
+extending in step with everything else. It also writes `gen_prices/_latest.csv`, the freshest
 close per instrument, which is what supplies the quote Parqet freezes once a position is sold.
-That file used to be `parqet/parqet_prices.csv` and used to be maintained by hand; it is now a
+That file used to be `parqet/parqet_prices.csv` (back when the directory was named `parqet/`) and used to be maintained by hand; it is now a
 by-product of the fetch. Do not recreate it.
 
 Prices are converted to `config.json`'s `currency` **on write**, through the `fx_symbol` named in
@@ -170,8 +166,8 @@ already be small enough that nobody would notice it unlabelled.
 cd /Users/jjj/git/parqet
 python3 - <<'PY'
 import csv, collections
-pos = list(csv.DictReader(open('parqet/positions.csv')))
-tr  = list(csv.DictReader(open('parqet/activities.csv')))
+pos = list(csv.DictReader(open('private-parqet/positions.csv')))
+tr  = list(csv.DictReader(open('private-parqet/activities.csv')))
 f = lambda r, k: float(r[k] or 0)
 print('positions', len(pos), '| closed', sum(1 for p in pos if p['isSold'] == '1'),
       '| cash', sum(1 for p in pos if p['assetType'] == 'cash'))

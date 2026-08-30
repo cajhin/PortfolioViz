@@ -14,14 +14,14 @@ start.sh                serves the directory on localhost and opens the page
 update_prices.py   fetches price history per registry/price_sources.csv
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
 registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
-parqet/*.csv            IMPORTED — positions and trades; gitignored, regenerate them
-prices/*.csv       DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
-fx/*.csv                DERIVED — one file per currency pair, for the conversion on write
+private-parqet/*.csv    IMPORTED — positions and trades; gitignored, regenerate them
+gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
+gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
 ```
 
 The three data directories differ by **lifecycle**, and that is the distinction to preserve:
-`parqet/` is overwritten wholesale by the refresh task, `registry/` is hand- or agent-maintained
-and must never be clobbered by an import, and `prices/` + `fx/` are reproducible from
+`private-parqet/` is overwritten wholesale by the refresh task, `registry/` is hand- or agent-maintained
+and must never be clobbered by an import, and `gen_prices/` + `gen_fx/` are reproducible from
 `registry/price_sources.csv` alone.
 
 `registry/instruments.csv` gives every instrument an `id`, equal to its ISIN, and is the single
@@ -78,7 +78,7 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-`parqet/`, `prices/`, `fx/` and `check_baseline.json` hold real position values and are gitignored
+`private-parqet/`, `gen_prices/`, `gen_fx/` and `check_baseline.json` hold real position values and are gitignored
 — never commit them, and don't paste figures from them into commit messages or issues.
 
 `registry/*.csv` is the exception and **is** committed: two small tables no import can rebuild, and

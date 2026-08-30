@@ -6,7 +6,7 @@
  *   node check_portfolio.js            re-run and diff against that baseline
  *
  * How it works: the scripts portfolio.html loads are concatenated in page order and run in a vm
- * context against a mini DOM defined below and the real CSVs in parqet/ and prices/. Add a
+ * context against a mini DOM defined below and the real CSVs in private-parqet/ and gen_prices/. Add a
  * <script src> to the page and it is picked up here automatically. It then dumps
  *
  *   - every computed field of every open and closed position, in both modes,
@@ -157,7 +157,7 @@ function hoverAll(nodes, rows, tag, out) {
 (async () => {
   await new Promise(res => setTimeout(res, 600));            // let the fetch chain settle
   const h = sandbox.__hooks;
-  if (!h.items().length) { console.error('no positions loaded — are the CSVs in parqet/ ?'); process.exit(2); }
+  if (!h.items().length) { console.error('no positions loaded — are the CSVs in private-parqet/ ?'); process.exit(2); }
   const out = {};
 
   for (const mode of ['abs', 'rel']) {
@@ -214,7 +214,7 @@ function hoverAll(nodes, rows, tag, out) {
       h.renderTrades();
       const trRows = tbody('#tblTrades tbody').children;
       // the watchlist: registry instruments with no holding behind them, and the only view whose
-      // "last close" comes from prices/_latest.csv rather than from a position
+      // "last close" comes from gen_prices/_latest.csv rather than from a position
       h.renderWatch();
       const wRows = tbody('#tblWatch tbody').children;
       out[`${tag}/watch`] = {

@@ -17,7 +17,7 @@
      FIFO lots            the shared share-retirement walk every cost-basis figure is built on
      colour from name     a position's hue, derived from its own name
      XIRR                 cash flows out of the trade log, and the bisection solver over them
-     price series         prices/*.csv, the "last close at or before" lookup, and pricePath
+     price series         gen_prices/*.csv, the "last close at or before" lookup, and pricePath
      volatility           sigma of daily log returns, annualised — rolling window and EWMA
      splits               undoing Parqet's post-split restatement of historical share counts
      trade vs. now        what the price has done since a trade, on today's split scale
@@ -33,29 +33,29 @@
    figures are always pre-tax unless the name says otherwise.
 
    Three input directories, by lifecycle — the distinction is worth preserving:
-     parqet/       IMPORTED  regenerated wholesale by the refresh task; never hand-edited
-     registry/     CURATED   what exists and where its prices come from; never overwritten
-     prices/  DERIVED   reproducible from registry/price_sources.csv alone
-   Every close in prices/ is already in the portfolio currency — update_prices.py
+     private-parqet/ IMPORTED  regenerated wholesale by the refresh task; never hand-edited
+     registry/       CURATED   what exists and where its prices come from; never overwritten
+     gen_prices/     DERIVED   reproducible from registry/price_sources.csv alone
+   Every close in gen_prices/ is already in the portfolio currency — update_prices.py
    converts on write and keeps the untouched quote alongside — so nothing here does FX.
-   prices/ also outranks the export on price: anywhere _latest.csv is fresher than Parqet's own
+   gen_prices/ also outranks the export on price: anywhere _latest.csv is fresher than Parqet's own
    lastPriceDate, build() takes its close and recomputes the position's current value from it.
    ============================================================================================= */
 
 /* ---------- files ---------- */
 const CONFIG_PATH = 'config.json';   // tunable settings an agent maintains — see its own comments
-const CSV_PATH = 'parqet/positions.csv';
-const TRADES_PATH = 'parqet/activities.csv';
+const CSV_PATH = 'private-parqet/positions.csv';
+const TRADES_PATH = 'private-parqet/activities.csv';
 // registry/ is curated: what exists, and what each instrument is called. It is keyed by ISIN and
 // is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
 const INSTRUMENTS_PATH = 'registry/instruments.csv';
 const PRICE_SOURCES_PATH = 'registry/price_sources.csv';
-// prices/ is derived: reproducible from registry/price_sources.csv by update_prices.py.
+// gen_prices/ is derived: reproducible from registry/price_sources.csv by update_prices.py.
 // _latest.csv is the freshest close per instrument, and it is the price of record for every
 // position it covers — the Parqet export is a snapshot from whenever it was pulled, so its quotes
 // are usually the older pair. build() takes the close and recomputes the position's value with it.
-const LATEST_PATH = 'prices/_latest.csv';
+const LATEST_PATH = 'gen_prices/_latest.csv';
 
 /* ---------- state ----------
    Every mutable global on the page. Only ingest() and build() below, and the control handlers
@@ -243,7 +243,7 @@ function benchSeriesPath(configText, instrumentsText) {
   if (!isin) return '';
   const row = (instrumentsText ? parseCSV(instrumentsText) : [])
     .find(r => r.id === isin || r.isin === isin);
-  return row && row.slug ? `prices/${row.id}-${row.slug}.csv` : '';
+  return row && row.slug ? `gen_prices/${row.id}-${row.slug}.csv` : '';
 }
 
 // The money that has actually left the account and stayed out: everything paid in, less everything
@@ -274,7 +274,7 @@ async function loadSeries(slug) {
   if (SERIES_CACHE.has(slug)) return SERIES_CACHE.get(slug);
   let out = null;
   try {
-    const r = await fetch(`prices/${slug}.csv`, { cache: 'no-store' });
+    const r = await fetch(`gen_prices/${slug}.csv`, { cache: 'no-store' });
     if (r.ok) {
       const file = splitMeta(await r.text());
       // raw/ccy are the quote before update_prices.py converted it — carried so a price can be
@@ -524,7 +524,7 @@ function asOfIrr(lots, cur, dateStr) {
 
 /* ---------- as of: the portfolio between two past dates ---------- */
 // Parqet's own last known price is the ground truth for what a position is worth "today", but the
-// closes in prices/ come from a different provider whose level can sit a little apart from it.
+// closes in gen_prices/ come from a different provider whose level can sit a little apart from it.
 // This is the multiplier that lines that series up with Parqet, so a reconstruction of today
 // reproduces the live map exactly. Every reader of a prices series applies it.
 function anchorFactor(d, series) {
@@ -675,7 +675,7 @@ function valueOverTime(d, series, displayRows) {
 // deposit is structurally incapable of moving it. Hold nothing but one instrument and this traces
 // that instrument's own chart exactly, whatever the contributions were, which is the point.
 //
-// Price return: dividends are deliberately excluded. prices/ carries Yahoo's raw close, so every
+// Price return: dividends are deliberately excluded. gen_prices/ carries Yahoo's raw close, so every
 // other line on the detail chart is a price return too — adding payouts back on this line alone
 // would lift it above the rest by roughly the dividend yield, for a reason that is not performance.
 //
@@ -965,7 +965,7 @@ function splitFactor(d) {
 //
 // The position — a trade is only comparable to the last price of the holding it belongs to, found
 // by portfolio *and* identifier like everything else here. A closed position works too: Parqet
-// stops quoting one at the sale, and prices/_latest.csv fills that in above.
+// stops quoting one at the sale, and gen_prices/_latest.csv fills that in above.
 //
 // The sign is deliberately the same for both directions: the number answers "what has the price
 // done since", which is one question however the trade went. Whether that counts as a *good*
@@ -1058,7 +1058,7 @@ function build(rows) {
   });
 
   items.forEach(d => {
-    // prices/ is the price of record wherever it is fresher than the export, which is the normal
+    // gen_prices/ is the price of record wherever it is fresher than the export, which is the normal
     // case: positions.csv is a snapshot from whenever Parqet was last pulled, while
     // update_prices.py runs on its own schedule and usually carries several more sessions.
     //

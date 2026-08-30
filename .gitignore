@@ -1,18 +1,22 @@
 # Data, by lifecycle. Committed only where it is small, curated, and not reproducible.
 #
-#   parqet/     IMPORTED — regenerate via REFRESH_PARQET_DATA.md. Ignored: holds real position
-#                          values and share counts.
-#   prices/     DERIVED  — regenerate via update_prices.py. Ignored: bulk, and reproducible from
-#   fx/         DERIVED    registry/price_sources.csv alone.
+#   private-parqet/  IMPORTED — regenerate via REFRESH_PARQET_DATA.md. Ignored: holds real
+#                          position values and share counts.
+#   gen_prices/ DERIVED  — regenerate via update_prices.py. Ignored: bulk, and reproducible from
+#   gen_fx/     DERIVED    registry/price_sources.csv alone.
 #   registry/   CURATED  — COMMITTED. Two small tables no import can rebuild. Note that
 #                          instruments.csv does enumerate which instruments are held.
 *.csv
-parqet/
-prices/
-fx/
+gen_prices/
+gen_fx/
 !registry/*.csv
 
-# check_portfolio.js records real position values and tooltips here — same rule as parqet/
+# Any directory named private* — private-parqet/ today, and a catch-all for anything else added
+# under that naming convention later, so a new folder is safe by default rather than needing its
+# own line here first.
+private*/
+
+# check_portfolio.js records real position values and tooltips here — same rule as private-parqet/
 check_baseline.json
 
 .DS_Store
