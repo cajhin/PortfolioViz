@@ -10,6 +10,7 @@ portfolio.model.js      data and arithmetic — never touches the DOM
 portfolio.view.js       everything that reads or writes the page
 config.json             settings — timeline start, portfolio currency, which ISIN is the benchmark
 check_portfolio.js      regression check for both scripts (see below)
+start.sh                serves the directory on localhost and opens the page
 update_prices.py   fetches price history per registry/price_sources.csv
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
 registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
@@ -50,7 +51,8 @@ is what lets the model be exercised without a browser.
 `fetch` is blocked on `file://`, so the page must be served:
 
 ```bash
-python3 -m http.server 8000        # then open http://localhost:8000/portfolio.html
+./start.sh                         # serves on 8000 and opens portfolio.html
+./start.sh 8080 -n                 # another port, no browser
 ```
 
 ## Editing the page
