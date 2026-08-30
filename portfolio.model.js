@@ -18,6 +18,7 @@
      colour from name     a position's hue, derived from its own name
      XIRR                 cash flows out of the trade log, and the bisection solver over them
      price series         prices/*.csv, the "last close at or before" lookup, and pricePath
+     volatility           sigma of daily log returns, annualised — rolling window and EWMA
      splits               undoing Parqet's post-split restatement of historical share counts
      trade vs. now        what the price has done since a trade, on today's split scale
      as of                the portfolio rebuilt as it stood on a past date, or between two
@@ -345,6 +346,107 @@ function lastIndexAtOrBefore(rows, date) {
 }
 const lastAtOrBefore = (rows, date) => rows[lastIndexAtOrBefore(rows, date)] || null;
 const seriesCloseAt = (rows, date) => (lastAtOrBefore(rows, date) || {}).close ?? null;
+
+/* ---------- realised volatility ----------
+   Trailing standard deviation of daily log returns, annualised — the conventional measure, and
+   the one every other tool means by "volatility". Log returns rather than simple ones because
+   they add over time, which is what makes the sqrt(periods) scaling below valid at all; over a
+   single day the two barely differ, but the annualisation is where the choice would show.
+
+   Computed on a position's own price rows, in the portfolio currency, so a foreign listing's
+   volatility here includes its FX component — which is the honest figure for a portfolio that
+   holds it in euros, and not the same number a US site would print for the same ticker.
+
+   Two things this deliberately excludes from a window:
+
+     · a return spanning a real gap in the history (Roche's RHO.DE has one running 2019-09 to
+       2025-04). Whatever the price did over those years arrives as a single log return, and one
+       such value inside a 21-day window is not "a volatile month", it is an artefact of the data.
+       The detail chart already draws that stretch dashed for the same reason.
+     · a zero or negative close, which has no log at all.
+
+   Both simply drop out of the window, and a window left with too few real returns reports null
+   rather than a figure built on four observations. */
+const VOLA_GAP_DAYS = 20;                 // past a long holiday cluster; a real data gap
+const VOLA_PERIODS = 252;                 // trading days in a year — the annualisation factor
+const VOLA_MIN_FRAC = 0.6;                // a window needs this share of its days to count
+
+// Rolling volatility at every row of `rows`, as an annualised percentage.
+// Returns one { date, vola } per input row, vola null where the window is too sparse to mean
+// anything — including, always, the first `window` rows of a series, which have no full window
+// behind them. Prefix sums keep this O(n) rather than O(n·window): the detail chart recomputes
+// it on every range button and every comparison-line swap.
+//
+// upWeight scales down a positive return before it is squared — 1 leaves ordinary volatility
+// (up and down moves count the same) alone; the "discount up moves" checkbox passes 0.5, so a
+// day the price rose contributes a quarter of its usual weight to variance (an already-halved
+// return, squared) and a down day is untouched. That is not textbook semi-deviation — semi-
+// deviation drops upside days to zero rather than merely discounting them — but the same idea
+// softened, per the request: emphasise the downside without pretending an up day carries no
+// information at all. The prefix-sum shortcut (Σr'² − (Σr')²/n) still holds unmodified since it
+// only assumes r' IS the series being measured, not that it came straight from the price ratio.
+function volatilitySeries(rows, window, periodsPerYear = VOLA_PERIODS, upWeight = 1) {
+  const out = rows.map(r => ({ date: r.date, vola: null }));
+  if (!rows || rows.length < 2 || window < 2) return out;
+  // r[i] is the return arriving AT row i, so a window ending at i covers r[i-window+1 .. i]
+  const n = rows.length;
+  const sum = new Float64Array(n + 1), sumSq = new Float64Array(n + 1);
+  const count = new Int32Array(n + 1);
+  for (let i = 1; i < n; i++) {
+    const a = rows[i - 1].close, b = rows[i].close;
+    const days = (Date.parse(rows[i].date) - Date.parse(rows[i - 1].date)) / 864e5;
+    const usable = a > 0 && b > 0 && days <= VOLA_GAP_DAYS;
+    const raw = usable ? Math.log(b / a) : 0;
+    const r = raw > 0 ? raw * upWeight : raw;
+    sum[i + 1] = sum[i] + r;
+    sumSq[i + 1] = sumSq[i] + r * r;
+    count[i + 1] = count[i] + (usable ? 1 : 0);
+  }
+  const need = Math.max(2, Math.ceil(window * VOLA_MIN_FRAC));
+  for (let i = window; i < n; i++) {
+    const lo = i - window + 1;                         // first return in the window
+    const k = count[i + 1] - count[lo];
+    if (k < need) continue;
+    const s1 = sum[i + 1] - sum[lo], s2 = sumSq[i + 1] - sumSq[lo];
+    // sample variance, k-1: these are a sample of the return process, not the whole of it
+    const varce = (s2 - s1 * s1 / k) / (k - 1);
+    if (!(varce > 0)) continue;
+    out[i].vola = Math.sqrt(varce) * Math.sqrt(periodsPerYear) * 100;
+  }
+  return out;
+}
+
+// A rolling window gives every return inside it equal weight and none outside it — a single
+// one-day shock rides at full strength for `window` days, then drops out in one step, so a spike
+// draws as a plateau with a cliff on both edges rather than as the one-day event it actually was.
+// EWMA (RiskMetrics' own choice, and the standard alternative) never has an edge to fall off:
+// each day's return is folded in and then decays geometrically forever after, so a spike shows up
+// immediately and fades out smoothly instead of vanishing 21 days later for no new reason.
+//
+// λ=0.94 is RiskMetrics' own daily constant — a return's contribution to variance halves roughly
+// every 11 trading days, deliberately close to the 21-day window's own persistence, so the two
+// read as answering the same question at different smoothness. No `window` argument: unlike
+// volatilitySeries, this has no edge to be sparse near — the very first valid return already
+// seeds a value, at the cost of that first value being unreliably noisy (an estimate built on
+// one observation, same as anywhere else in statistics with n=1).
+const VOLA_LAMBDA = 0.94;
+// upWeight: same "discount up moves" scaling as volatilitySeries above, applied before the return
+// is folded into the recursion — see that function's comment for what it does and doesn't mean.
+function volatilityEwma(rows, lambda = VOLA_LAMBDA, periodsPerYear = VOLA_PERIODS, upWeight = 1) {
+  const out = rows.map(r => ({ date: r.date, vola: null }));
+  if (!rows || rows.length < 2) return out;
+  let variance = null;
+  for (let i = 1; i < rows.length; i++) {
+    const a = rows[i - 1].close, b = rows[i].close;
+    const days = (Date.parse(rows[i].date) - Date.parse(rows[i - 1].date)) / 864e5;
+    if (!(a > 0 && b > 0) || days > VOLA_GAP_DAYS) continue;   // same exclusions as the window above
+    const raw = Math.log(b / a);
+    const r = raw > 0 ? raw * upWeight : raw;
+    variance = variance === null ? r * r : lambda * variance + (1 - lambda) * r * r;
+    out[i].vola = Math.sqrt(variance) * Math.sqrt(periodsPerYear) * 100;
+  }
+  return out;
+}
 
 /* ---------- splits ---------- */
 // A split mid-way through a *closed* position's own trade history — buys at the old scale,

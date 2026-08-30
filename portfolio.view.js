@@ -1575,6 +1575,10 @@ const EXTRA_COLOURS = ['var(--flat)', 'var(--series-2)', 'var(--series-3)', 'var
 const PORTFOLIO_ID = '__portfolio';
 const ALL_ID = '__all';           // "everything at once" — offered by the + compare picker only
 
+// the "discount up vola 50%" checkbox — a view preference like SHOW_MONEY, not part of DETAIL
+// itself, so it survives closing and reopening the dialog on a different position
+let VOLA_DOWNSIDE = false;
+
 function drawDetail(d, series, alignDate, range, custom, extras) {
   const W = 840, H = 300, T = 12, B = 22;
   let from, to;
@@ -1684,6 +1688,39 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     s.last = s.vals.filter(Number.isFinite).slice(-1)[0];
   });
 
+  // Volatility rides this chart's y-axis on a scale of its own. The two lines are in annualised
+  // per cent of sigma, not per cent of price change, and reading them against the same 0% would
+  // mean nothing — hence the second pair of axis labels further down, and the deliberately
+  // background-ish dashing (see .dtvola) that keeps them from reading as another price line.
+  //
+  // Computed over series.rows — the WHOLE history, not the window on screen — so the trailing
+  // window behind the left edge is made of real days. Computing it on the visible slice instead
+  // would leave the annual line blank for the first year of every range, and "1y" would show no
+  // annual volatility at all.
+  // The 1-year rolling window alongside a vanilla EWMA (λ=0.94, RiskMetrics' own constant) — the
+  // 1-month window was dropped after comparing the two: it rides a one-day spike at full strength
+  // for 21 days and then drops it in a single step, drawing as a plateau with a cliff on both
+  // edges, where EWMA (no window, no edge to fall off) fades the same spike out smoothly instead.
+  const VOLA_SPECS = [
+    { label: 'σ 1y', kind: 'window', window: 252, colour: 'var(--vola-1)', cls: '' },
+    { label: 'σ ewma', kind: 'ewma', colour: 'var(--vola-3)', cls: ' dtvola-e' },
+  ];
+  const upWeight = VOLA_DOWNSIDE ? 0.5 : 1;
+  const volas = VOLA_SPECS.map(spec => {
+    const full = spec.kind === 'ewma' ? volatilityEwma(series.rows, undefined, undefined, upWeight)
+                                       : volatilitySeries(series.rows, spec.window, undefined, upWeight);
+    // read at the visible dates under the same "last trading day at or before" rule every other
+    // line here follows, so a bridged gap holds the last real sigma flat rather than breaking
+    const vals = dates.map(dt => {
+      const r = at(full, dt);
+      return r && Number.isFinite(r.vola) ? r.vola : null;
+    });
+    return { ...spec, vals, last: vals.filter(Number.isFinite).slice(-1)[0] };
+  });
+  const volaVals = volas.flatMap(v => v.vals.filter(Number.isFinite));
+  const vLo = volaVals.length ? Math.min(...volaVals) : 0;
+  const vHi = volaVals.length ? Math.max(...volaVals) : 0;
+
   const values = [...stockVals, ...secondaries.flatMap(s => s.vals.filter(Number.isFinite)), 0];
   const lo = Math.min(...values), hi = Math.max(...values);
   // No padding on either edge: each bound is the actual all-time low/high for the window shown —
@@ -1692,6 +1729,26 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // one degenerate case a flat pair of bounds would divide by zero on: a dead-flat line.
   const yLo = lo, yHi = hi > lo ? hi : lo + 1;
   const y = v => T + (H - T - B) * (1 - (v - yLo) / (yHi - yLo));
+
+  // Both sigma lines share ONE FIXED scale, 0-200% annualised, stretched across the chart's whole
+  // height — fixed rather than fit to this window's own min/max, so a line's height means the same
+  // thing on every chart: 40% sigma looks the same whether it's the calmest name in the portfolio
+  // or the wildest one, which a fit-to-data scale would never give you (and would also divide by
+  // zero on a dead-flat window). 200% covers everything held here short of the handful of small-
+  // caps that spike past it (POET has touched 350%) — those don't get their own scale, they get a
+  // flat spike drawn just above the top instead. That's real information — "this went off the top
+  // of an already generous scale" — not a chart that quietly re-stretches every time one name has
+  // a rough month.
+  const VOLA_LO = 0, VOLA_HI = 200, VOLA_CLAMP = 210;   // CLAMP is deliberately off-scale — see above
+  const volaToChart = v =>
+    yLo + ((v > VOLA_HI ? VOLA_CLAMP : v) - VOLA_LO) / (VOLA_HI - VOLA_LO) * (yHi - yLo);
+  const yVola = v => y(volaToChart(v));
+  // One decimal or none, decided once for the whole chart rather than per label: a bond fund
+  // living between 2% and 11% would otherwise print "σ 11%" against "σ 2.0%" at the other end of
+  // the same axis and read as two different scales. The decimal comes out for a low or a narrow
+  // range — both cases where whole points would round the whole spread away.
+  const volaDp = (vHi < 10 || vHi - vLo < 5) ? 1 : 0;
+  const fmtVola = v => `${v.toFixed(volaDp)}%`;
 
   // the left margin is whatever the widest y-axis label needs, so a big swing (a multi-bagger's
   // "+10000%") never runs past the left edge — same sizing rule as the right margin below
@@ -1709,6 +1766,13 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
       keys.push({ text: `${s.label} ${fmtPct(s.last)}`, v: s.last, colour: s.colour,
                   entryIndex: s.entryIndex });
   });
+  // the sigma lines are named the same way, but placed through their own scale: v is handed over
+  // already in chart space, so the collision walk below treats them as just two more labels and
+  // the leader lines land on the right place without knowing anything about the second unit
+  volas.forEach(v => {
+    if (Number.isFinite(v.last))
+      keys.push({ text: `${v.label} ${fmtVola(v.last)}`, v: volaToChart(v.last), colour: v.colour });
+  });
   const R = Math.min(210, 14 + Math.max(...keys.map(k => k.text.length)) * 5.6);
   const fits = Math.floor((R - 14) / 5.6);              // a very long name gets clipped, not the label
   keys.forEach(k => {
@@ -1721,7 +1785,9 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
 
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
     'aria-label': `${d.label} against ${secondaries.map(s => s.label).join(', ') || 'nothing'},` +
-                  ` in per cent from ${anchor}` });
+                  ` in per cent from ${anchor}` +
+                  (volaVals.length ? `, plus annualised volatility (${volas.map(v => v.label).join(', ')}),` +
+                                     ` ranging ${Math.round(vLo)}% to ${Math.round(vHi)}%` : '') });
 
   for (let i = 0; i <= 4; i++) {
     const v = yLo + (yHi - yLo) * i / 4;
@@ -1731,6 +1797,20 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     svg.appendChild(t);
   }
   svg.appendChild(el('line', { x1: L, y1: y(0), x2: W - R, y2: y(0), class: 'dtzero' }));
+
+  // The sigma scale's two ends, on the same left axis as the % labels but stepped inward and in
+  // the annual line's colour, so it reads at a glance that this axis carries a second unit and
+  // which lines own it. These name the FIXED scale (0%/200%), not this window's own min/max — the
+  // whole point of fixing the scale is that this axis reads the same on every chart, unlike the %
+  // bounds above which move with the data.
+  if (volaVals.length) {
+    [[VOLA_HI, T + 15], [VOLA_LO, H - B - 7]].forEach(([v, ty]) => {
+      const t = el('text', { x: L - 6, y: ty, class: 'dtvolaaxis', 'text-anchor': 'end',
+                             fill: 'var(--vola-1)' });
+      t.textContent = `σ ${fmtVola(v)}`;
+      svg.appendChild(t);
+    });
+  }
   // year labels, plus small ticks along the bottom marking quarters — April, July, October, never
   // January, since that boundary already has the year label above to carry it. Zoomed under a
   // year, quarters would land three or fewer per chart — too sparse to read anything from — so
@@ -1781,6 +1861,22 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     d: pts.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' '),
     class: 'dtline' + (dashed ? ' dtline-fill' : ''), stroke,
   }));
+  // sigma first, so it sits behind every price line rather than over them. A stretch with no full
+  // trailing window behind it (the start of a short history) breaks the line instead of bridging
+  // it — the same refusal to draw what isn't there that the dashed gap runs stand for.
+  const volaPath = (pts, v) => svg.appendChild(el('path', {
+    d: pts.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' '),
+    class: 'dtvola' + v.cls, stroke: v.colour,
+  }));
+  volas.forEach(v => {
+    let run = [];
+    v.vals.forEach((val, i) => {
+      if (Number.isFinite(val)) { run.push([x(i), yVola(val)]); return; }
+      if (run.length > 1) volaPath(run, v);
+      run = [];
+    });
+    if (run.length > 1) volaPath(run, v);
+  });
   secondaries.forEach(s => { if (s.pts.length > 1) path(s.pts.map(p => [p[0], y(p[1])]), s.colour); });
   // the stock's own path breaks into solid/dashed runs at each bridged gap: an edge is "filled"
   // if either point it connects is a synthetic one, so the dashing starts and ends exactly on the
@@ -1889,7 +1985,7 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // dates/stockVals/secondaries/x plus the margins: everything renderDetail needs to turn a
   // pointer position back into "which day is this" for the hover crosshair, and each secondary's
   // .node back into "which slot was clicked", without redoing this geometry
-  return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, secondaries,
+  return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, secondaries, volas,
            marks: markNodes, dates, stockVals, gapRuns, vals, clsLabel, invLabel,
            filled: rows.map(r => !!r.filled), x, L, R, T, B, H, W };
 }
@@ -1899,8 +1995,12 @@ let DETAIL = null;                                    // { d, series, alignDate 
 function renderDetail() {
   const body = document.getElementById('dtBody');
   const { d, series, alignDate, range, customRange, extras } = DETAIL;
+  // a drag selection isn't any preset's range, even though DETAIL.range still names whichever
+  // button was on before the drag (it's the escape hatch back out — see the drag handler below) —
+  // so leave every button off while a custom window is showing, rather than a stale preset lit
+  // for a range it no longer matches.
   document.querySelectorAll('#dtRange button').forEach(b =>
-    b.classList.toggle('on', b.dataset.range === range));
+    b.classList.toggle('on', !customRange && b.dataset.range === range));
   let drawn = null;
   try {
     drawn = series && drawDetail(d, series, alignDate, range, customRange, extras);
@@ -1921,12 +2021,17 @@ function renderDetail() {
     `${d.portfolio} · 0 % at ${drawn.anchor}` +
     (day ? ` — ${day}` : '') +
     (isFilled ? ' (no data — held flat)' : '');
-  const valsAt = (stock, secVals) =>
+  // every line on the chart reports here at the crosshair, sigma included — unsigned, since it is
+  // a spread and not a change, which is also what tells the two units apart in one line of text
+  const valsAt = (stock, secVals, volaVals) =>
     `${d.label} ${fmtPct(stock)}` +
     drawn.secondaries.map((s, i) =>
-      Number.isFinite(secVals[i]) ? ` · ${s.label} ${fmtPct(secVals[i])}` : '').join('');
+      Number.isFinite(secVals[i]) ? ` · ${s.label} ${fmtPct(secVals[i])}` : '').join('') +
+    drawn.volas.map((v, i) =>
+      Number.isFinite(volaVals[i]) ? ` · ${v.label} ${volaVals[i].toFixed(1)}%` : '').join('');
   const defaultSub = subAt(null, false);
-  const defaultVals = valsAt(drawn.stock, drawn.secondaries.map(s => s.last));
+  const defaultVals = valsAt(drawn.stock, drawn.secondaries.map(s => s.last),
+                             drawn.volas.map(v => v.last));
   sub.textContent = defaultSub;
   vals.textContent = defaultVals;
 
@@ -1986,7 +2091,7 @@ function renderDetail() {
   // hoverDay tracks what's currently under the crosshair so a plain click can tie the lines there
   // too, the same re-anchor a trade marker's own click already does — click is meaningless without
   // a day under it, so it's a no-op wherever pointermove last cleared this back to null.
-  const { dates, stockVals, secondaries, filled, x, L, R } = drawn;
+  const { dates, stockVals, secondaries, volas, filled, x, L, R } = drawn;
   // CLS and INV follow the crosshair; passing null puts them back on the last day in the window,
   // which is what they read when nothing is hovered
   const valueAt = i => {
@@ -2046,7 +2151,7 @@ function renderDetail() {
     crosshair.setAttribute('x1', x(i)); crosshair.setAttribute('x2', x(i));
     crosshair.classList.add('on');
     sub.textContent = subAt(dates[i], filled[i]);
-    vals.textContent = valsAt(stockVals[i], secondaries.map(s => s.vals[i]));
+    vals.textContent = valsAt(stockVals[i], secondaries.map(s => s.vals[i]), volas.map(v => v.vals[i]));
     valueAt(i);
   });
   drawn.svg.addEventListener('pointerup', e => {
@@ -2070,10 +2175,33 @@ function renderDetail() {
     vals.textContent = defaultVals;
     valueAt(null);
   });
-  drawn.svg.addEventListener('click', () => {
+  // Click a day to tie every line to 0% there; click the marked day again to let go of it.
+  //
+  // Two things make that harder than it sounds, and both are why this reads the event rather than
+  // comparing dates. The day comes from the click's own coordinates, not from whatever the last
+  // pointermove left in hoverDay: setting the anchor re-renders, rebuilding this closure with
+  // hoverDay back at null, so a second click without moving the pointer used to read null and
+  // return. And the second click is matched by *position*, not by date, because the axis labels
+  // change width when the anchor moves — L and R with them — which slides every day a pixel or two
+  // sideways under a stationary cursor. Comparing dates would find the neighbouring day and
+  // silently re-anchor, which is exactly what it looks like when clicking twice does nothing.
+  // Two tests, because each covers where the other fails. Same index catches a sparse window,
+  // where a month of trading days sits tens of pixels apart and a click never lands exactly on a
+  // tick. Same pixel catches a dense one, where years of days are sub-pixel apart and the axis
+  // shift alone is enough to move the index by one under a stationary cursor. Either counts as
+  // "the day already marked"; on a sparse window the neighbouring day is far enough away in
+  // pixels, and on a dense one it is not separately clickable to begin with.
+  const ANCHOR_HIT = 5;                  // viewBox units, ~0.6% of the plot
+  drawn.svg.addEventListener('click', e => {
     if (dragMoved) { dragMoved = false; return; }   // that click was the tail end of a real drag
-    if (!hoverDay) return;
-    DETAIL.alignDate = (DETAIL.alignDate === hoverDay) ? null : hoverDay;   // click again to reset
+    const vx = vxOf(e);
+    if (vx < L || vx > drawn.W - R) return;
+    const i = idxAt(vx);
+    // only when an anchor is actually set: with none, drawn.anchor is just the first day in the
+    // window, and treating a click there as "clear" would swallow it instead of anchoring
+    const anchorI = DETAIL.alignDate ? dates.indexOf(drawn.anchor) : -1;
+    const onAnchor = anchorI >= 0 && (i === anchorI || Math.abs(vx - x(anchorI)) <= ANCHOR_HIT);
+    DETAIL.alignDate = onAnchor ? null : dates[i];
     renderDetail();
   });
 
@@ -2137,6 +2265,10 @@ document.getElementById('dtRange').addEventListener('click', e => {
   DETAIL.range = btn.dataset.range;
   DETAIL.customRange = null;   // a preset button is the escape hatch out of a drag-selected zoom
   renderDetail();
+});
+document.getElementById('volaDownside').addEventListener('change', e => {
+  VOLA_DOWNSIDE = e.target.checked;
+  if (DETAIL) renderDetail();
 });
 const addCompareBtn = document.getElementById('dtAddCompare');
 addCompareBtn.addEventListener('click', () => {
