@@ -198,7 +198,10 @@
   .lbl-sub { font-size: 11px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .leader { stroke: var(--border); stroke-width: 1; fill: none; }
 
-  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; font-size: 0.85rem; color: var(--text-secondary); }
+  /* separates the legend from whatever sits above it — the realised gains/losses bar when a
+     position has been closed, or the map itself otherwise — same border-top rule .key uses below */
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; padding-top: 14px;
+            border-top: 1px solid var(--border); font-size: 0.85rem; color: var(--text-secondary); }
   .legend .item { display: flex; align-items: center; gap: 8px; }
   .swatch { width: 26px; height: 12px; border-radius: 3px; flex: none; display: inline-block; position: relative; overflow: hidden; }
   .swatch i { position: absolute; inset: 0 50% 0 0; display: block; }

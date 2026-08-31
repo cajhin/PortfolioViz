@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Portfolio</title>
+<title>Portfolio Viz</title>
 <!-- Tab icon: the sector map in miniature — a square cut unevenly into four tiles, red/yellow/
      green like the map's own gain-loss colouring, the two greens on opposite corners so they never
      touch. Inline as a data URI so the page stays four files with nothing to fetch, and a fixed
@@ -12,7 +12,7 @@
 <link rel="stylesheet" href="portfolio.css">
 </head>
 <body>
-<div class="verttitle" aria-hidden="true">Portfolio</div>
+<div class="verttitle" aria-hidden="true">Portfolio Viz</div>
 <div class="wrap">
   <div id="loader" class="loader" hidden>
     <div>Could not read <code>parqet/positions.csv</code> automatically (browsers block local file reads from <code>file://</code>).</div>
@@ -114,19 +114,21 @@
         loss.
       </div>
       <div class="key" id="keyMap">
-        Each tile is one position, its <em>area</em> proportional to the position's <b>current value</b> —
-        which portfolio it sits in plays no part in the layout — hover a tile for that.
-        Colour is the <b>unrealised return</b> — green for a gain, red for a loss,
-        grey at zero, saturating at +300% and −100% along a hyperbolic curve — it spends its contrast where
-        the returns actually live, so 10% → 20% shifts the colour as far as 50% → 150% does. The bar across the foot sits flush against the body —
-        no divider — and its height is the result measured against the tile it sits in: gain ÷ current
-        value, so a +100% position fills half the tile, and a −50% position, whose loss equals what is
-        left, fills the whole one. Body and bar share the one ramp: the body takes the <b>total</b>
-        return, the bar the <b>annualised</b> one, so a long-held position with a big total gain but a
-        modest yearly rate shows a bar lighter than its body, and a recent flyer shows a darker one.
-        The annualised figure is a CAGR from the position's first activity date — Parqet exposes no
-        per-trade cash flows, so it approximates IRR and understates positions bought in several
-        tranches. Hover a tile for the exact figures.
+        Each tile is one position; its <em>size</em> is the position's <b>current value</b>, so bigger
+        always means worth more today, regardless of which broker holds it — hover a tile to see that.
+        Colour is the <b>unrealised return</b> — green for a gain, red for a loss, grey at zero — but it
+        stops getting more intense past +300% or −100%, so two big winners (or losers) can look almost
+        the same colour even when one has actually done much better.
+        The area across the foot is a second figure for the same tile: its height is the gain or loss as
+        a share of current value, so a +100% position's area fills half the tile, and a −50%
+        position's — where the loss equals everything that's left — fills the whole tile (losses should
+        logically sit outside the current value box, but that would increase the total portfolio area).
+        The body colours by <b>total</b> return, the foot area by <b>annualised</b> return (XIRR) — the
+        money-weighted rate implied by the position's own trade dates and amounts — so a long-held
+        position with a big total gain but a modest yearly rate shows a lighter foot than body, and a
+        recent fast mover shows the opposite. The rare position with too little trade history for XIRR
+        to solve falls back to a plain CAGR from its first activity date instead. Hover a tile for the
+        exact figures.
       </div>
       </div>
     </div>
