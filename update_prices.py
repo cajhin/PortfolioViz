@@ -24,6 +24,7 @@ Written once per run:    gen_prices/_latest.csv       id,date,close,source
 FX series are cached in  gen_fx/<PAIR>.csv            date,rate
 """
 import csv, io, json, os, subprocess, sys, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +34,7 @@ REGISTRY = os.path.join(ROOT, "registry")
 UA = "Mozilla/5.0"
 FALLBACK_START = "2019-08-20"
 PLACEHOLDER_RUN = 5   # a shorter identical run is coincidence, not a dormant listing
+MAX_WORKERS = 4
 
 
 def config():
@@ -173,14 +175,6 @@ def update_one(inst, src, backfill=None):
     rows = read_series(path)
 
     symbol, ccy = src["symbol"].strip(), (src["quote_currency"] or portfolio_currency()).strip()
-    if src["source"] != "yahoo" or not symbol:
-        # manual (or unquotable, e.g. an expired warrant) — nothing to fetch, keep what's on disk
-        if not rows:
-            print(f"  {iid} [{slug}]: nothing stored")
-            return None
-        last = rows[max(rows)]
-        return {"id": iid, "date": last["date"], "close": last["close"],
-               "source": last.get("source", "")}
 
     have_from = max(rows) if rows else None
     # a --from later than what is already stored is not a real backfill request — keep updating
@@ -256,14 +250,30 @@ def main():
         if not wanted:
             sys.exit(f"no instrument matching {key!r} in registry/instruments.csv")
 
-    latest = []
+    # "manual" with no symbol is the registry's way of marking an instrument dead — an expired
+    # warrant, mainly — nothing to fetch, so it never earns a place in the pool or the log
+    jobs, dead = [], []
     for inst in wanted:
         src = sources.get(inst["id"])
         if not src:
-            continue                                 # cash, or anything with nothing to fetch
-        row = update_one(inst, src, backfill)
-        if row:
-            latest.append(row)
+            continue
+        (jobs if src["source"] == "yahoo" and src["symbol"] else dead).append((inst, src))
+    for inst, src in dead:
+        print(f"  {inst['id']} [{inst['slug']}]: {src['note'] or 'manual, no symbol'} — skipped")
+
+    # every fx pair the jobs below will need, fetched here and not in the pool: fx_series()
+    # caches in memory and rewrites gen_fx/<PAIR>.csv on every call, and two worker threads
+    # racing the same pair would duplicate the fetch and could interleave the write
+    for pair in sorted({src["fx_symbol"] for _, src in jobs if src["fx_symbol"]}):
+        fx_series(pair, timeline_start())
+
+    latest = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = [pool.submit(update_one, inst, src, backfill) for inst, src in jobs]
+        for future in as_completed(futures):
+            row = future.result()
+            if row:
+                latest.append(row)
     if not args and latest:
         write_latest(latest)
 
