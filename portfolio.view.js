@@ -2416,6 +2416,30 @@ function syncAsOfControls() {
     `Slide the whole range by one ${unit} · ← → a day · ↓ ↑ a month · PgDn/PgUp a year ` +
     `(back on ← ↓ PgDn, forward on → ↑ PgUp)`;
   document.getElementById('asOfClear').hidden = !AS_OF;
+  saveRangeState();
+}
+
+// Buttons get none of the browser's native reload memory a checkbox gets (see MODE below), so the
+// map's range is persisted by hand. A span is saved by name, not by the dates it currently resolves
+// to — restoring it re-measures off the new "now" the same way a click does, rather than freezing
+// what "one day back" meant at save time. A hand-picked start with no matching span has no name to
+// save, so its raw date goes instead.
+const RANGE_STATE_KEY = 'portfolioviz.range';
+function saveRangeState() {
+  try {
+    localStorage.setItem(RANGE_STATE_KEY, JSON.stringify(
+      { spanKey: AS_SPAN ? AS_SPAN.key : null, asOf: AS_OF, asFrom: AS_SPAN ? null : AS_FROM }));
+  } catch { /* private browsing, storage disabled — the range just won't survive a reload */ }
+}
+function restoreRangeState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(RANGE_STATE_KEY));
+    if (!saved) return;
+    AS_OF = saved.asOf || null;
+    AS_SPAN = saved.spanKey ? (RANGE_PRESETS.find(p => p.key === saved.spanKey) || RANGE_PRESETS[0])
+                            : null;
+    if (!AS_SPAN) AS_FROM = saved.asFrom || null;
+  } catch { /* malformed or inaccessible — fall back to the page's own defaults */ }
 }
 
 // `iso` moved by whole months and then days, in UTC. setUTCMonth alone overflows FORWARD past the
@@ -2619,6 +2643,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 // script re-running — read it back before anything renders, so MODE starts in sync with what the
 // page actually shows rather than at the model's 'abs' default under an already-ticked box.
 MODE = document.getElementById('relMode').checked ? 'rel' : 'abs';
+restoreRangeState();
 
 // ingest() builds the model; this draws it. Split so the model can be exercised without a DOM.
 function load(...texts) {
