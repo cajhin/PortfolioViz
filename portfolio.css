@@ -176,7 +176,8 @@
   .maplbl.dark { fill: #12120f; }        /* funds */
   .mapsub { font-size: calc(8px / var(--map-scale, 1)); font-variant-numeric: tabular-nums; }
   .sectorbg { pointer-events: none; }
-  .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700; fill: #12120f;
+  /* fill is set inline per sector, not here (see renderMap) — its colour is the sector's own hue */
+  .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700;
                text-transform: uppercase; letter-spacing: 0.07em; pointer-events: none; }
   .closedhead { display: flex; justify-content: flex-start; align-items: baseline;
                 margin: 14px 0 2px; font-size: 0.82rem; color: var(--text-secondary); }
@@ -212,22 +213,44 @@
   table { border-collapse: collapse; width: 100%; font-size: 0.87rem; font-variant-numeric: tabular-nums; }
   th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th { color: var(--text-muted); font-weight: 500; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; }
-  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  /* text columns left, numeric columns right — same rule as td.posname's dotcell flex already
+     gives its own column, just spelled out for th too, and per table since each one's count of
+     leading text columns differs (Trades has a Type column after Position, Watch a Sector one) */
+  #tbl th:nth-child(-n+3), #tbl td:nth-child(-n+3),
+  #tblClosedPositions th:nth-child(-n+3), #tblClosedPositions td:nth-child(-n+3),
+  #tblTrades th:nth-child(-n+4), #tblTrades td:nth-child(-n+4),
+  #tblWatch th:nth-child(-n+3), #tblWatch td:nth-child(-n+3) { text-align: left; }
   td:nth-child(2) { white-space: normal; }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr.sub td { background: color-mix(in srgb, var(--text-primary) 4%, transparent); font-weight: 600; }
   /* Sortable headers. The caret is always in the box and merely invisible until the column is
      sorted, so clicking one never shifts the header text sideways. It sits inside the cell's own
-     padding rather than adding to it, which keeps a header flush with the column it labels. */
+     padding rather than adding to it, which keeps a header flush with the column it labels.
+     Which side depends on the header's own alignment: after the label for a left-aligned (text)
+     column — the default below — so the label's left edge, the one that matters, stays exactly
+     where the left-aligned data under it starts. A right-aligned (numeric) column flips that: the
+     caret goes in front instead (overridden further down, alongside the same text-align split
+     above), so it's the label's *right* edge that stays put, flush with the numbers under it. */
   th.sortable { cursor: pointer; user-select: none; }
   th.sortable:hover { color: var(--text-primary); }
   th.sortable::after {
     content: '▲'; display: inline-block; width: 0.8em; margin-left: 4px;
     font-size: 0.85em; opacity: 0;
   }
+  #tbl th:nth-child(n+4).sortable::after,
+  #tblClosedPositions th:nth-child(n+4).sortable::after,
+  #tblTrades th:nth-child(n+5).sortable::after,
+  #tblWatch th:nth-child(n+4).sortable::after { display: none; }
+  #tbl th:nth-child(n+4).sortable::before,
+  #tblClosedPositions th:nth-child(n+4).sortable::before,
+  #tblTrades th:nth-child(n+5).sortable::before,
+  #tblWatch th:nth-child(n+4).sortable::before {
+    content: '▲'; display: inline-block; width: 0.8em; margin-right: 4px;
+    font-size: 0.85em; opacity: 0;
+  }
   th.sorted { color: var(--text-primary); }
-  th.sorted::after { opacity: 0.8; }
-  th.sorted.desc::after { content: '▼'; }
+  th.sorted::after, th.sorted::before { opacity: 0.8; }
+  th.sorted.desc::after, th.sorted.desc::before { content: '▼'; }
   .pos { color: var(--series-2); }
   .realized { color: var(--realized); }
   .income { color: var(--income); }
@@ -235,6 +258,7 @@
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; flex: none; }
   .tablescroll { overflow-x: auto; }
   td.src { color: var(--text-muted); font-size: 0.78rem; white-space: nowrap; }
+  td.dotcell { display: flex; align-items: center; }
   td.posname { cursor: pointer; }
   td.posname:hover { text-decoration: underline; }
 

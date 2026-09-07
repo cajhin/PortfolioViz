@@ -138,7 +138,7 @@ const r = v => typeof v === 'number'
 const FIELDS = ['portfolio', 'label', 'identifier', 'shares', 'cur', 'pur', 'purAbs', 'gain', 'ret',
   'rel', 'relPre', 'state', 'cash', 'fund', 'invested', 'split', 'irr', 'irrExact', 'benchIrr',
   'benchAlt', 'alpha', 'divHeld', 'divSold', 'since', 'sinceKnown', 'vsBench', 'heldValue',
-  'benchValue', 'soldShares', 'grossProceeds', 'sellCount', 'taxSell', 'share', 'core', 'years'];
+  'benchValue', 'soldShares', 'grossProceeds', 'sellCount', 'taxSell', 'share', 'years'];
 const snap = d => Object.fromEntries(FIELDS.map(k => [k, r(d[k])]).concat([['flows', d.flows.length]]));
 
 // hover every node a renderer hung on a position and keep what the tooltip showed. `nodes` is the

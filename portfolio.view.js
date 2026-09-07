@@ -688,7 +688,7 @@ function renderMeta(items, closed = []) {
       tr.innerHTML =
         `<td>${p.name}</td>` +
         `<td class="src">${sourceTag(d)}</td>` +
-        `<td class="posname"><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
+        `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
         `<td>${d.shares.toLocaleString('de-DE')}</td>` +
         `<td>${fmtMoney2(d.pur)}</td><td>${fmtMoney2(d.cur)}</td>` +
         `<td class="${cls}">${d.state === 'flat' ? '–' : fmtMoney2(d.gain)}</td>` +
@@ -729,7 +729,7 @@ function renderClosedPositions() {
     tr.innerHTML =
       `<td>${d.portfolio}</td>` +
       `<td class="src">${sourceTag(d)}</td>` +
-      `<td class="posname"><span class="dot" style="background:${d.core}"></span>${d.label}</td>` +
+      `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
       `<td>${fmtMoney2(d.invested)}</td>` +
       `<td class="${Number.isFinite(ret) ? (ret >= 0 ? 'pos' : 'neg') : ''}">${Number.isFinite(ret) ? fmtPct(ret) : '–'}</td>` +
       `<td class="${d.relPre >= 0 ? 'realized' : 'neg'}">${fmtMoney2(d.relPre)}</td>` +
@@ -812,7 +812,7 @@ function renderWatch() {
     tr.addEventListener('click', () => openDetail(d));
     tr.innerHTML =
       `<td class="src">${sourceTag(d)}</td>` +
-      `<td><span class="dot" style="background:${nameColor(d.label)}"></span>${d.label}</td>` +
+      `<td class="dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
       `<td>${inst.sector || '–'}</td>` +
       `<td>${last ? fmtMoney2(last.price) : '–'}</td>`;
     return tr;
@@ -1088,11 +1088,11 @@ const tintPct = (tint, key, deltaKey, base) => {
   const d = tint[deltaKey];
   return d != null ? `calc(${base} ${d < 0 ? '-' : '+'} ${Math.abs(d)}%)` : base;
 };
-// Same core-token treatment nameColor gives a position, but keyed by sector instead — every
-// place on the page that wants a sector's colour (the pie's wedges, its legend) goes through
-// this one function so a sector never reads two different shades of itself. A picked override
-// fixes saturation outright (its own number, not a token) but still leaves lightness to the
-// caller's base — the picker only ever varies hue and saturation, see openColorPicker.
+// Every place on the page that wants a sector's colour — the pie's wedges, its legend, and the
+// dot beside a position's name in the positions/closed/watch tables — goes through this one
+// function, so a sector never reads two different shades of itself. A picked override fixes
+// saturation outright (its own number, not a token) but still leaves lightness to the caller's
+// base — the picker only ever varies hue and saturation, see openColorPicker.
 function sectorHsl(name) {
   const ov = SECTOR_COLOR_OVERRIDE.get(name);
   if (ov) return `hsl(${ov.hue.toFixed(1)}deg ${ov.sat}% var(--core-l))`;
@@ -1342,11 +1342,13 @@ function renderMap(items, asOf) {
     });
 
     // sector name, overlaid on the top-left tile after it (and everything on it) is drawn, so it
-    // sits on top rather than sharing the tile's own space
+    // sits on top rather than sharing the tile's own space. Coloured by sectorHsl — the exact same
+    // colour the legend swatch and the pie's own wedges use for this sector, not a map-local
+    // reinterpretation of it — regardless of what tile happens to sit underneath.
     if (firstTile && firstTile.w > 30 && firstTile.h > 16) {
       const lbl = el('text', {
         x: firstTile.x + 4 * nudge, y: firstTile.y + 8 * nudge,
-        class: 'sectorlbl',
+        class: 'sectorlbl', fill: sectorHsl(sr.item),
       });
       lbl.textContent = sr.item;
       g.appendChild(lbl);
@@ -1712,7 +1714,7 @@ const ALL_ID = '__all';           // "everything at once" — offered by the + c
 
 // the "discount up vola 50%" checkbox — a view preference like SHOW_MONEY, not part of DETAIL
 // itself, so it survives closing and reopening the dialog on a different position
-let VOLA_DOWNSIDE = false;
+let VOLA_DOWNSIDE = true;
 
 function drawDetail(d, series, alignDate, range, custom, extras) {
   const W = 840, H = 300, T = 12, B = 22;

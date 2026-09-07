@@ -193,16 +193,6 @@ function survivingLots(deals, { until = '9999-99-99', priceOf = NET_PER_SHARE } 
 const lotShares = lots => lots.reduce((t, l) => t + l.shares, 0);
 const lotCost = lots => lots.reduce((t, l) => t + l.shares * l.price, 0);
 
-/* ---------- colour from name ---------- */
-const HUE_FROM = 190, HUE_TO = 280;   // cyan → violet, keyed by the first two letters of the name
-
-function nameHue(name) {
-  const letters = (name || '').toLowerCase().replace(/[^a-z]/g, '') + 'aa';
-  const a = letters.charCodeAt(0) - 97, b = letters.charCodeAt(1) - 97;
-  const t = Math.min(1, Math.max(0, (a * 26 + b) / (26 * 26 - 1)));
-  return HUE_FROM + t * (HUE_TO - HUE_FROM);
-}
-
 /* ---------- XIRR from the trade list ---------- */
 const YEAR_MS = 365.2425 * 864e5;
 const SIGN = { buy: -1, transfer_in: -1, fees_taxes: -1, sell: +1, dividend: +1, interest: +1, transfer_out: +1 };
@@ -615,7 +605,7 @@ async function computeAsOf(dateStr, fromStr = null) {
     const gain = cur - pur;
     out.push({
       portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
-      core: d.core, fund: d.fund, shares: sharesAtD,
+      fund: d.fund, shares: sharesAtD,
       // purAbs is what these shares actually cost, before any re-basing or benchmark substitution
       // — the money that left the account. `pur` is what the range or the vs.-World mode measures
       // against, which on a range pick is a market value rather than a purchase, so only purAbs
@@ -1034,8 +1024,6 @@ function annualised(d) {
 }
 
 /* ---------- build ---------- */
-const nameColor = name => `hsl(${nameHue(name).toFixed(1)}deg var(--core-s) var(--core-l))`;
-
 function build(rows) {
   CCY = rows[0]?.currency || 'EUR';
 
@@ -1142,7 +1130,7 @@ function build(rows) {
   PF = [...byPf.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => ({ name }));
   const rank = new Map(PF.map((p, i) => [p.name, i]));
 
-  applyMode(items);                                    // sets .core, .pur, .gain, .ret, .state
+  applyMode(items);                                    // sets .pur, .gain, .ret, .state
 
   // group by portfolio (contiguous arcs), largest position first inside each group
   return items.sort((a, b) =>
@@ -1157,7 +1145,6 @@ function applyMode(items) {
     d.gain = d.cur + (d.divHeld || 0) - d.pur;      // income the shares paid out counts as return
     d.ret = d.pur > 0 ? d.gain / d.pur * 100 : 0;
     d.state = (!(d.pur > 0) || Math.abs(d.gain) < 0.005) ? 'flat' : (d.gain > 0 ? 'gain' : 'loss');
-    d.core = nameColor(d.label);
   });
 }
 const barValue = d => (d.isTax || d.isDiv) ? d.relPre
