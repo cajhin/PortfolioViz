@@ -103,10 +103,11 @@ function fmtClose(row) {
 
 // A range pick re-bases every basis figure onto its start date (see rebaseLots), so the words for
 // those figures have to move with it: "invested" is no longer what the number means once the
-// comparison starts mid-history. Only the map reconstructs — the pie and the two tables are always
-// live — so this reads null everywhere else and the wording falls back to the lifetime one.
-const rangeFrom = () => (VIEW === 'map' && AS_FROM) ? AS_FROM : null;
-const rangeAt = () => (VIEW === 'map' && AS_OF) ? AS_OF : null;
+// comparison starts mid-history. The map and the pie both reconstruct — the two tables are always
+// live — so this reads null there and the wording falls back to the lifetime one.
+const isChartView = () => VIEW === 'map' || VIEW === 'pie';
+const rangeFrom = () => (isChartView() && AS_FROM) ? AS_FROM : null;
+const rangeAt = () => (isChartView() && AS_OF) ? AS_OF : null;
 const rangeTo = () => rangeAt() || TODAY;
 const purLabel = short => MODE === 'rel' ? `Same money in ${BENCH_LABEL}`
   : rangeFrom() ? `Value on ${deDate(rangeFrom())}`
@@ -139,10 +140,35 @@ const el = (n, attrs) => {
 const LABEL_MIN_SHARE = 0.003;   // label wedges worth at least 0.3% of the total…
 const LABEL_GAP = 14;            // …as long as they still fit this far apart
 
-function renderPie(items) {
+function renderPie(items, asOf) {
   const svg = document.getElementById('pie');
   const H = 560, cx = 450, cy = 280;
+  // The incoming order groups by broker (see build()) so the map's sectors and the positions
+  // table read that way — the pie doesn't want that grouping at all, every stock stands on its
+  // own regardless of which broker holds it, so it re-sorts by value alone. A copy, since the
+  // shared array backs those other views too.
+  items = [...items].sort((a, b) => b.cur - a.cur);
   const total = items.reduce((s, d) => s + d.cur, 0);
+
+  // The svg is shared with the map, which shrinks it (width + --map-scale) for a small as-of
+  // snapshot — undo that here so a pie drawn right after a shrunk map isn't left tiny for a
+  // reason that has nothing to do with the pie's own layout, which never shrinks.
+  svg.style.width = '100%';
+  svg.style.setProperty('--map-scale', 1);
+
+  const note = document.getElementById('asOfNote');
+  if (asOf) {
+    note.hidden = false;
+    note.innerHTML =
+      (asOf.from ? `From <b>${asOf.from}</b> to <b>${asOf.date}</b>: ` : `As of <b>${asOf.date}</b>: `) +
+      `<b>${fmtMoney2(asOf.asOfTotal)}</b>` +
+      ` (${(asOf.ratio * 100).toFixed(0)}% of today's ${fmtMoney(asOf.currentTotal)})` +
+      (asOf.missing.length
+        ? ` ${asOf.missing.length} ${asOf.from ? 'omitted for lack of price history at one end of the range' : 'held then but omitted for lack of price history'}: ${asOf.missing.join(', ')}.`
+        : '');
+  } else {
+    note.hidden = true;
+  }
 
   // R is the radius whose wedge area equals a position's CURRENT value (angle is proportional to it).
   // A loser's red band reaches past R, out to the radius that is area-true to its purchase value.
@@ -182,7 +208,7 @@ function renderPie(items) {
     // inner disc — purchase value (gainers) or current value (losers)
     const inner = el('path', {
       d: wedge(cx, cy, 0, Math.max(d.rIn, 0.5), a0, a1),
-      fill: d.core, ...stroke,
+      fill: sectorFill(d), ...stroke,
     });
     g.appendChild(addNode(nodes, d, inner));
 
@@ -233,18 +259,6 @@ function renderPie(items) {
   };
   place(right, 1); place(left, -1);
 
-  // portfolio boundaries — a thin radial line where one portfolio's arc meets the next
-  const dividers = el('g', {
-    stroke: 'var(--rim)', 'stroke-width': 0.8, 'stroke-linecap': 'round', 'pointer-events': 'none',
-  });
-  items.forEach((d, i) => {
-    const prev = items[(i - 1 + items.length) % items.length];
-    if (prev.portfolio === d.portfolio) return;
-    const rEnd = Math.max(R, d.rRel, prev.rRel) + 3;
-    const [x, y] = pt(cx, cy, rEnd, d.a0);
-    dividers.appendChild(el('line', { x1: cx, y1: cy, x2: x, y2: y }));
-  });
-
   // the rim itself — the radius at which a wedge's area is its current value
   const rim = el('circle', {
     cx, cy, r: R, fill: 'none', stroke: 'var(--rim)', 'stroke-width': 0.8,
@@ -253,11 +267,11 @@ function renderPie(items) {
 
   svg.setAttribute('aria-label', 'Pie of all positions; the band inside the rim is the gain, ' +
     'a band beyond it a loss, and the outermost bands realised results');
-  svg.replaceChildren(g, dividers, rim, labels);
+  svg.replaceChildren(g, rim, labels);
 
   attachTip(items, nodes);
 
-  legendPie();
+  legendPie(items);
   return nodes;
 }
 
@@ -357,8 +371,8 @@ function sparkline(d) {
   }
 }
 function sparkSvg(d) {
-  // rangeFrom/rangeTo, not AS_FROM/AS_OF: the pie shares this tooltip and does not reconstruct,
-  // so its figures are live and its graph has to be too, or the two would describe different days
+  // rangeFrom/rangeTo, not AS_FROM/AS_OF directly: both the map and the pie reconstruct, and this
+  // keeps the sparkline bounded to whichever one is on screen the same way the figures beside it are
   const path = pricePath(d, rangeFrom(), rangeTo());
   if (!path) { warmSeries(d); return ''; }        // not loaded yet — have it ready for next time
 
@@ -430,7 +444,8 @@ function attachTip(items, nodes) {
   // it. .closest('.chartwrap') is the same fix renderClosed() already needed for this same tip.
   const wrapEl = svg.closest('.chartwrap');
   items.forEach(d => nodesOf(nodes, d).forEach(n => {
-    n.style.cursor = 'default';
+    n.style.cursor = 'pointer';
+    n.addEventListener('click', () => openDetail(d));
     n.addEventListener('pointerenter', e => {
       tip.innerHTML =
         tipHead(d, false) +
@@ -461,28 +476,98 @@ function attachTip(items, nodes) {
   }));
 }
 
-function legendPie() {
+function legendPie(items) {
   const legend = document.getElementById('legend');
-  const ramp = text => {
-    const div = document.createElement('div'); div.className = 'item';
-    div.innerHTML = `<span class="swatch" style="background:linear-gradient(90deg,` +
-      `hsl(${HUE_FROM}deg var(--core-s) var(--core-l)),hsl(${HUE_TO}deg var(--core-s) var(--core-l)))"></span>` +
-      `<span>${text}</span>`;
-    return div;
-  };
   const mk = (bg, core, text) => {
     const div = document.createElement('div'); div.className = 'item';
     div.innerHTML = `<span class="swatch" style="background:${bg}"><i style="background:${core}"></i></span><span>${text}</span>`;
     return div;
   };
+  // one swatch per sector actually on screen, in the same fixed order the map's sectors use, so
+  // the two charts read as the same colour language rather than each inventing its own — and,
+  // unlike the other rows below, clickable: it's the one place on the page a sector's colour can
+  // actually be changed, so it gets the pointer cursor and a title to say so.
+  const sectors = [...new Set(items.map(sectorOf))].sort((a, b) => sectorRank(a) - sectorRank(b));
+  const sectorSwatches = sectors.map(s => {
+    const div = mk(sectorHsl(s), sectorHsl(s), s);
+    div.style.cursor = 'pointer';
+    div.title = `Change ${s}'s colour`;
+    div.addEventListener('click', () => openColorPicker(s, div));
+    return div;
+  });
   legend.replaceChildren(
-    ramp('Core = invested, hue by name (aa → zz)'),
+    ...sectorSwatches,
     mk('var(--gain-light)', 'var(--gain-light)', 'Unrealised gain — light green band inside the rim'),
     mk('var(--loss-light)', 'var(--loss-light)', 'Unrealised loss — light red band beyond the rim'),
     mk('var(--realized)', 'var(--realized)', 'Realised gain — green band outside'),
     mk('var(--loss-deep)', 'var(--loss-deep)', 'Realised loss — dark red band outside'),
-    mk('var(--rim)', 'var(--rim)', 'Black radial line — portfolio boundary'),
   );
+}
+
+// registry/sector_colors.csv is an override layer on top of the built-in SECTOR_HUE/SECTOR_TINT
+// defaults (see SECTOR_COLOR_OVERRIDE, above sectorHue) — a sector with no row here just keeps
+// whatever the defaults already gave it. This is the curated, committed starting point every
+// browser sees before it has picked any colours of its own — see loadSectorColors below for what
+// takes over once it has.
+function applySectorColors(text) {
+  SECTOR_COLOR_OVERRIDE = new Map(
+    parseCSV(text || '').map(r => [r.sector, { hue: num(r.hue), sat: num(r.sat) }]));
+}
+// localStorage first, the file only as the fallback for a browser that has never picked a colour
+// (or one whose stored value came back malformed) — the mirror image of the range picker's own
+// saveRangeState/restoreRangeState further down, same key prefix, same try/catch-and-shrug.
+const SECTOR_COLORS_KEY = 'portfolioviz.sectorColors';
+function loadSectorColors(fileText) {
+  try {
+    const saved = localStorage.getItem(SECTOR_COLORS_KEY);
+    if (saved != null) { SECTOR_COLOR_OVERRIDE = new Map(Object.entries(JSON.parse(saved))); return; }
+  } catch { /* malformed, or storage inaccessible (private browsing) — fall back to the file */ }
+  applySectorColors(fileText);
+}
+function saveSectorColors() {
+  try {
+    localStorage.setItem(SECTOR_COLORS_KEY, JSON.stringify(Object.fromEntries(SECTOR_COLOR_OVERRIDE)));
+  } catch { /* private browsing, storage disabled — the pick just won't survive a reload */ }
+}
+
+/* ---------- sector colour picker ----------
+   The legend's sector swatches (above) are the one place a sector's colour can be changed. Every
+   cell is the sector's own hue/saturation grid: hue down the rows (8 steps around the full
+   circle), saturation across the columns (8 steps), lightness pinned to whatever --core-l resolves
+   to right now so the grid matches the pastel look every other sector already has on screen. */
+const CP_HUES = 8, CP_SATS = 8;
+function openColorPicker(sector, anchorEl) {
+  const dlg = document.getElementById('colorPicker');
+  document.getElementById('cpTitle').textContent = `Colour for ${sector}`;
+  const lit = (getComputedStyle(document.documentElement).getPropertyValue('--core-l') || '').trim() || '55%';
+  const current = SECTOR_COLOR_OVERRIDE.get(sector);
+  const cells = [];
+  for (let row = 0; row < CP_HUES; row++) {
+    const hue = row * 360 / CP_HUES;
+    for (let col = 0; col < CP_SATS; col++) {
+      const sat = Math.round((col + 1) * 100 / CP_SATS);
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'cp-cell' +
+        (current && Math.round(current.hue) === Math.round(hue) && current.sat === sat ? ' current' : '');
+      cell.style.background = `hsl(${hue}deg ${sat}% ${lit})`;
+      cell.setAttribute('aria-label', `hue ${Math.round(hue)}°, saturation ${sat}%`);
+      cell.addEventListener('click', () => { dlg.close(); pickSectorColor(sector, hue, sat); });
+      cells.push(cell);
+    }
+  }
+  document.getElementById('cpGrid').replaceChildren(...cells);
+  dlg.showModal();
+}
+document.getElementById('cpClose').addEventListener('click', () => document.getElementById('colorPicker').close());
+document.getElementById('colorPicker').addEventListener('click', e => {
+  if (e.target.id === 'colorPicker') e.target.close();       // click the backdrop
+});
+
+function pickSectorColor(sector, hue, sat) {
+  SECTOR_COLOR_OVERRIDE.set(sector, { hue, sat });
+  redrawEverything();
+  saveSectorColors();
 }
 
 /* ---------- table + headline figures ---------- */
@@ -869,10 +954,10 @@ function redrawEverything() {
 // Picks live vs. as-of totals for the header tiles and the realised bar together, so the two
 // never disagree about which dates they're showing. A start date on its own is enough to take
 // this path: "since March" still needs the whole reconstruction even though the end is today.
-// The pie view has no as-of rendering of its own, so it always falls back to live totals even if
-// a date is still picked underneath.
+// Both chart views reconstruct now — the tables still fall back to live totals even if a date is
+// still picked underneath, since neither one reads the as-of pick at all.
 async function refreshHeader() {
-  if ((AS_OF || AS_FROM) && VIEW === 'map') {
+  if ((AS_OF || AS_FROM) && isChartView()) {
     const to = AS_OF || TODAY;
     const [snap, real] = await Promise.all([computeAsOf(to, AS_FROM), computeAsOfRealized(to, AS_FROM)]);
     renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal });
@@ -958,10 +1043,25 @@ const sectorOf = d => SECTORS.get(d.identifier) || 'Other';
 // ones happen to be present today. Anything not listed here (a sector added to the CSV later)
 // still gets a colour, just hashed rather than hand-picked.
 // "Cash" here is a *sector*, not the asset type that was removed — the bucket for holdings kept
-// as cash equivalents rather than for a bank balance. It sits last, after Other.
+// as cash equivalents rather than for a bank balance. New sectors are appended, never inserted —
+// that keeps every earlier sector's golden-angle hue exactly where it was.
 const SECTOR_ORDER = ['Optical', 'Hyperscaler', 'Semiconductors', 'Cybersecurity', 'AI Supply',
-  'Other', 'Cash'];
+  'Other', 'Cash', 'Diverse'];
+// A few sectors want a specific hue instead of whatever the golden-angle spacing lands on.
+// Hyperscaler doesn't get one of its own at all — it borrows AI Supply's outright, since it is
+// meant to read as a shade of it rather than a different colour (see sectorFill/sectorTint below).
+const SECTOR_HUE = { Optical: 30, Other: 210, Diverse: 240 };
+// A hand- or picker-assigned override, keyed by sector name — loaded by loadSectorColors (from
+// localStorage, or registry/sector_colors.csv the first time a browser has none) and added to by
+// pickSectorColor. Takes over both hue and saturation for a sector the moment it has an entry —
+// SECTOR_HUE/SECTOR_TINT below are only the built-in fallback for a sector nobody has picked a
+// colour for yet.
+let SECTOR_COLOR_OVERRIDE = new Map();
 function sectorHue(name) {
+  const ov = SECTOR_COLOR_OVERRIDE.get(name);
+  if (ov) return ov.hue;
+  if (name === 'Hyperscaler') return sectorHue('AI Supply');
+  if (SECTOR_HUE[name] != null) return SECTOR_HUE[name];
   const i = SECTOR_ORDER.indexOf(name);
   if (i >= 0) return (i * 137.508) % 360;                 // golden-angle spacing, well separated
   let h = 0;
@@ -972,6 +1072,35 @@ function sectorRank(name) {
   const i = SECTOR_ORDER.indexOf(name);
   return i >= 0 ? i : SECTOR_ORDER.length + name.charCodeAt(0);
 }
+// Saturation/lightness nudges away from the shared ramp, for the same few sectors that want to
+// look different rather than merely differently-hued: Other desaturates toward grey; Hyperscaler
+// only darkens (its hue already came from AI Supply above). Diverse takes its hue (SECTOR_HUE,
+// above) but otherwise the same pastel base as every other sector — no tint entry needed for it.
+// `sat`/`lit` are flat overrides (in percentage points), `satDelta`/`litDelta` are relative to
+// whatever base the caller is using — the pie's theme-aware --core-s/--core-l tokens, or the
+// map's fixed 55%/55% tile tint.
+const SECTOR_TINT = {
+  Other:       { satDelta: -25 },
+  Hyperscaler: { litDelta: -15 },
+};
+const tintPct = (tint, key, deltaKey, base) => {
+  if (tint[key] != null) return `${tint[key]}%`;
+  const d = tint[deltaKey];
+  return d != null ? `calc(${base} ${d < 0 ? '-' : '+'} ${Math.abs(d)}%)` : base;
+};
+// Same core-token treatment nameColor gives a position, but keyed by sector instead — every
+// place on the page that wants a sector's colour (the pie's wedges, its legend) goes through
+// this one function so a sector never reads two different shades of itself. A picked override
+// fixes saturation outright (its own number, not a token) but still leaves lightness to the
+// caller's base — the picker only ever varies hue and saturation, see openColorPicker.
+function sectorHsl(name) {
+  const ov = SECTOR_COLOR_OVERRIDE.get(name);
+  if (ov) return `hsl(${ov.hue.toFixed(1)}deg ${ov.sat}% var(--core-l))`;
+  const tint = SECTOR_TINT[name] || {};
+  return `hsl(${sectorHue(name).toFixed(1)}deg ` +
+    `${tintPct(tint, 'sat', 'satDelta', 'var(--core-s)')} ${tintPct(tint, 'lit', 'litDelta', 'var(--core-l)')})`;
+}
+const sectorFill = d => sectorHsl(sectorOf(d));
 
 // squarified treemap: lay `vals` (descending) into rect {x,y,w,h}
 function squarify(vals, rect) {
@@ -1128,9 +1257,15 @@ function renderMap(items, asOf) {
     // mapScale, and a bare stroke-width shrinks right along with it — the border on a small,
     // long-ago snapshot would visibly thin out as its value dropped, when the line is chrome, not
     // data, and should read the same width regardless of what the map happens to be showing.
+    // same saturation/lightness nudges sectorFill applies for the pie, off the map's own fixed
+    // 55%/55% tile base rather than the pie's theme-aware tokens — a picked override wins outright
+    const ov = SECTOR_COLOR_OVERRIDE.get(sr.item);
+    const tint = SECTOR_TINT[sr.item] || {};
+    const sat = ov ? ov.sat : tint.sat != null ? tint.sat : tint.satDelta != null ? 55 + tint.satDelta : 55;
+    const lit = tint.lit != null ? tint.lit : tint.litDelta != null ? 55 + tint.litDelta : 55;
     const bg = el('rect', {
       x: sr.x, y: sr.y, width: sr.w, height: sr.h,
-      fill: `hsl(${hue.toFixed(1)}deg 55% 55% / 0.22)`,
+      fill: `hsl(${hue.toFixed(1)}deg ${sat}% ${lit}% / 0.22)`,
       stroke: 'var(--rim)', 'stroke-width': 2 * nudge,
       class: 'sectorbg',
     });
@@ -2324,19 +2459,19 @@ async function show(view) {
   document.getElementById('chartBody').hidden = !isChart;
   document.getElementById('keyPie').hidden = view !== 'pie';
   document.getElementById('keyMap').hidden = view !== 'map';
-  document.getElementById('asOfWrap').hidden = view !== 'map';
+  document.getElementById('asOfWrap').hidden = !isChart;
   document.getElementById('positionsCard').hidden = view !== 'positions';
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('watchCard').hidden = view !== 'watch';
   document.getElementById('tip').classList.remove('on');
-  // as-of reconstruction only exists for the map — disable the actual controls (not just the
-  // hidden wrapper) so they can't be triggered by a stray focus/keypress on the other frames
+  // as-of reconstruction exists for the map and the pie — disable the actual controls (not just
+  // the hidden wrapper) so they can't be triggered by a stray focus/keypress on the other frames
   ['asOfDate', 'asFromDate', 'asOfDayBack', 'asOfDayFwd', 'asOfClear',
    ...RANGE_PRESETS.map(p => p.id)].forEach(id => {
-    document.getElementById(id).disabled = view !== 'map';
+    document.getElementById(id).disabled = !isChart;
   });
-  document.getElementById('asOfStep').tabIndex = view === 'map' ? 0 : -1;
+  document.getElementById('asOfStep').tabIndex = isChart ? 0 : -1;
   if (view === 'pie') document.getElementById('closedWrap').hidden = true;
   const renderToken = ++SHOW_TOKEN;
   try {
@@ -2347,7 +2482,27 @@ async function show(view) {
     } else if (view === 'positions') {
       // the table's own numbers are always live — an as-of pick only ever affects map/pie
     } else if (view === 'pie') {
-      renderPie(ITEMS);
+      if (AS_OF || AS_FROM) {
+        const to = AS_OF || TODAY;
+        const [snap, real] = await Promise.all([computeAsOf(to, AS_FROM), computeAsOfRealized(to, AS_FROM)]);
+        if (renderToken !== SHOW_TOKEN) return;
+        // real.open, not real.closed: the live pie only ever draws ITEMS (still-held positions),
+        // so the reconstruction matches it by only merging realised figures onto positions
+        // computeAsOf itself still counts as held on `to`.
+        const realByKey = new Map(real.open.map(r => [r.identifier, r]));
+        const items = snap.items.map(d => {
+          const r = realByKey.get(d.identifier);
+          // `rel` is post-tax, matching what live ITEMS carry (see build()'s `d.relPre = d.rel +
+          // d.taxSell`) — the pie's own wedge geometry is keyed off `rel`, not `relPre`.
+          return r
+            ? { ...d, rel: r.relPre - r.taxSell, relPre: r.relPre, soldShares: r.soldShares,
+                lastSell: r.lastSell, sellCount: r.sellCount, sellPrice: r.sellPrice, split: r.split }
+            : { ...d, rel: 0, relPre: 0, soldShares: 0, lastSell: '', sellCount: 0, sellPrice: NaN, split: 1 };
+        });
+        renderPie(items, { ...snap, date: to });
+      } else {
+        renderPie(ITEMS);
+      }
     } else if (AS_OF || AS_FROM) {
       const to = AS_OF || TODAY;
       const snap = await computeAsOf(to, AS_FROM);
@@ -2551,12 +2706,12 @@ document.getElementById('asFromDate').addEventListener('change', e => {
   // never show a window as unnamed when it has a perfectly good name
   AS_SPAN = RANGE_PRESETS.find(q => presetStart(q) === AS_FROM) || null;
   syncAsOfControls();
-  if (VIEW === 'map') show('map');
+  if (isChartView()) show(VIEW);
 });
 RANGE_PRESETS.forEach(p => document.getElementById(p.id).addEventListener('click', () => {
   AS_SPAN = p;                                         // syncAsOfControls derives AS_FROM from it
   syncAsOfControls();
-  if (VIEW === 'map') show('map');
+  if (isChartView()) show(VIEW);
 }));
 document.getElementById('asOfDate').addEventListener('change', e => {
   // same clamp, same reason — and picking today is the same as clearing, no point re-deriving
@@ -2566,12 +2721,12 @@ document.getElementById('asOfDate').addEventListener('change', e => {
   AS_OF = (v && v !== TODAY) ? v : null;
   if (AS_FROM && AS_FROM >= (AS_OF || TODAY)) AS_FROM = null;   // the end moved past the start
   syncAsOfControls();
-  if (VIEW === 'map') show('map');
+  if (isChartView()) show(VIEW);
 });
 document.getElementById('asOfClear').addEventListener('click', () => {
   AS_OF = null;
   syncAsOfControls();
-  if (VIEW === 'map') show('map');
+  if (isChartView()) show(VIEW);
 });
 
 // Scrubbing: Date's own setDate/setMonth carry overflow for us (Jan 31 + 1 day = Feb 1, no
@@ -2610,7 +2765,7 @@ function shiftAsOf(days, months) {
   if (!AS_SPAN) AS_FROM = from;
   syncAsOfControls();
   clearTimeout(asOfRenderTimer);
-  asOfRenderTimer = setTimeout(() => { if (VIEW === 'map') show('map'); }, 150);
+  asOfRenderTimer = setTimeout(() => { if (isChartView()) show(VIEW); }, 150);
 }
 // ◀ ▶ slide by the width of the range now showing, so one click lands on the neighbouring
 // window with no overlap. The arrow keys keep their own fixed steps — they are how you move by a
@@ -2628,7 +2783,7 @@ const ASOF_KEYS = {
 // button is, or nothing is focused at all. The native date input keeps its own arrow-key segment
 // spinning — anything else editable (were one ever added) gets the same courtesy.
 document.addEventListener('keydown', e => {
-  if (VIEW !== 'map') return;
+  if (!isChartView()) return;
   const tag = (e.target && e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target && e.target.isContentEditable)) return;
   const step = ASOF_KEYS[e.key];
@@ -2636,7 +2791,7 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
   shiftAsOf(step[0], step[1]);
 });
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (VIEW === 'map') show('map'); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (isChartView()) show(VIEW); });
 
 /* ---------- startup ---------- */
 // A browser restores a checkbox's ticked state across a reload on its own, independent of this
@@ -2666,12 +2821,17 @@ const get = (path, required) => !path ? Promise.resolve('')
       .then(r => r.ok ? r.text() : (required ? Promise.reject(new Error(r.status)) : ''))
       .catch(err => { if (required) throw err; return ''; });
 
-Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH)])
-  .then(([configText, instrumentsText, sourcesText]) => Promise.all([
+Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), get(SECTOR_COLORS_PATH)])
+  .then(([configText, instrumentsText, sourcesText, sectorColorsText]) => Promise.all([
     configText, get(CSV_PATH, true), get(TRADES_PATH), instrumentsText, sourcesText,
-    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH),
+    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH), sectorColorsText,
   ]))
-  .then(texts => load(...texts))                       // ingest()'s argument order
+  // sector colours are a view concern (see SECTOR_COLOR_OVERRIDE) — applied here, not threaded
+  // through ingest()'s own argument list, which stays exactly the seven the model expects
+  .then(texts => {
+    loadSectorColors(texts.pop());
+    load(...texts);
+  })
   .catch(err => {
     document.getElementById('loader').hidden = false;
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);

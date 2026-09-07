@@ -51,6 +51,10 @@ const TRADES_PATH = 'private-parqet/activities.csv';
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
 const INSTRUMENTS_PATH = 'registry/instruments.csv';
 const PRICE_SOURCES_PATH = 'registry/price_sources.csv';
+// Hand- or picker-assigned sector colours — an override layer, not a full palette: a sector
+// absent from this file still gets the built-in golden-angle/hand-picked hue in portfolio.view.js.
+// Read there, not by ingest() below, since colour is a view concern, not model state.
+const SECTOR_COLORS_PATH = 'registry/sector_colors.csv';
 // gen_prices/ is derived: reproducible from registry/price_sources.csv by update_prices.py.
 // _latest.csv is the freshest close per instrument, and it is the price of record for every
 // position it covers — the Parqet export is a snapshot from whenever it was pulled, so its quotes

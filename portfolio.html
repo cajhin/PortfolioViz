@@ -102,7 +102,7 @@
       <div class="tip" id="tip"></div>
       <div class="legend" id="legend"></div>
       <div class="key" id="keyPie" hidden>
-        Every wedge's angle is its <b>current value</b>, and its core hue comes from the position's name — cyan at the a's, violet at the z's. Portfolios are separated by the black radial lines, not by colour.
+        Every wedge's angle is its <b>current value</b>, and its core hue comes from the position's <b>sector</b> — the same colours the map's sectors use, listed in the legend below. Wedges are ordered by value alone, regardless of which broker holds them — hover a wedge to see that.
         The inner disc's <em>area</em> is the second figure: for a position that gained, the
         name-tinted core is the <b>purchase value</b> and the light green band out to the rim is
         the gain. A position that
@@ -169,6 +169,20 @@
           <input type="checkbox" id="volaDownside"><span>+σ &lt; -σ</span>
         </label>
       </footer>
+    </dialog>
+
+    <!-- same reasoning as #detail above: a direct child of #app so it can showModal() from the
+         legend, which sits inside #chartBody — hidden on every view but Map/Pie. -->
+    <dialog id="colorPicker" class="colorpicker">
+      <header>
+        <div class="cp-title" id="cpTitle"></div>
+        <button type="button" id="cpClose" aria-label="Close">✕</button>
+      </header>
+      <div class="cp-sub">Hue top to bottom, saturation left to right. Picking a cell saves it in
+        this browser, so it stays picked here even after a reload — but it won't follow you to
+        another browser or machine, which still see <code>registry/sector_colors.csv</code>'s own
+        colours.</div>
+      <div class="cp-grid" id="cpGrid"></div>
     </dialog>
 
     <div class="card tablescroll" id="positionsCard" hidden>

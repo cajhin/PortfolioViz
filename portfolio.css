@@ -313,6 +313,26 @@
   .dtvola { fill: none; stroke-width: 1.1; stroke-dasharray: 5 4; opacity: 0.75; }
   .dtvola-e { stroke-dasharray: 1 2; }   /* fine dots — a smooth line, unlike the window's cliffs */
   .dtvolaaxis { font-size: 8px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .colorpicker {
+    border: 1px solid var(--border); border-radius: 14px; padding: 0;
+    background: var(--surface-1); color: var(--text-primary); width: min(360px, calc(100vw - 32px));
+  }
+  .colorpicker::backdrop { background: rgba(0, 0, 0, .45); }
+  .colorpicker header { display: flex; align-items: flex-start; justify-content: space-between;
+                        gap: 16px; padding: 16px 18px 6px; }
+  .colorpicker .cp-title { font-weight: 600; font-size: 1.05rem; }
+  .colorpicker button#cpClose { appearance: none; border: 0; background: transparent; cursor: pointer;
+                                color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px; }
+  .colorpicker .cp-sub { color: var(--text-secondary); font-size: 0.78rem; padding: 0 18px 12px; }
+  .colorpicker .cp-sub code { font-size: 0.95em; }
+  .cp-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 0 18px 18px; }
+  .cp-cell {
+    appearance: none; border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+    aspect-ratio: 1; padding: 0;
+  }
+  .cp-cell:hover { transform: scale(1.12); }
+  .cp-cell.current { border: 2px solid var(--text-primary); }
   .dtgrid { stroke: var(--border); stroke-width: 0.6; }
   .dtqtick { stroke: var(--text-muted); stroke-width: 1; }   /* darker than .dtgrid — an actual
                                                                  tick mark, not a background line */
