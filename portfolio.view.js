@@ -1354,7 +1354,13 @@ function renderMap(items, asOf) {
         });
         name.textContent = d.label.length > chars ? d.label.slice(0, chars) : d.label;
         g.appendChild(name);
-        if (h > 28) {
+        // 'flat' also covers the case this exists to catch: an as-of range too short for a new
+        // tick to have landed (the common "1D" case before the US session opens) resolves both
+        // ends to the same stale close, and ret comes out exactly 0 — not because nothing moved,
+        // but because there's nothing to compare yet. Printing "+0.0%" there would read as a real
+        // answer; the tooltip already treats flat the same way (see attachTip's own `d.state ===
+        // 'flat' ? '' : ...`), this just matches that same convention on the tile itself.
+        if (h > 28 && d.state !== 'flat') {
           const sub = el('text', {
             x: cx, y: cy + 10 * nudge, 'text-anchor': 'middle',
             class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
