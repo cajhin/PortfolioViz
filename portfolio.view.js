@@ -1266,11 +1266,23 @@ function renderMap(items, asOf) {
     sr => sr.w * sr.h - sectorNetArea(sr, bySector.get(sr.item))
   );
 
+  // for the sector label's own hover tip, below — same #tip/placeTip the tile hover (attachTip)
+  // uses, just reached directly since this isn't a per-position node attachTip's own loop covers
+  const tip = document.getElementById('tip');
+  const wrapEl = svg.closest('.chartwrap');
+  const grandTotal = items.reduce((t, x) => t + x.cur, 0);
+
+  // Pass 1 — every sector's background tint, drawn before any tile. Backgrounds and tiles used
+  // to interleave one sector at a time, which meant a later sector's own background painted
+  // right over an earlier sector's tile borders wherever the two sectors shared an edge (later
+  // in document order wins the paint order) — the border "not showing" on whichever side faced
+  // the next sector. Drawing every background first, then every tile in pass 2 below, means a
+  // tile's own border is always the last thing painted at that edge, sector-adjacent or not.
   sectorRects.forEach(sr => {
     const hue = sectorHue(sr.item);
-    // outline only, in the same neutral --rim token the pie's own rim uses (black on light,
-    // white on dark) — never the sector's hue, so two sectors sharing an edge draw the same
-    // line on top of each other and it reads as one divider, not two colours meeting.
+    // outline only, fixed white regardless of theme — never the sector's hue, so two sectors
+    // sharing an edge draw the same line on top of each other and it reads as one divider, not
+    // two colours meeting.
     // No half-pixel crisp-line offset here (unlike the position tiles): the svg is stretched to
     // whatever width its container gives it, so 1 viewBox unit is rarely 1 device pixel, and that
     // offset — tuned for an exact 1:1 map — only made the line's rendered weight swim between
@@ -1287,14 +1299,20 @@ function renderMap(items, asOf) {
     const tint = SECTOR_TINT[sr.item] || {};
     const sat = ov ? ov.sat : tint.sat != null ? tint.sat : tint.satDelta != null ? 55 + tint.satDelta : 55;
     const lit = tint.lit != null ? tint.lit : tint.litDelta != null ? 55 + tint.litDelta : 55;
+    // fill only here — no stroke: positions run flush to the sector frame (see pass 2), so this
+    // rect's own edge coincides exactly with the outermost tiles' borders, and a stroke drawn
+    // now would just sit underneath theirs, invisible. The white sector outline is pass 3,
+    // below, drawn after every tile so it actually lands on top where the two coincide.
     const bg = el('rect', {
       x: sr.x, y: sr.y, width: sr.w, height: sr.h,
       fill: `hsl(${hue.toFixed(1)}deg ${sat}% ${lit}% / 0.22)`,
-      stroke: 'var(--rim)', 'stroke-width': 2 * nudge,
       class: 'sectorbg',
     });
     g.appendChild(bg);
+  });
 
+  // Pass 2 — tiles and sector labels, all drawn after every background above.
+  sectorRects.forEach(sr => {
     if (sr.w <= 0 || sr.h <= 0) return;
 
     // positions run flush to the sector frame — no inset, no head strip; the sector's own name
@@ -1302,18 +1320,19 @@ function renderMap(items, asOf) {
     let firstTile = null;
     layTiles(sr, bySector.get(sr.item)).forEach((t, i) => {
       const d = t.item;
-      const w = Math.max(0, t.w - 1), h = Math.max(0, t.h - 1);
+      const w = t.w, h = t.h;
       const fill = gradeColor(d.state === 'flat' ? NaN : d.ret);
       if (i === 0) firstTile = t;   // top-left tile: the sector label overlays it, below
-      // no stroke on either layer — the 1px layout gap is the separator (showing the sector's
-      // own background colour through), so the bar can never look wider than the tile it sits in
+      // fill only, no border of its own — full width/height, no half-pixel inset, so two tiles
+      // meet exactly edge to edge with nothing of the sector's own background showing between
+      // them. The border every tile gets is drawn once, separately, after the bar/band below —
+      // see there for why.
       // The body is the whole tile and the only thing here that takes a pointer: it carries the
       // click, the pointer cursor and — through attachTip — the tooltip. Everything drawn over it
       // below opts out with pointer-events, so the hit target is the tile as you see it rather
       // than whatever fraction of it the overlays happen to leave uncovered. Those overlays are
       // still in `nodes`, because dimming a tile has to dim all of it.
-      const rect = el('rect', { x: t.x + 0.5, y: t.y + 0.5, width: w, height: h, fill,
-                                class: 'maprect' });
+      const rect = el('rect', { x: t.x, y: t.y, width: w, height: h, fill, class: 'maprect' });
       rect.addEventListener('click', () => openDetail(d));
       g.appendChild(addNode(nodes, d, rect));
 
@@ -1321,7 +1340,7 @@ function renderMap(items, asOf) {
       if (d.divHeld > 0 && d.cur > 0 && h > 6) {
         const ih = Math.max(1.5, Math.min(h / 3, h * d.divHeld / d.cur));
         const band = el('rect', {
-          x: t.x + 0.5, y: t.y + 0.5, width: w, height: ih, fill: 'var(--income)',
+          x: t.x, y: t.y, width: w, height: ih, fill: 'var(--income)',
           'pointer-events': 'none',
         });
         g.appendChild(addNode(nodes, d, band));
@@ -1331,14 +1350,22 @@ function renderMap(items, asOf) {
       if (share > 0 && h > 4) {
         const bh = Math.max(1.5, h * share);
         const bar = el('rect', {
-          x: t.x + 0.5, y: t.y + 0.5 + (h - bh), width: w, height: bh,
+          x: t.x, y: t.y + (h - bh), width: w, height: bh,
           fill: barColor(d), 'pointer-events': 'none',
         });
         g.appendChild(addNode(nodes, d, bar));
       }
 
+      // the border, drawn last (on top of the fill, income band and bar above) and unfilled, so
+      // it is never the part of a tile's own bar/band that ends up painting over it — a stroke on
+      // the base fill rect alone would have its bottom edge (and however much of its sides the
+      // bar covers) overpainted by the bar's own solid, unstroked fill, drawn later.
+      g.appendChild(addNode(nodes, d, el('rect', {
+        x: t.x, y: t.y, width: w, height: h, fill: 'none',
+        stroke: '#000', 'stroke-width': 0.5 * nudge, 'pointer-events': 'none',
+      })));
+
       if (w > 4 && h > 7) {
-        const dark = d.fund;                    // funds in black ink, everything else white
         const cx = t.x + w / 2;
         const free = h * (1 - share);                       // headroom above the bar
         const cy = t.y + (free > 26 ? free / 2 : h / 2);
@@ -1350,7 +1377,7 @@ function renderMap(items, asOf) {
         const chars = Math.max(1, Math.floor(w * mapScale / 4.9));
         const name = el('text', {
           x: cx, y: h > 28 ? cy - nudge : cy + 3 * nudge, 'text-anchor': 'middle',
-          class: 'maplbl' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+          class: 'maplbl', 'pointer-events': 'none',
         });
         name.textContent = d.label.length > chars ? d.label.slice(0, chars) : d.label;
         g.appendChild(name);
@@ -1363,7 +1390,7 @@ function renderMap(items, asOf) {
         if (h > 28 && d.state !== 'flat') {
           const sub = el('text', {
             x: cx, y: cy + 10 * nudge, 'text-anchor': 'middle',
-            class: 'maplbl mapsub' + (dark ? ' dark' : ''), 'pointer-events': 'none',
+            class: 'maplbl mapsub', 'pointer-events': 'none',
           });
           sub.textContent = fmtPct(d.ret);
           g.appendChild(sub);
@@ -1372,17 +1399,71 @@ function renderMap(items, asOf) {
     });
 
     // sector name, overlaid on the top-left tile after it (and everything on it) is drawn, so it
-    // sits on top rather than sharing the tile's own space. Coloured by sectorHsl — the exact same
-    // colour the legend swatch and the pie's own wedges use for this sector, not a map-local
-    // reinterpretation of it — regardless of what tile happens to sit underneath.
+    // sits on top rather than sharing the tile's own space. Fixed white, not sectorHsl and not
+    // black (the position labels' own colour, see above) — kept distinct from them at a glance.
     if (firstTile && firstTile.w > 30 && firstTile.h > 16) {
       const lbl = el('text', {
         x: firstTile.x + 4 * nudge, y: firstTile.y + 8 * nudge,
-        class: 'sectorlbl', fill: sectorHsl(sr.item),
+        class: 'sectorlbl', fill: '#fff',
       });
       lbl.textContent = sr.item;
+      lbl.style.cursor = 'pointer';
+      // stopPropagation isn't strictly needed — the label is the topmost thing painted here, so
+      // it already wins the hit test over the tile's own rect underneath — but it costs nothing
+      // and makes that explicit rather than relying on paint order alone.
+      const members = bySector.get(sr.item);
+      lbl.addEventListener('click', e => { e.stopPropagation(); openSectorDetail(sr.item, members); });
+      // hover: same shape as a position's own tip (attachTip), summed across the sector instead
+      // of read off one d — Share/Invested/Current value/Gain/Realised. No price history or IRR:
+      // those describe one instrument's own trade history, not a basket's combined one.
+      lbl.addEventListener('pointerenter', e => {
+        const cur = members.reduce((t, x) => t + x.cur, 0);
+        const pur = members.reduce((t, x) => t + x.pur, 0);
+        const gain = cur - pur;
+        const relPre = members.reduce((t, x) => t + (x.relPre ?? 0), 0);
+        // purely informational — the sector's current share counts (the same ones `cur` prices),
+        // priced at the range's start instead of today: "what these holdings, at today's size,
+        // would have cost bought on that date" rather than a cost basis. Skips any member with no
+        // price that far back rather than pretending it contributed 0; see valueAtFrom's own
+        // comment in computeAsOf. Nothing below this row uses it — it feeds no further figure.
+        const withFrom = members.filter(x => Number.isFinite(x.valueAtFrom));
+        const valueAtFrom = withFrom.length ? withFrom.reduce((t, x) => t + x.valueAtFrom, 0) : null;
+        tip.innerHTML =
+          `<div class="t">${sr.item}</div>` +
+          `<div class="pf">${members.length} position${members.length === 1 ? '' : 's'}</div>` +
+          tipRow('Share', fmtShare(grandTotal > 0 ? cur / grandTotal : 0)) +
+          (rangeFrom() && valueAtFrom != null
+            ? tipRow(`Price on ${deDate(rangeFrom())}`, fmtMoney2(valueAtFrom)) : '') +
+          // fixed label, not purLabel()'s dynamic "Value on X"/"Same money in…" — this row is
+          // always the sum of each member's own `pur`, whatever that meant for it (real cost, or
+          // range-rebased), so "Purchase value" reads as the one stable name for it rather than
+          // switching wording every time the range picker or vs.-World mode does.
+          tipRow('Purchase value', fmtMoney2(pur)) +
+          tipRow('Current value', fmtMoney2(cur)) +
+          (Math.abs(gain) < 0.005 ? '' :
+            tipRow(MODE === 'rel' ? 'Ahead by' : rangeFrom() ? 'Over the range' : 'Unrealised',
+                   `${fmtMoney2(gain)} (${fmtPct(pur > 0 ? gain / pur * 100 : 0)})`, posNeg(gain))) +
+          (Math.abs(relPre) > 0.005
+            ? tipRow('Realised (pre-tax)', fmtMoney2(relPre), relPre >= 0 ? 'realized' : 'neg') : '');
+        tip.classList.add('on');
+        placeTip(tip, wrapEl, e);
+      });
+      lbl.addEventListener('pointermove', e => placeTip(tip, wrapEl, e));
+      lbl.addEventListener('pointerleave', () => tip.classList.remove('on'));
       g.appendChild(lbl);
     }
+  });
+
+  // Pass 3 — every sector's own white outline, on top of every tile now that they're all drawn.
+  // A sector's edge coincides exactly with its outermost tiles' borders (positions run flush to
+  // the frame), so drawn any earlier this would just sit under those tiles' own black borders,
+  // invisible — outline only (fill:none), the tint itself was already painted in pass 1.
+  sectorRects.forEach(sr => {
+    if (sr.w <= 0 || sr.h <= 0) return;
+    g.appendChild(el('rect', {
+      x: sr.x, y: sr.y, width: sr.w, height: sr.h, fill: 'none',
+      stroke: '#fff', 'stroke-width': 2 * nudge, 'pointer-events': 'none',
+    }));
   });
 
   svg.setAttribute('aria-label', 'Treemap of all positions grouped by sector, area by current value, colour by return');
@@ -1741,6 +1822,8 @@ const EXTRA_COLOURS = ['var(--flat)', 'var(--series-2)', 'var(--series-3)', 'var
 // instrument's identifier, which is always an ISIN, so it can never collide with one
 const PORTFOLIO_ID = '__portfolio';
 const ALL_ID = '__all';           // "everything at once" — offered by the + compare picker only
+// same idea, one sector's positions treated as a single instrument — see openSectorDetail
+const SECTOR_ID = '__sector';
 
 // the "discount up vola 50%" checkbox — a view preference like SHOW_MONEY, not part of DETAIL
 // itself, so it survives closing and reopening the dialog on a different position
@@ -1928,17 +2011,18 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // The label's own last quote, no decimals — in the portfolio currency (row.close, already
   // converted on write), the same figure every other price on the page shows, not the native
   // quote it actually trades in. Masked the same way every other price is when "Show €" is off.
-  // Skipped for the synthetic Portfolio line: its "close" is a return index starting at 100, not
-  // a price in any currency, and printing a currency symbol in front of it would read as one.
+  // Skipped for a synthetic index line (the whole Portfolio, or one sector, treated as a single
+  // instrument): its "close" is a return index starting at 100, not a price in any currency, and
+  // printing a currency symbol in front of it would read as one.
   const priceTag = (row, identifier) => {
-    if (!row || identifier === PORTFOLIO_ID) return '';
+    if (!row || identifier === PORTFOLIO_ID || identifier === SECTOR_ID) return '';
     if (!SHOW_MONEY) return ' ' + masked();
     return ` ${ccySymbol()}${Math.round(row.close)}`;
   };
   const lastDate = dates[dates.length - 1];
   // the right margin is whatever the end labels need, so they can never be clipped
   const lastStock = stockVals[stockVals.length - 1];
-  const keys = [{ text: `${d.label} ${fmtPct(lastStock)}${priceTag(rows[rows.length - 1])}`,
+  const keys = [{ text: `${d.label} ${fmtPct(lastStock)}${priceTag(rows[rows.length - 1], d.identifier)}`,
                   v: lastStock, colour: 'var(--series-1)' }];
   secondaries.forEach(s => {
     if (Number.isFinite(s.last))
@@ -2434,6 +2518,36 @@ async function openDetail(d) {
   // and isDefaultBench keeps it on the fast in-memory BENCH path rather than a fetch
   DETAIL = { d, series: await loadSeries(seriesSlug(d)), alignDate: null,
              range: (DETAIL && DETAIL.range) || 'buy', customRange: null,
+             extras: [{ isDefaultBench: true }] };
+  renderDetail();
+}
+
+// The same popup, opened from a sector's own label on the map instead of one position's tile —
+// its "series" is portfolioSeries' time-weighted return index, scoped to just this sector's
+// positions (see the model's own doc comment on `filter`), so the chart reads exactly as if every
+// holding in the sector had been one instrument all along. `members` is the sector's own position
+// list the map already built (bySector.get(name)) — reused here only for the subtitle's count and
+// for a firstActivity fallback, since a synthetic d has no single trade to fall back to otherwise.
+async function openSectorDetail(name, members) {
+  const dlg = document.getElementById('detail');
+  const count = `${members.length} position${members.length === 1 ? '' : 's'}`;
+  document.getElementById('dtTitle').textContent = name;
+  document.getElementById('dtSub').textContent = count;         // replaced by renderDetail below,
+  document.getElementById('dtVals').textContent = '';           // same as openDetail's own initial
+  const body = document.getElementById('dtBody');                // values — just the loading flash
+  body.innerHTML = '<div class="empty">loading…</div>';
+  if (!dlg.open) dlg.showModal();
+
+  // renderDetail always rewrites dtSub to "<d.portfolio> · 0 % at <anchor>" once the chart is
+  // drawn (see subAt) — same as it does for a real position — so the position count belongs in
+  // d.portfolio, not in a one-off dtSub assignment that render would just overwrite anyway.
+  const d = {
+    label: name, name, portfolio: count, identifier: SECTOR_ID,
+    firstActivity: members.reduce((t, m) =>
+      (m.firstActivity && (!t || m.firstActivity < t)) ? m.firstActivity : t, ''),
+  };
+  DETAIL = { d, series: await portfolioSeries(m => sectorOf(m) === name, 'sector:' + name),
+             alignDate: null, range: (DETAIL && DETAIL.range) || 'buy', customRange: null,
              extras: [{ isDefaultBench: true }] };
   renderDetail();
 }

@@ -583,12 +583,13 @@ async function computeAsOf(dateStr, fromStr = null) {
     if (!series || closeAtD == null) { missing.add(d.label || d.name); continue; }
     const factor = anchorFactor(d, series);
 
-    // Only a position that was already held on the start date needs a price there — one bought
-    // inside the range is measured from what it cost, which needs no series that far back. When it
-    // *is* needed and missing, the position drops out: measuring it from its original purchase
-    // while every neighbour is measured from the start date would quietly mix two questions.
+    // Looked up whenever there's a start date at all, not just when re-basing needs it (see
+    // valueAtFrom below) — but only re-basing failing to find one drops the position: measuring
+    // it from its original purchase while every neighbour is measured from the start date would
+    // quietly mix two questions, whereas valueAtFrom is a supplementary figure nothing else here
+    // depends on, and simply comes out null where there's no price that far back to give it.
+    const closeAtFrom = fromStr ? seriesCloseAt(series.rows, fromStr) : null;
     const needsFrom = fromStr && heldLots.some(l => l.at.slice(0, 10) < fromStr);
-    const closeAtFrom = needsFrom ? seriesCloseAt(series.rows, fromStr) : null;
     if (needsFrom && closeAtFrom == null) { missing.add(d.label || d.name); continue; }
     const lots = needsFrom ? rebaseLots(heldLots, fromStr, closeAtFrom * factor) : heldLots;
 
@@ -615,6 +616,12 @@ async function computeAsOf(dateStr, fromStr = null) {
       state: pur <= 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss'),
       irr: asOfIrr(lots, cur, dateStr), divHeld: 0, firstActivity: d.firstActivity,
       lastPrice: closeAtD * factor, lastPriceDate: dateStr,
+      // purely informational, and never fed back into pur/gain/ret above: what the shares held
+      // *now* (sharesAtD, the same count `cur` prices) would have cost bought at the start date's
+      // close instead of however they were actually built up — "what if I'd bought this position,
+      // at today's size, back then" rather than a re-based cost basis. Null wherever there's no
+      // close that far back to answer it (fromStr predates the instrument's own price history).
+      valueAtFrom: closeAtFrom != null ? sharesAtD * closeAtFrom * factor : null,
     });
   }
 
@@ -674,13 +681,19 @@ function valueOverTime(d, series, displayRows) {
 // would lift it above the rest by roughly the dividend yield, for a reason that is not performance.
 //
 // Named "close" rather than "index" so the row is shaped like any price series ({rows: [{date,
-// close}]}) and can stand in for a real instrument's wherever one is expected. Computed once and
-// cached module-wide: the FIFO replay is O(positions × dates), cheap once, wasteful to repeat on
-// every range switch. Nothing it reads varies with MODE or the as-of pick, so there is no key.
-let PORTFOLIO_SERIES_CACHE = null;
-async function portfolioSeries() {
-  if (PORTFOLIO_SERIES_CACHE) return PORTFOLIO_SERIES_CACHE;
-  const source = [...ITEMS, ...CLOSED];
+// close}]}) and can stand in for a real instrument's wherever one is expected. Computed once per
+// `filter` and cached module-wide by `cacheKey`: the FIFO replay is O(positions × dates), cheap
+// once, wasteful to repeat on every range switch. Nothing it reads varies with MODE or the as-of
+// pick, so there is no key for the unfiltered, whole-portfolio case ('ALL', the default).
+//
+// `filter`, when given, narrows `source` to a subset — a sector's positions, say — before doing
+// exactly the same replay. The result reads exactly like the whole-portfolio index: 100 on the
+// subset's own first day held, so "what would these positions have done as one instrument" is
+// answerable for any subset this can select, not just everything at once.
+const SERIES_INDEX_CACHE = new Map();
+async function portfolioSeries(filter = null, cacheKey = 'ALL') {
+  if (SERIES_INDEX_CACHE.has(cacheKey)) return SERIES_INDEX_CACHE.get(cacheKey);
+  const source = [...ITEMS, ...CLOSED].filter(d => !filter || filter(d));
   const items = (await Promise.all(source.map(async d => {
     const series = await loadSeries(seriesSlug(d));
     if (!series || !series.rows.length) return null;
@@ -721,8 +734,9 @@ async function portfolioSeries() {
     if (rows.length || value > 0) rows.push({ date, close: index, value });
   }
 
-  PORTFOLIO_SERIES_CACHE = { rows };
-  return PORTFOLIO_SERIES_CACHE;
+  const result = { rows };
+  SERIES_INDEX_CACHE.set(cacheKey, result);
+  return result;
 }
 
 // The realised side of the same as-of pick: every sell (and its dividends/taxes) booked on or

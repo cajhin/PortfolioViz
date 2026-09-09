@@ -177,13 +177,14 @@
   .seg button:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
   /* --map-scale is set on #pie when the as-of map shrinks (area = value, throughout this page);
      dividing by it keeps label text at a constant on-screen size instead of shrinking with the tiles */
-  .maplbl { font-size: calc(9px / var(--map-scale, 1)); fill: #ffffff; font-weight: 600; paint-order: stroke; }
-  .maplbl.dark { fill: #12120f; }        /* funds */
+  .maplbl { font-size: calc(9px / var(--map-scale, 1)); fill: #12120f; font-weight: 600; paint-order: stroke; }
   .mapsub { font-size: calc(8px / var(--map-scale, 1)); font-variant-numeric: tabular-nums; }
   .sectorbg { pointer-events: none; }
-  /* fill is set inline per sector, not here (see renderMap) — its colour is the sector's own hue */
+  /* fill is set inline per sector, not here (see renderMap) — its colour is the sector's own hue.
+     pointer-events left on (unlike .sectorbg above) — clicking the label opens the sector's own
+     detail popup; see openSectorDetail. */
   .sectorlbl { font-size: calc(4.5px / var(--map-scale, 1)); font-weight: 700;
-               text-transform: uppercase; letter-spacing: 0.07em; pointer-events: none; }
+               text-transform: uppercase; letter-spacing: 0.07em; }
   .closedhead { display: flex; justify-content: flex-start; align-items: baseline;
                 margin: 14px 0 2px; font-size: 0.82rem; color: var(--text-secondary); }
   .closedhead b { font-variant-numeric: tabular-nums; }
