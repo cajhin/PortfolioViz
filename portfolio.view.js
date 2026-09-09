@@ -91,6 +91,11 @@ const fmtShare = v => fmt('percent').format(v);
 const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
 const fmtPP = v => (v >= 0 ? '+' : '') + v.toFixed(1) + ' pp';
 const deDate = s => new Date(s).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const pad2 = n => String(n).padStart(2, '0');
+// deDate plus a local hour:minute, spelled out by hand rather than through toLocaleString's own
+// date+time formatting — de-DE would otherwise insert a comma between the two that "dd.MM.yyyy
+// hh:mm" doesn't call for.
+const deDateTime = s => { const dt = new Date(s); return `${deDate(s)} ${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`; };
 // One close, in the portfolio currency, with the quote it was converted from beside it — the only
 // place on the page the untouched number is visible. Omitted where there is nothing to add: an
 // instrument that already trades in the portfolio currency, a hand-maintained file with no raw
@@ -372,8 +377,13 @@ function sparkline(d) {
 }
 function sparkSvg(d) {
   // rangeFrom/rangeTo, not AS_FROM/AS_OF directly: both the map and the pie reconstruct, and this
-  // keeps the sparkline bounded to whichever one is on screen the same way the figures beside it are
-  const path = pricePath(d, rangeFrom(), rangeTo());
+  // keeps the sparkline bounded to whichever one is on screen the same way the figures beside it are.
+  // The 1D preset is the one exception: a two-point line has nothing to show, so the chart borrows
+  // a year back from the same end date instead — the price rows and gain figure elsewhere in this
+  // same tooltip still describe the actual one-day range, only the chart's own window widens.
+  const to = rangeTo();
+  const from = (AS_SPAN && AS_SPAN.key === '1d') ? shiftDate(to, -12, 0) : rangeFrom();
+  const path = pricePath(d, from, to);
   if (!path) { warmSeries(d); return ''; }        // not loaded yet — have it ready for next time
 
   // x is keyed to the position in the *whole* window, not to the drawn point's place in the
@@ -861,8 +871,22 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
   // Only ever the freshness of the data — which range is on screen is the chart bar's own two
   // date fields and the note under the map to say, and saying it a third time up here left the
   // one fact this line exists for competing for the space.
+  //
+  // asOf itself is a trading date, not a fetch time — gen_prices only ever carries a date, so
+  // there is no real hour:minute in it, and printing one anyway would just be that date's UTC
+  // midnight read back in the browser's own timezone (00:00 UTC lands at 02:00 in Germany's
+  // summer offset, for instance — a made-up time, not a real one). A real time only exists when
+  // the Update button's own click handler recorded one, and only means anything here if it's
+  // for the same trading day this stamp is about — a leftover click from an older refresh, under
+  // data since updated some other way (a terminal run), would otherwise print a real-looking time
+  // next to the wrong day.
+  let stampText = deDate(asOf);
+  try {
+    const savedFetch = localStorage.getItem(LAST_FETCH_KEY);
+    if (savedFetch && savedFetch.slice(0, 10) === asOf) stampText = deDateTime(savedFetch);
+  } catch { /* private browsing, storage disabled — falls back to the date alone */ }
   document.getElementById('dataStamp').textContent =
-    asOf ? `Last data update: ${deDate(asOf)}` : '';
+    asOf ? `Last update:\n${stampText}` : '';
 }
 
 // The per-portfolio breakdown, now a hover popup over the Current value tile instead of its own
@@ -1895,13 +1919,25 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   });
   const L = Math.max(34, 10 + Math.max(...axisTexts.map(t => t.length)) * 5.6);
 
+  // The label's own last quote, no decimals — in the portfolio currency (row.close, already
+  // converted on write), the same figure every other price on the page shows, not the native
+  // quote it actually trades in. Masked the same way every other price is when "Show €" is off.
+  // Skipped for the synthetic Portfolio line: its "close" is a return index starting at 100, not
+  // a price in any currency, and printing a currency symbol in front of it would read as one.
+  const priceTag = (row, identifier) => {
+    if (!row || identifier === PORTFOLIO_ID) return '';
+    if (!SHOW_MONEY) return ' ' + masked();
+    return ` ${ccySymbol()}${Math.round(row.close)}`;
+  };
+  const lastDate = dates[dates.length - 1];
   // the right margin is whatever the end labels need, so they can never be clipped
   const lastStock = stockVals[stockVals.length - 1];
-  const keys = [{ text: `${d.label} ${fmtPct(lastStock)}`, v: lastStock, colour: 'var(--series-1)' }];
+  const keys = [{ text: `${d.label} ${fmtPct(lastStock)}${priceTag(rows[rows.length - 1])}`,
+                  v: lastStock, colour: 'var(--series-1)' }];
   secondaries.forEach(s => {
     if (Number.isFinite(s.last))
-      keys.push({ text: `${s.label} ${fmtPct(s.last)}`, v: s.last, colour: s.colour,
-                  entryIndex: s.entryIndex });
+      keys.push({ text: `${s.label} ${fmtPct(s.last)}${priceTag(at(s.secRows, lastDate), s.identifier)}`,
+                  v: s.last, colour: s.colour, entryIndex: s.entryIndex });
   });
   // the sigma lines are named the same way, but placed through their own scale: v is handed over
   // already in chart space, so the collision walk below treats them as just two more labels and
@@ -2847,4 +2883,36 @@ document.getElementById('file').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
   f.text().then(t => load('', t))
     .catch(err => document.getElementById('err').textContent = String(err));
+});
+
+// Runs update_prices.py on whatever's serving this page — see start.sh's own update-prices
+// route, the only thing here that isn't a plain static file. A reload afterwards is simpler and
+// more honest than trying to invalidate every cache (SERIES_CACHE, AS_OF_CACHE, …) this page
+// keeps: a fresh load re-fetches the CSVs the script just rewrote, the same way opening the page
+// after running it by hand always has.
+//
+// Recorded here, in real wall-clock time, is the only place an actual fetch *time* exists at
+// all — gen_prices only ever carries the trading date. renderHeaderTotals reads this back to put
+// a real hour:minute on the "Last update" stamp, but only trusts it for the trading day it was
+// taken on (see there) — a page that's only ever loaded, never clicked Update, has none of this
+// and the stamp just shows the date on its own.
+const LAST_FETCH_KEY = 'portfolioviz.lastFetch';
+document.getElementById('btnUpdatePrices').addEventListener('click', async () => {
+  const btn = document.getElementById('btnUpdatePrices');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Updating…';
+  try {
+    const r = await fetch('/update-prices', { method: 'POST' });
+    const text = await r.text();
+    if (!r.ok) throw new Error(text.trim().split('\n').pop() || `HTTP ${r.status}`);
+    try { localStorage.setItem(LAST_FETCH_KEY, new Date().toISOString()); }
+    catch { /* private browsing, storage disabled — the stamp just won't get a real time */ }
+    btn.textContent = 'Done — reloading…';
+    setTimeout(() => location.reload(), 500);
+  } catch (err) {
+    reportError('update prices', err);
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 });

@@ -121,9 +121,14 @@
   .curtile .k { text-decoration: underline dotted; text-underline-offset: 3px; }
 
   /* the odd one out in .totals: a note about the data, not a figure, so it sits on the tiles'
-     bottom line rather than aligning its own baseline with theirs, and never grows the row */
-  .datastamp { color: var(--text-muted); font-size: 0.85rem; white-space: nowrap;
-               align-self: flex-end; padding-bottom: 4px; }
+     bottom line rather than aligning its own baseline with theirs, and never grows the row.
+     pre-line, not nowrap: its text carries a real \n between "Last update:" and the timestamp,
+     which this is what turns into an actual line break rather than a literal one-line run.
+     margin-left:auto pushes it — and the button right after it, which has no margin of its own —
+     both to the row's far right, together, rather than opening the gap between the two of them. */
+  .datastamp { color: var(--text-muted); font-size: 0.85rem; white-space: pre-line;
+               text-align: right; align-self: flex-end; padding-bottom: 4px; margin-left: auto; }
+  #btnUpdatePrices { align-self: flex-end; }
 
   .chartwrap { position: relative; overflow: visible; }
   .chartbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: -4px 0 4px; }

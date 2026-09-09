@@ -34,6 +34,9 @@
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
         <!-- not a tile: a footnote about the data itself, parked in the space the tiles leave -->
         <span class="datastamp" id="dataStamp"></span>
+        <!-- POSTs to start.sh's own server (see its update-prices route) — nothing to do with
+             ingest()/load(); a plain page served any other way has nowhere to send this. -->
+        <button type="button" id="btnUpdatePrices" class="dt-addsel">Update</button>
       </div>
       <div class="tip" id="curTip"></div>
     </div>
