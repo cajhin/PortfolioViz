@@ -120,6 +120,23 @@
   .curtile { cursor: help; }
   .curtile .k { text-decoration: underline dotted; text-underline-offset: 3px; }
 
+  /* its own strip between the header and the map/pie card — same flex-row-of-tiles shape as
+     .totals, and position:relative for the same reason #totalsCard has it: #liveTip inside is
+     placed relative to this card, not the page */
+  .liveframe { display: flex; flex-wrap: wrap; gap: 28px; position: relative; }
+  .liveindex { cursor: help; min-width: 90px; }
+  .liveindex .k { font-size: 1rem; font-weight: 600; color: var(--text-primary);
+                  text-transform: none; letter-spacing: normal; }
+  .liveindex-gain { font-size: 0.78rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .liveindex-chart { display: block; width: 100%; height: 28px; margin-top: 4px; }
+  .liveindex-chart .zero { stroke: var(--border); stroke-width: 1; }
+  .liveindex-chart .line { fill: none; stroke-width: 1.4; }
+  .liveindex-chart .line.pos { stroke: var(--series-2); }
+  .liveindex-chart .line.neg { stroke: var(--loss); }
+  /* the symbol only, not the whole .k (which also holds the gain badge and its own pos/neg
+     colour) — stale means "this market's own last tick is 5+ minutes old," not "no gain to show" */
+  .liveindex.stale .liveindex-symbol { color: var(--text-muted); }
+
   /* the odd one out in .totals: a note about the data, not a figure, so it sits on the tiles'
      bottom line rather than aligning its own baseline with theirs, and never grows the row.
      pre-line, not nowrap: its text carries a real \n between "Last update:" and the timestamp,

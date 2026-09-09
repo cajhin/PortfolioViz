@@ -44,14 +44,22 @@ if [ "$open_browser" -eq 1 ] && command -v open >/dev/null 2>&1; then
 fi
 
 exec python3 -c '
-import http.server, os, subprocess, sys
+import http.server, json, os, subprocess, sys, urllib.parse, urllib.request
 
-# The one non-static route this server answers: the page'"'"'s "Update prices" button POSTs here
-# instead of you running update_prices.py by hand. Runs with no arguments — every instrument in
-# the registry, incremental from whatever gen_prices/ already has — since a button has no way to
-# ask which slug or --from date you meant; use the script directly from a terminal for that.
-# Blocking, not streamed: the fetch is normally done well within the timeout below, and a button
-# that just shows "Updating..." until the response lands is a lot less code than a progress feed.
+# The two non-static routes this server answers.
+#
+# POST /update-prices — the page'"'"'s "Update prices" button, instead of you running
+# update_prices.py by hand. Runs with no arguments — every instrument in the registry,
+# incremental from whatever gen_prices/ already has — since a button has no way to ask which
+# slug or --from date you meant; use the script directly from a terminal for that. Blocking, not
+# streamed: the fetch is normally done well within the timeout below, and a button that just
+# shows "Updating..." until the response lands is a lot less code than a progress feed.
+#
+# GET /live-index?symbol=... — the header'"'"'s live-index widget. A browser page cannot call
+# Yahoo'"'"'s chart API directly (no CORS allowance there — the same reason update_prices.py runs
+# server-side rather than from portfolio.view.js), so this fetches it here and hands back just
+# the day'"'"'s 5-minute bars. Nothing is written to disk — the whole point of this route is that
+# it has no memory between requests, unlike every other price this page ever shows.
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -72,6 +80,46 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             status = 504
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if urllib.parse.urlparse(self.path).path != "/live-index":
+            super().do_GET()
+            return
+        symbol = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("symbol") or [""])[0]
+        if not symbol:
+            self.send_error(400, "missing ?symbol=")
+            return
+        try:
+            url = ("https://query1.finance.yahoo.com/v8/finance/chart/"
+                   + urllib.parse.quote(symbol, safe="") + "?interval=5m&range=1d")
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                raw = json.load(r)
+            result = raw["chart"]["result"][0]
+            quote = result["indicators"]["quote"][0]
+            meta = result.get("meta") or {}
+            body = json.dumps({
+                "symbol": symbol,
+                "times": result["timestamp"],
+                "closes": quote["close"],
+                "highs": quote["high"],
+                "lows": quote["low"],
+                "previousClose": meta.get("chartPreviousClose"),
+                # "USD", "EUR", etc. An index (^NDX and friends) has no real currency to quote in,
+                # but Yahoo still fills this in with something regardless; the page decides for
+                # itself whether the symbol is an index at all (see renderLiveIndex, isIndex)
+                # rather than trust that.
+                "currency": meta.get("currency"),
+            }).encode("utf-8")
+            status = 200
+        except Exception as e:
+            body = json.dumps({"error": str(e)}).encode("utf-8")
+            status = 502
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

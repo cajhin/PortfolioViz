@@ -105,6 +105,10 @@ class FixedDate extends Date {
 const sandbox = {
   console, Intl, Math, JSON, Promise, Map, Set, Number, String, Array, Object, URLSearchParams,
   setTimeout, clearTimeout, Date: FixedDate,
+  // no-op: this harness never runs long enough for a real interval to fire, and a real one would
+  // keep Node's event loop alive waiting for it — the live-index widget is the only thing here
+  // that schedules one, and it fails its own fetch gracefully in this sandbox regardless
+  setInterval: () => 0, clearInterval() {},
   innerWidth: 1400, innerHeight: 900,
   // window-level, for the page's uncaught-error reporter
   addEventListener() {}, removeEventListener() {},

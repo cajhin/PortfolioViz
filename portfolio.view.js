@@ -3206,3 +3206,141 @@ document.getElementById('btnUpdatePrices').addEventListener('click', async () =>
     btn.textContent = label;
   }
 });
+
+// A small, self-contained ticker: symbol + today's % against yesterday's close, a bare intraday
+// sparkline (just the line and a 0% baseline — no gridlines, no date labels, no axis text), and
+// a hover tip with the full name, today's level, and today's high/low. Reusable — call again with
+// a different element id/symbol/name to add a second index; nothing here is specific to NDX.
+//
+// Deliberately outside the registry/gen_prices pipeline every other price on this page goes
+// through: fetched via start.sh's own /live-index route (a browser can't call Yahoo's chart API
+// directly — no CORS allowance there, the same reason update_prices.py runs server-side rather
+// than from here), and never written to gen_prices or localStorage. A reload starts from nothing;
+// while the tab stays open, it refetches every 5 minutes. A page served any other way (file://, a
+// plain static server with no /live-index route) just fails quietly and shows nothing here.
+const LIVE_INDEX_REFRESH_MS = 5 * 60 * 1000;
+// One decimal below 1000, none at or above it — a fourth digit already says more than the
+// fraction would ("999,5" is worth the decimal; "1.001" reads fine without one, and keeping it
+// would just be "1.000,7"-style clutter on numbers already wide enough to read at a glance).
+const fmtPoints = v => new Intl.NumberFormat('de-DE',
+  { maximumFractionDigits: Math.abs(v) >= 1000 ? 0 : 1 }).format(v);
+
+function renderLiveIndex(elId, symbol, name) {
+  const el = document.getElementById(elId);
+  const gainEl = el.querySelector('.liveindex-gain');
+  const svg = el.querySelector('svg');
+  const tip = document.getElementById('liveTip');
+  // whichever card this tile actually lives in, not a hardcoded one — placeTip's math is
+  // relative to wrapEl's own box, and #liveTip is only positioned correctly inside the same
+  // positioned ancestor this tile lives in (see #liveFrame's own position:relative)
+  const wrapEl = el.closest('.card');
+  // ^-prefixed is Yahoo's own convention for an index — used here for the one thing that
+  // differs in the hover tip below: an index has no currency to quote a level in ("Points"),
+  // a real instrument does ("Price €…") — see priceLabel/fmtPrice there.
+  const isIndex = symbol.startsWith('^');
+  let latest = null;                      // stashed for the hover tip, below
+
+  async function refresh() {
+    let data;
+    try {
+      const r = await fetch(`/live-index?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      data = await r.json();
+      if (data.error) throw new Error(data.error);
+    } catch (err) {
+      reportError('live index', err);
+      return;
+    }
+    // indices, not just the values — fromTime/toTime below need the same two ticks' own
+    // timestamps, not just their closes
+    const openIdx = data.closes.findIndex(c => c != null);
+    let lastIdx = -1;
+    for (let i = data.closes.length - 1; i >= 0; i--) if (data.closes[i] != null) { lastIdx = i; break; }
+    if (openIdx < 0 || lastIdx < 0) return;
+    const open = data.closes[openIdx], last = data.closes[lastIdx];
+    const highs = (data.highs || []).filter(v => v != null);
+    const lows = (data.lows || []).filter(v => v != null);
+    latest = {
+      last, prevClose: data.previousClose, currency: data.currency,
+      high: highs.length ? Math.max(...highs) : last,
+      low: lows.length ? Math.min(...lows) : last,
+      // the market's own open and the latest tick fetched, both in local time — see the hover
+      // tip below. Not the browser's own clock: toTime is when this data was last *good* for,
+      // which can trail a few minutes behind now while the tab sits between refreshes.
+      fromTime: data.times[openIdx], toTime: data.times[lastIdx],
+    };
+
+    // The badge is the conventional "vs. yesterday's close" every ticker quotes, and the chart's
+    // own 0% line now uses the same reference — they used to disagree on purpose (0% at today's
+    // own first tick instead), which read as a contradiction whenever the market gapped at the
+    // open: the badge could say +0.1% while the line visibly sat below its own zero, each one
+    // correct by its own definition but not by the other's. One reference for both avoids that.
+    // Falls back to today's own open only if Yahoo has no previous close to give.
+    const base = Number.isFinite(data.previousClose) ? data.previousClose : open;
+    const gain = (last - base) / base * 100;
+    gainEl.textContent = fmtPct(gain);
+    gainEl.className = 'liveindex-gain ' + posNeg(gain);
+
+    const pcts = data.closes.map(c => c == null ? null : (c / base - 1) * 100);
+    const finite = pcts.filter(Number.isFinite);
+    if (!finite.length) { svg.replaceChildren(); return; }
+    const lo = Math.min(...finite, 0), hi = Math.max(...finite, 0);
+    const span = hi - lo || 1;
+    const W = 100, H = 28, PAD = 2;
+    const x = i => pcts.length > 1 ? (i / (pcts.length - 1)) * W : 0;
+    const y = v => H - PAD - (v - lo) / span * (H - 2 * PAD);
+    const pts = pcts.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
+    const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+    svg.innerHTML =
+      `<line x1="0" y1="${y(0).toFixed(1)}" x2="${W}" y2="${y(0).toFixed(1)}" class="zero"/>` +
+      `<path d="${line}" class="line ${posNeg(last - base)}"/>`;
+    updateStaleness();
+  }
+
+  // Out of sync — the market this tracks has likely closed (or the fetch has been failing) —
+  // once the newest tick on hand is more than 5 minutes behind the clock. Checked on its own
+  // timer, not only right after a fetch: refresh() only runs every 5 minutes itself, so waiting
+  // for the next one would leave a closed market looking live for up to 5 minutes longer than it
+  // takes to actually notice.
+  const STALE_AFTER_S = 5 * 60;
+  function updateStaleness() {
+    if (!latest) return;
+    el.classList.toggle('stale', Date.now() / 1000 - latest.toTime > STALE_AFTER_S);
+  }
+
+  // epoch seconds (Yahoo's own timestamp unit) to the viewer's own local HH:MM — deliberately not
+  // the market's own timezone: "NY starts at 15:30" is exactly the point, reading in whatever
+  // clock the viewer already has open rather than one more timezone to convert in their head
+  const localClock = ts => { const dt = new Date(ts * 1000); return `${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`; };
+
+  el.addEventListener('pointerenter', e => {
+    if (!latest) return;
+    const gain = Number.isFinite(latest.prevClose) ? latest.last - latest.prevClose : NaN;
+    const pct = Number.isFinite(latest.prevClose) ? gain / latest.prevClose * 100 : NaN;
+    const fmtPrice = v => isIndex ? fmtPoints(v) : `${foreignSymbol(latest.currency || CCY)}${fmtPoints(v)}`;
+    tip.innerHTML = `<div class="t">${name}</div>` +
+      tipRow(isIndex ? 'Points' : 'Price', fmtPrice(latest.last)) +
+      (Number.isFinite(gain)
+        ? tipRow('Change', `${gain >= 0 ? '+' : ''}${fmtPoints(gain)} (${fmtPct(pct)})`, posNeg(gain)) : '') +
+      tipRow('High', fmtPrice(latest.high)) +
+      tipRow('Low', fmtPrice(latest.low)) +
+      (Number.isFinite(latest.fromTime) && Number.isFinite(latest.toTime)
+        ? `<div class="full">${localClock(latest.fromTime)} – ${localClock(latest.toTime)}</div>` : '');
+    tip.classList.add('on');
+    placeTip(tip, wrapEl, e);
+  });
+  el.addEventListener('pointermove', e => placeTip(tip, wrapEl, e));
+  el.addEventListener('pointerleave', () => tip.classList.remove('on'));
+
+  refresh();
+  setInterval(refresh, LIVE_INDEX_REFRESH_MS);
+  setInterval(updateStaleness, 30 * 1000);
+}
+// EUNL.DE, not a made-up index ticker — the exact same MSCI World ETF this portfolio already
+// tracks (registry/price_sources.csv), so "World" here reads live and intraday the way the
+// others do, rather than picking a different, unrelated instrument for the same name.
+renderLiveIndex('liveIndexMSCI', 'EUNL.DE', 'World');
+renderLiveIndex('liveIndexIXIC', '^IXIC', 'Nasdaq Composite');
+renderLiveIndex('liveIndexNDX', '^NDX', 'Nasdaq-100');
+renderLiveIndex('liveIndexNDXT', '^NDXT', 'Nasdaq-100 Technology Sector');
+renderLiveIndex('liveIndexSOX', '^SOX', 'PHLX Semiconductor');
+renderLiveIndex('liveIndexGOOG', 'GOOG', 'Alphabet (Google) Class C');
