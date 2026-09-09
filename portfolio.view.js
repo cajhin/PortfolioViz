@@ -108,9 +108,11 @@ function fmtClose(row) {
 
 // A range pick re-bases every basis figure onto its start date (see rebaseLots), so the words for
 // those figures have to move with it: "invested" is no longer what the number means once the
-// comparison starts mid-history. The map and the pie both reconstruct — the two tables are always
-// live — so this reads null there and the wording falls back to the lifetime one.
-const isChartView = () => VIEW === 'map' || VIEW === 'pie';
+// comparison starts mid-history. The map and the pie both reconstruct fully; the positions table
+// only borrows the start date for its own three range-aware columns (see renderMeta) and never
+// calls purLabel/gainLabel, so extending this to it changes nothing else. The closed-positions and
+// watch tables are always live — this reads null there and the wording falls back to the lifetime one.
+const isChartView = () => VIEW === 'map' || VIEW === 'pie' || VIEW === 'positions';
 const rangeFrom = () => (isChartView() && AS_FROM) ? AS_FROM : null;
 const rangeAt = () => (isChartView() && AS_OF) ? AS_OF : null;
 const rangeTo = () => rangeAt() || TODAY;
@@ -318,8 +320,8 @@ const tipSaleRows = d =>
 const tipIrrRow = (d, cagrLabel) => {
   if (!Number.isFinite(d.irr)) return '';
   if (MODE === 'rel' && Number.isFinite(d.benchIrr))
-    return tipRow('XIRR vs. World', fmtPP(d.irr - d.benchIrr), posNeg(d.irr - d.benchIrr));
-  return tipRow(d.irrExact ? 'XIRR' : cagrLabel, fmtPct(d.irr), posNeg(d.irr));
+    return tipRow('Annualized (XIRR) vs. World', fmtPP(d.irr - d.benchIrr), posNeg(d.irr - d.benchIrr));
+  return tipRow(d.irrExact ? 'Annualized (XIRR)' : cagrLabel, fmtPct(d.irr), posNeg(d.irr));
 };
 
 // Keep a popover inside the viewport: prefer down-right of the pointer, flip to the other side
@@ -687,37 +689,60 @@ function makeSortable(id) {
   });
 }
 
+// Populated by show()'s 'positions' branch — identifier → computeAsOf's own `pur` for the range's
+// start date, the same rebased-lots figure the map/pie already measure a range from — rather
+// than recomputed here, since that needs a fetch per instrument's price series and renderMeta
+// itself has to stay synchronous for its other callers (load(), redrawEverything()). Empty
+// whenever no range is picked, or the table hasn't been shown since one was — rangeFrom() being
+// null is what actually gates its use below, this just holds whatever the last resolved range's
+// figures were.
+let START_VALUE_MAP = new Map();
+
 function renderMeta(items, closed = []) {
   const tb = document.querySelector('#tbl tbody');
   const trs = [];
-  PF.forEach(p => {
-    const rows = items.filter(d => d.portfolio === p.name);
-    rows.forEach(d => {
-      const cls = d.state === 'flat' ? '' : d.gain > 0 ? 'pos' : 'neg';
-      const tr = document.createElement('tr');
-      tr.innerHTML =
-        `<td>${p.name}</td>` +
-        `<td class="src">${sourceTag(d)}</td>` +
-        `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
-        `<td>${d.shares.toLocaleString('de-DE')}</td>` +
-        `<td>${fmtMoney2(d.pur)}</td><td>${fmtMoney2(d.cur)}</td>` +
-        `<td class="${cls}">${d.state === 'flat' ? '–' : fmtMoney2(d.gain)}</td>` +
-        `<td class="${cls}">${d.state === 'flat' ? '–' : fmtPct(d.ret)}</td>` +
-        `<td class="${d.relPre > 0 ? 'realized' : d.relPre < 0 ? 'neg' : ''}">` +
-        `${Math.abs(d.relPre) > 0.005 ? fmtMoney2(d.relPre) : '–'}</td>`;
-      // scoped to its own name cell, not the whole row, so the surrounding figures stay plain text
-      tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
-      trs.push(tr);
-    });
-    const s = totals(rows);
-    const tr = document.createElement('tr'); tr.className = 'sub';
-    tr.innerHTML = `<td colspan="4">${p.name} — total</td>` +
-      `<td>${fmtMoney2(s.pur)}</td><td>${fmtMoney2(s.cur)}</td>` +
-      `<td class="${s.gain >= 0 ? 'pos' : 'neg'}">${fmtMoney2(s.gain)}</td>` +
-      `<td class="${s.gain >= 0 ? 'pos' : 'neg'}">${s.pur > 0 ? fmtPct(s.gain / s.pur * 100) : '–'}</td>` +
-      `<td class="${s.rel > 0 ? 'realized' : s.rel < 0 ? 'neg' : ''}">${fmtMoney2(s.rel)}</td>`;
+  // One flat list, deliberately not grouped by portfolio/broker (see renderClosedPositions,
+  // which never was) — a position's own Portfolio column already says which broker holds it,
+  // and one overall total below is the summary, not one per broker.
+  let sumStart = 0;
+  items.forEach(d => {
+    // Start value: the map/pie's own rebased-lots figure (computeAsOf's `pur`) — whatever was
+    // already held before the range started counts from its value then, whatever's been bought
+    // or sold since counts from what it actually cost, so a position touched mid-range blends
+    // the two rather than pretending it was all bought (or all held) on one date. Falls back to
+    // the real purchase value with no range picked, which makes Unrealised/Return below collapse
+    // back to exactly what they always were: gain/return since actual purchase, not since some
+    // date. Purchase value, Current value and Realised are deliberately untouched by any of this
+    // — they mean the same thing regardless of range.
+    const startValue = rangeFrom() ? (START_VALUE_MAP.get(d.identifier) ?? d.pur) : d.pur;
+    sumStart += startValue;
+    const rangeGain = d.cur - startValue;
+    const flat = !(startValue > 0) || Math.abs(rangeGain) < 0.005;
+    const cls = flat ? '' : rangeGain > 0 ? 'pos' : 'neg';
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td>${d.portfolio}</td>` +
+      `<td class="src">${sourceTag(d)}</td>` +
+      `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
+      `<td>${d.shares.toLocaleString('de-DE')}</td>` +
+      `<td>${fmtMoney2(d.pur)}</td><td>${fmtMoney2(startValue)}</td><td>${fmtMoney2(d.cur)}</td>` +
+      `<td class="${cls}">${flat ? '–' : fmtMoney2(rangeGain)}</td>` +
+      `<td class="${cls}">${flat ? '–' : fmtPct(startValue > 0 ? rangeGain / startValue * 100 : 0)}</td>` +
+      `<td class="${d.relPre > 0 ? 'realized' : d.relPre < 0 ? 'neg' : ''}">` +
+      `${Math.abs(d.relPre) > 0.005 ? fmtMoney2(d.relPre) : '–'}</td>`;
+    // scoped to its own name cell, not the whole row, so the surrounding figures stay plain text
+    tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
     trs.push(tr);
   });
+  const s = totals(items);
+  const sGain = s.cur - sumStart;
+  const tr = document.createElement('tr'); tr.className = 'sub';
+  tr.innerHTML = `<td colspan="4">Total</td>` +
+    `<td>${fmtMoney2(s.pur)}</td><td>${fmtMoney2(sumStart)}</td><td>${fmtMoney2(s.cur)}</td>` +
+    `<td class="${sGain >= 0 ? 'pos' : 'neg'}">${fmtMoney2(sGain)}</td>` +
+    `<td class="${sGain >= 0 ? 'pos' : 'neg'}">${sumStart > 0 ? fmtPct(sGain / sumStart * 100) : '–'}</td>` +
+    `<td class="${s.rel > 0 ? 'realized' : s.rel < 0 ? 'neg' : ''}">${fmtMoney2(s.rel)}</td>`;
+  trs.push(tr);
   tb.replaceChildren(...trs);
   applySort('tbl');
   renderClosedPositions();
@@ -978,10 +1003,11 @@ function redrawEverything() {
 // Picks live vs. as-of totals for the header tiles and the realised bar together, so the two
 // never disagree about which dates they're showing. A start date on its own is enough to take
 // this path: "since March" still needs the whole reconstruction even though the end is today.
-// Both chart views reconstruct now — the tables still fall back to live totals even if a date is
-// still picked underneath, since neither one reads the as-of pick at all.
+// Map and pie reconstruct the header tiles fully; the positions table deliberately doesn't — its
+// own Current value/Purchase value columns stay live (see renderMeta) — so this checks the two
+// chart views by name rather than through isChartView(), which now also covers the positions tab.
 async function refreshHeader() {
-  if ((AS_OF || AS_FROM) && isChartView()) {
+  if ((AS_OF || AS_FROM) && (VIEW === 'map' || VIEW === 'pie')) {
     const to = AS_OF || TODAY;
     const [snap, real] = await Promise.all([computeAsOf(to, AS_FROM), computeAsOfRealized(to, AS_FROM)]);
     renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal });
@@ -1799,15 +1825,21 @@ function openStockPicker(anchorEl, { resetLabel, showHide, showAll, currentIdent
 //   • measured off the series' own last day rather than off today, so a listing whose prices stop
 //     early still shows its last month instead of an empty window;
 //   • "since buy", which only means anything when there is one position to have bought.
-// drawDetail clamps whatever comes back to the series' first row, so a window reaching further
-// back than the data simply shows all of it.
+// drawDetail's `rows` still clamps whatever comes back to the series' first row — a window
+// reaching further back than the *main* series' own data simply can't show more of that one
+// line — but `from` itself is no longer clamped there, which is what lets a value further back
+// than the series' own first row actually widen the shared axis for a sector/basket line (see
+// drawDetail's own `isBasket` handling). That's exactly what "all" needs to mean something for a
+// basket: not the sector's own first-held date (that's just its lifetime), but as far back as any
+// of its members' own price history goes.
 // A function, not a lookup table built up front: RANGE_PRESETS is declared with the controls far
 // below, so anything evaluated here at load time would read it before it exists. Resolved per call
 // instead, which costs a find over ten entries once per redraw.
 function rangeStartFor(range, d, series) {
   const p = RANGE_PRESETS.find(q => q.key === range);
   if (!p) return d.firstActivity || '';               // 'buy', and anything unrecognised
-  return p.from ? p.from(series.rows[series.rows.length - 1].date) : series.rows[0].date;
+  if (!p.from) return d.earliestMemberDate || series.rows[0].date;       // 'all'
+  return p.from(series.rows[series.rows.length - 1].date);
 }
 
 // custom, when given, is a { from, to } drag-selected window that overrides the range buttons
@@ -1828,6 +1860,9 @@ const SECTOR_ID = '__sector';
 // the "discount up vola 50%" checkbox — a view preference like SHOW_MONEY, not part of DETAIL
 // itself, so it survives closing and reopening the dialog on a different position
 let VOLA_DOWNSIDE = true;
+// same idea, for the chart's own y-axis: log by default, so a doubling reads the same size
+// wherever on the line it happens — see y() in drawDetail for the actual mapping.
+let LOG_SCALE = true;
 
 function drawDetail(d, series, alignDate, range, custom, extras) {
   const W = 840, H = 300, T = 12, B = 22;
@@ -1836,7 +1871,12 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     ({ from, to } = custom);
   } else {
     const pick = rangeStartFor(range, d, series);
-    from = pick && pick > series.rows[0].date ? pick : series.rows[0].date;
+    // No longer clamped to the main series' own first row: `rows` below still can't start any
+    // earlier than that (iFrom's own Math.max(0, …) floors it there regardless), so for every
+    // existing chart this changes nothing. What it does free up is `from` itself, used further
+    // down to widen the shared x-axis for a sector/basket line — whose own data literally cannot
+    // predate when it was first held — so a comparison line's earlier history has room to draw.
+    from = pick || series.rows[0].date;
     to = series.rows[series.rows.length - 1].date;
   }
   // The same rows the map's range picker measures from — "last close at or before" each end, not
@@ -1854,7 +1894,13 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   const secondaries = (extras || []).map((entry, i) => ({
     label: entry.isDefaultBench ? BENCH_LABEL : entry.label,
     identifier: entry.isDefaultBench ? null : entry.identifier,
-    secRows: (entry.isDefaultBench ? BENCH : entry.series.rows).filter(r => r.date >= rows[0].date),
+    // no early clip any more (used to drop anything before rows[0].date) — a sector member's
+    // pre-purchase history needs exactly that stretch; harmless for every other chart, since
+    // `dates` never reaches back far enough to look any of it up there anyway.
+    secRows: entry.isDefaultBench ? BENCH : entry.series.rows,
+    // only ever set on a sector's own members (see openSectorDetail) — when this position was
+    // actually bought, as opposed to secRows' own price history, which usually starts earlier
+    firstActivity: entry.firstActivity || null,
     colour: entry.isDefaultBench ? EXTRA_COLOURS[0]
       : EXTRA_COLOURS[1 + (extraColourAt++ % (EXTRA_COLOURS.length - 1))],
     entryIndex: i,
@@ -1893,20 +1939,64 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     gapRuns[gapRuns.length - 1].to = rows[i + 1] ? rows[i + 1].date : r.date;
   });
 
-  const dates = rows.map(r => r.date);
-  const xOf = date => {                                  // nearest trading day at or before
-    const i = lastIndexAtOrBefore(rows, date);
-    return i >= 0 ? i : null;
-  };
   const at = lastAtOrBefore;
+  // A sector/basket line's own data can't predate when it was first held, so its `rows` above
+  // stops there — but a member's own price history usually goes back further, and this widens
+  // the shared x-axis to fit that in too, rather than the axis being purely `rows`' own dates the
+  // way it is for every other chart. Bounded to `from`/`to` — no wider than what was actually
+  // picked — and only for a basket's members specifically (secondaries carrying firstActivity);
+  // a plain compare-picker addition never widens anything.
+  const isBasket = secondaries.some(s => s.firstActivity);
+  // a basket's own line and label read black, not the usual --series-1 — set once, used for both
+  // the line's stroke and its end-of-chart key text below
+  const mainColour = isBasket ? '#000' : 'var(--series-1)';
+  const dateSet = new Set(rows.map(r => r.date));
+  if (isBasket) secondaries.forEach(s => s.secRows.forEach(r => {
+    if (r.date >= from && r.date <= to) dateSet.add(r.date);
+  }));
+  const dates = [...dateSet].sort();
+  // nearest trading day at or before — searches `dates` now, not `rows`, so it stays correct once
+  // the two can differ in length (a basket's own rows never reach as far back as `dates` can)
+  const xOf = date => {
+    let lo = 0, hi = dates.length - 1, found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (dates[mid] <= date) { found = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return found >= 0 ? found : null;
+  };
 
-  // every line is read as % against the tie point, so they are all 0 there and cross by construction
-  const anchor = (alignDate && xOf(alignDate) !== null) ? dates[xOf(alignDate)] : dates[0];
-  const stockAnchor = rows[xOf(anchor)];
+  // every line is read as % against the tie point, so they are all 0 there and cross by
+  // construction — a basket's own tie point is always its real first row (Y=0 where its line
+  // actually starts), never the widened axis's own earlier start, which it has no value at all
+  const anchor = isBasket ? rows[0].date
+    : (alignDate && xOf(alignDate) !== null) ? dates[xOf(alignDate)] : dates[0];
+  const stockAnchor = at(rows, anchor);
   const stockPct = r => (r.close / stockAnchor.close - 1) * 100;
-  const stockVals = rows.map(stockPct);                  // kept: the hover crosshair reads back into it
+  // looked up per date rather than mapped straight off `rows` (kept: the hover crosshair reads
+  // back into it) — null wherever `rows` has nothing that far back, i.e. before a basket existed
+  const stockVals = dates.map(dt => { const r = at(rows, dt); return r ? stockPct(r) : null; });
 
   secondaries.forEach(s => {
+    // bought partway through the window — not simply "existed from some date," but this specific
+    // line's own firstActivity — crosses the primary's own line exactly there, in both
+    // directions: the same ratio-against-one-price math the catch-up branch below already uses,
+    // just anchored at the purchase date instead of at the first date this has *any* price for,
+    // and drawn on both sides of it rather than only from there onward (see the dotted run this
+    // feeds further down, in the actual path-drawing).
+    const cut = s.firstActivity && s.firstActivity > anchor ? s.firstActivity : null;
+    if (cut) {
+      const cutRow = at(s.secRows, cut);
+      const cutIdx = xOf(cut);
+      const startFrac = (cutRow && cutRow.close > 0 && cutIdx != null && Number.isFinite(stockVals[cutIdx]))
+        ? stockVals[cutIdx] / 100 : null;
+      s.vals = startFrac == null ? dates.map(() => null) : dates.map(dt => {
+        const r = at(s.secRows, dt);
+        return (r && r.close > 0) ? ((1 + startFrac) * (r.close / cutRow.close) - 1) * 100 : null;
+      });
+      s.last = s.vals.filter(Number.isFinite).slice(-1)[0];
+      return;
+    }
     const anchorRow = at(s.secRows, anchor);
     // a positive close, not just any row — the portfolio-total line (secRows can legitimately be
     // 0 before the first position was ever bought) divides by zero exactly like a missing row
@@ -1971,14 +2061,22 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   const vLo = volaVals.length ? Math.min(...volaVals) : 0;
   const vHi = volaVals.length ? Math.max(...volaVals) : 0;
 
-  const values = [...stockVals, ...secondaries.flatMap(s => s.vals.filter(Number.isFinite)), 0];
+  const values = [...stockVals.filter(Number.isFinite), ...secondaries.flatMap(s => s.vals.filter(Number.isFinite)), 0];
   const lo = Math.min(...values), hi = Math.max(...values);
   // No padding on either edge: each bound is the actual all-time low/high for the window shown —
   // the most either line, stock or benchmark, ever fell or rose — so the chart never implies more
   // room than the data has evidence for, above a peak or below a trough alike. Guard against the
   // one degenerate case a flat pair of bounds would divide by zero on: a dead-flat line.
   const yLo = lo, yHi = hi > lo ? hi : lo + 1;
-  const y = v => T + (H - T - B) * (1 - (v - yLo) / (yHi - yLo));
+  // Every line here is already a % against the anchor (see stockPct/s.vals above), so "log scale"
+  // means log of the index value that % implies — 100 at the anchor, 100+v everywhere else, never
+  // ≤0 since a real price can fall to zero but not past it. Same gridline values either way (see
+  // axisTexts below) — only where each one actually lands on screen changes, compressing the top
+  // of a big winner's line and expanding a small move near the anchor, the way a real log axis does.
+  const logOf = v => Math.log(Math.max(1e-6, 100 + v));
+  const y = LOG_SCALE
+    ? v => T + (H - T - B) * (1 - (logOf(v) - logOf(yLo)) / (logOf(yHi) - logOf(yLo)))
+    : v => T + (H - T - B) * (1 - (v - yLo) / (yHi - yLo));
 
   // Both sigma lines share ONE FIXED scale, 0-200% annualised, stretched across the chart's whole
   // height — fixed rather than fit to this window's own min/max, so a line's height means the same
@@ -2023,7 +2121,7 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // the right margin is whatever the end labels need, so they can never be clipped
   const lastStock = stockVals[stockVals.length - 1];
   const keys = [{ text: `${d.label} ${fmtPct(lastStock)}${priceTag(rows[rows.length - 1], d.identifier)}`,
-                  v: lastStock, colour: 'var(--series-1)' }];
+                  v: lastStock, colour: mainColour }];
   secondaries.forEach(s => {
     if (Number.isFinite(s.last))
       keys.push({ text: `${s.label} ${fmtPct(s.last)}${priceTag(at(s.secRows, lastDate), s.identifier)}`,
@@ -2043,7 +2141,10 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   });
   const x = i => L + (W - L - R) * (i / (dates.length - 1));
   secondaries.forEach(s => {
-    s.pts = s.vals.map((v, i) => Number.isFinite(v) ? [x(i), v] : null).filter(Boolean);
+    // date carried alongside (not just [x, value]) so the path-drawing below can still tell,
+    // after this filters the gaps out, which of the remaining points fall before this member's
+    // own firstActivity — the dotted/solid split there needs to know that, not just where to draw
+    s.pts = s.vals.map((v, i) => Number.isFinite(v) ? [x(i), v, dates[i]] : null).filter(Boolean);
   });
 
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
@@ -2120,9 +2221,13 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     }
   });
 
-  const path = (pts, stroke, dashed) => svg.appendChild(el('path', {
+  // `style` used to be a plain "dashed?" boolean (the bridged-gap look); it now names whichever
+  // dtline-* modifier applies, since there are two independent reasons a run can be non-solid —
+  // a bridged data gap, or a stretch before this member was actually bought — and they read
+  // differently on purpose (see .dtline-preown vs .dtline-fill in the CSS).
+  const path = (pts, stroke, style) => svg.appendChild(el('path', {
     d: pts.map((p, i) => `${i ? 'L' : 'M'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' '),
-    class: 'dtline' + (dashed ? ' dtline-fill' : ''), stroke,
+    class: 'dtline' + (style ? ' ' + style : ''), stroke,
   }));
   // sigma first, so it sits behind every price line rather than over them. A stretch with no full
   // trailing window behind it (the start of a short history) breaks the line instead of bridging
@@ -2140,23 +2245,45 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     });
     if (run.length > 1) volaPath(run, v);
   });
-  secondaries.forEach(s => { if (s.pts.length > 1) path(s.pts.map(p => [p[0], y(p[1])]), s.colour); });
+  secondaries.forEach(s => {
+    if (s.pts.length < 2) return;
+    // no cutover (a plain compare line, or a basket member already held before the window
+    // opened) — one solid run, same as always
+    if (!s.firstActivity) { path(s.pts.map(p => [p[0], y(p[1])]), s.colour); return; }
+    // otherwise split into a dotted run before this member was actually bought and a solid one
+    // after — the two meet exactly at firstActivity, which is also where s.vals crosses the
+    // primary's own line (see the `cut` branch above), so the dotted run reads as "this is what
+    // it was doing before it was one of your positions," not as a second, disconnected line
+    let run2 = [s.pts[0]], runPre = s.pts[0][2] < s.firstActivity;
+    for (let i = 1; i < s.pts.length; i++) {
+      const pre = s.pts[i][2] < s.firstActivity;
+      if (pre !== runPre) {
+        path(run2.map(p => [p[0], y(p[1])]), s.colour, runPre ? 'dtline-preown' : '');
+        run2 = [s.pts[i - 1]];
+        runPre = pre;
+      }
+      run2.push(s.pts[i]);
+    }
+    path(run2.map(p => [p[0], y(p[1])]), s.colour, runPre ? 'dtline-preown' : '');
+  });
   // the stock's own path breaks into solid/dashed runs at each bridged gap: an edge is "filled"
   // if either point it connects is a synthetic one, so the dashing starts and ends exactly on the
-  // last real point either side, and the two styles always meet rather than leaving a visible seam
-  const stockPts = rows.map((r, i) => [x(i), y(stockPct(r)), !!r.filled]);
+  // last real point either side, and the two styles always meet rather than leaving a visible seam.
+  // Positioned by xOf(r.date), not by its own index in `rows` — the two only coincide when the
+  // shared axis is exactly `rows`' own dates, which a widened basket axis no longer is.
+  const stockPts = rows.map(r => [x(xOf(r.date)), y(stockPct(r)), !!r.filled]);
   let run = [stockPts[0]], runFill = null;
   for (let i = 1; i < stockPts.length; i++) {
     const edgeFill = stockPts[i][2] || stockPts[i - 1][2];
     if (runFill === null) runFill = edgeFill;
     if (edgeFill !== runFill) {
-      path(run, 'var(--series-1)', runFill);
+      path(run, mainColour, runFill ? 'dtline-fill' : '');
       run = [stockPts[i - 1]];
       runFill = edgeFill;
     }
     run.push(stockPts[i]);
   }
-  path(run, 'var(--series-1)', runFill);
+  path(run, mainColour, runFill ? 'dtline-fill' : '');
 
   if (anchor !== dates[0]) {                              // show what the lines were tied to
     const i = xOf(anchor);
@@ -2174,13 +2301,14 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   });
   const markNodes = [...byDay.entries()].map(([day, trades]) => {
     const i = xOf(day);
-    if (i === null) return null;
+    const r = at(rows, day);                 // looked up by date, not rows[i] — see stockPts above
+    if (i === null || !r) return null;
     const type = trades.every(t => t.type === trades[0].type) ? trades[0].type : 'mixed';
     const node = el('circle', {
-      cx: x(i), cy: y(stockPct(rows[i])), r: 4.2, class: 'dtmark ' + type,
+      cx: x(i), cy: y(stockPct(r)), r: 4.2, class: 'dtmark ' + type,
     });
     svg.appendChild(node);
-    return { node, trades, day, close: rows[i].close, aligned: anchor === dates[i] };
+    return { node, trades, day, close: r.close, aligned: anchor === dates[i] };
   }).filter(Boolean);
 
   // Place the end labels at their line, then push apart if they would collide, keeping both
@@ -2250,7 +2378,11 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // .node back into "which slot was clicked", without redoing this geometry
   return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, secondaries, volas,
            marks: markNodes, dates, stockVals, gapRuns, vals, clsLabel, invLabel,
-           filled: rows.map(r => !!r.filled), x, L, R, T, B, H, W };
+           // per date, not per row — same reason stockVals moved off a straight rows.map: false
+           // (not "held flat") for any date before a basket's own rows start, which is correct,
+           // that stretch isn't a bridged gap, it's genuinely before there was anything to hold
+           filled: dates.map(dt => { const r = at(rows, dt); return !!(r && r.filled); }),
+           x, L, R, T, B, H, W };
 }
 
 let DETAIL = null;                                    // { d, series, alignDate }
@@ -2286,8 +2418,10 @@ function renderDetail() {
     (isFilled ? ' (no data — held flat)' : '');
   // every line on the chart reports here at the crosshair, sigma included — unsigned, since it is
   // a spread and not a change, which is also what tells the two units apart in one line of text
+  // stock can be non-finite now too — the crosshair sitting before a basket line's own first
+  // date (see drawDetail's widened axis) — same "nothing to show" dash every other line here uses
   const valsAt = (stock, secVals, volaVals) =>
-    `${d.label} ${fmtPct(stock)}` +
+    `${d.label} ${Number.isFinite(stock) ? fmtPct(stock) : '–'}` +
     drawn.secondaries.map((s, i) =>
       Number.isFinite(secVals[i]) ? ` · ${s.label} ${fmtPct(secVals[i])}` : '').join('') +
     drawn.volas.map((v, i) =>
@@ -2538,6 +2672,17 @@ async function openSectorDetail(name, members) {
   body.innerHTML = '<div class="empty">loading…</div>';
   if (!dlg.open) dlg.showModal();
 
+  // Every member gets its own comparison line alongside the sector's blended one, the same shape
+  // a hand-picked "+ compare" entry is (label/identifier/series) — so the sector chart doubles as
+  // "each of these stocks, on the one chart" rather than only the basket's own combined line.
+  // Fetched in parallel (loadSeries caches per slug, so nothing already open pays for this twice)
+  // and simply left out for anything with no price history, same as any other line here would be.
+  const memberSeries = (await Promise.all(members.map(async m => {
+    const series = await loadSeries(seriesSlug(m));
+    // firstActivity: when this member was actually first bought — drawDetail uses it to cross
+    // this line over the sector's own at that date and to dash the stretch before it
+    return series ? { label: m.label, identifier: m.identifier, series, firstActivity: m.firstActivity } : null;
+  }))).filter(Boolean);
   // renderDetail always rewrites dtSub to "<d.portfolio> · 0 % at <anchor>" once the chart is
   // drawn (see subAt) — same as it does for a real position — so the position count belongs in
   // d.portfolio, not in a one-off dtSub assignment that render would just overwrite anyway.
@@ -2545,10 +2690,15 @@ async function openSectorDetail(name, members) {
     label: name, name, portfolio: count, identifier: SECTOR_ID,
     firstActivity: members.reduce((t, m) =>
       (m.firstActivity && (!t || m.firstActivity < t)) ? m.firstActivity : t, ''),
+    // rangeStartFor's own "all" case for a basket line — see there — since the sector's own
+    // series can't start before it was first held, "all" needs a different, earlier floor: the
+    // earliest date any member has real price data for, not just when the sector itself formed.
+    earliestMemberDate: memberSeries.reduce((t, m) =>
+      (m.series.rows.length && (!t || m.series.rows[0].date < t)) ? m.series.rows[0].date : t, ''),
   };
   DETAIL = { d, series: await portfolioSeries(m => sectorOf(m) === name, 'sector:' + name),
              alignDate: null, range: (DETAIL && DETAIL.range) || 'buy', customRange: null,
-             extras: [{ isDefaultBench: true }] };
+             extras: [{ isDefaultBench: true }, ...memberSeries] };
   renderDetail();
 }
 
@@ -2561,6 +2711,10 @@ document.getElementById('dtRange').addEventListener('click', e => {
 });
 document.getElementById('volaDownside').addEventListener('change', e => {
   VOLA_DOWNSIDE = e.target.checked;
+  if (DETAIL) renderDetail();
+});
+document.getElementById('logScale').addEventListener('change', e => {
+  LOG_SCALE = e.target.checked;
   if (DETAIL) renderDetail();
 });
 const addCompareBtn = document.getElementById('dtAddCompare');
@@ -2614,22 +2768,27 @@ async function show(view) {
     btn.setAttribute('aria-pressed', view === v);
   }
   const isChart = view === 'map' || view === 'pie';
+  // the positions table also has a use for the range picker (see renderMeta) even though it isn't
+  // a "chart" — chartBody (the map/pie svg) stays gated to isChart alone, only the range controls
+  // themselves widen to cover it too
+  const rangeUsable = isChart || view === 'positions';
   document.getElementById('chartBody').hidden = !isChart;
   document.getElementById('keyPie').hidden = view !== 'pie';
   document.getElementById('keyMap').hidden = view !== 'map';
-  document.getElementById('asOfWrap').hidden = !isChart;
+  document.getElementById('asOfWrap').hidden = !rangeUsable;
   document.getElementById('positionsCard').hidden = view !== 'positions';
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('watchCard').hidden = view !== 'watch';
   document.getElementById('tip').classList.remove('on');
-  // as-of reconstruction exists for the map and the pie — disable the actual controls (not just
-  // the hidden wrapper) so they can't be triggered by a stray focus/keypress on the other frames
+  // as-of reconstruction exists for the map, the pie, and (partially — see renderMeta) the
+  // positions table — disable the actual controls (not just the hidden wrapper) so they can't be
+  // triggered by a stray focus/keypress on the other frames
   ['asOfDate', 'asFromDate', 'asOfDayBack', 'asOfDayFwd', 'asOfClear',
    ...RANGE_PRESETS.map(p => p.id)].forEach(id => {
-    document.getElementById(id).disabled = !isChart;
+    document.getElementById(id).disabled = !rangeUsable;
   });
-  document.getElementById('asOfStep').tabIndex = isChart ? 0 : -1;
+  document.getElementById('asOfStep').tabIndex = rangeUsable ? 0 : -1;
   if (view === 'pie') document.getElementById('closedWrap').hidden = true;
   const renderToken = ++SHOW_TOKEN;
   try {
@@ -2638,7 +2797,18 @@ async function show(view) {
     } else if (view === 'watch') {
       renderWatch();
     } else if (view === 'positions') {
-      // the table's own numbers are always live — an as-of pick only ever affects map/pie
+      // most of the table's own numbers are always live (see renderMeta) — only Start value and
+      // what it feeds (Unrealised, Return) reconstruct, and only need computeAsOf's own `pur` —
+      // the same rebased-lots figure the map/pie's own "Value on X"/"Purchase value" already is:
+      // whatever was already held before the range started counts from its value then, whatever
+      // was bought or sold since counts from what it actually cost, not from valueAtFrom's "as if
+      // bought today's size back then" — so this skips computeAsOfRealized entirely too (nothing
+      // here reads relPre).
+      START_VALUE_MAP = AS_FROM
+        ? new Map((await computeAsOf(TODAY, AS_FROM)).items.map(x => [x.identifier, x.pur]))
+        : new Map();
+      if (renderToken !== SHOW_TOKEN) return;   // a newer date/view was picked meanwhile
+      renderMeta(ITEMS, CLOSED);
     } else if (view === 'pie') {
       if (AS_OF || AS_FROM) {
         const to = AS_OF || TODAY;

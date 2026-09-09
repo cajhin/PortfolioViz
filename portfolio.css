@@ -338,6 +338,7 @@
   .detail .empty { padding: 28px 0 34px; text-align: center; color: var(--text-muted); }
   .dtline { fill: none; stroke-width: 1.6; }
   .dtline-fill { stroke-dasharray: 4 3; opacity: 0.55; }   /* a bridged gap — price held flat, not real */
+  .dtline-preown { stroke-dasharray: 1.5 2.5; opacity: 0.55; }  /* real price, before you owned it */
   /* the volatility lines: a different unit on a borrowed axis, so they are drawn to read as
      background — thinner than a price line, dashed, and never competing with it for attention */
   .dtvola { fill: none; stroke-width: 1.1; stroke-dasharray: 5 4; opacity: 0.75; }

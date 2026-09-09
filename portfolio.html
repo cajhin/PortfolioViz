@@ -171,6 +171,9 @@
         <label class="modeswitch" title="Discount upward volatility by 50% to emphasise the risk of loss (btw textbook VaR (Value at Risk) disregards upward volatility)">
           <input type="checkbox" id="volaDownside" checked><span>+σ &lt; -σ</span>
         </label>
+        <label class="modeswitch" title="Equal percentage moves take equal vertical space, so a doubling early in the window looks the same size as one later — off shows equal money instead, where the same doubling looks bigger the higher the line already is">
+          <input type="checkbox" id="logScale" checked><span>log</span>
+        </label>
       </footer>
     </dialog>
 
@@ -192,6 +195,7 @@
       <table id="tbl">
         <thead><tr>
           <th>Portfolio</th><th>Source</th><th>Position</th><th>Shares</th><th>Purchase value</th>
+          <th title="Value at the range's start for whatever was already held then, actual purchase cost for whatever's been bought or sold since — same logic the map's own range figures use. Only this and Unrealised/Return move with the range picker">Start value</th>
           <th>Current value</th><th>Unrealised</th><th>Return</th><th>Realised (pre-tax)</th>
         </tr></thead>
         <tbody></tbody>
