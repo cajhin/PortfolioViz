@@ -3225,6 +3225,18 @@ const LIVE_INDEX_REFRESH_MS = 5 * 60 * 1000;
 const fmtPoints = v => new Intl.NumberFormat('de-DE',
   { maximumFractionDigits: Math.abs(v) >= 1000 ? 0 : 1 }).format(v);
 
+// Shared across every renderLiveIndex tile, not per-tile state: the x-axis is real epoch time
+// (Yahoo's own timestamp unit, already comparable across timezones with no conversion), spanning
+// the union of every tile's own session seen so far, rather than each tile stretching its own
+// ticks to fill its own width. That's what makes a German session's afternoon and a US session's
+// morning land on the same x pixel where the two actually overlap in wall-clock time — no
+// hardcoded exchange hours needed, just plotting by when each tick really happened. A tile whose
+// session hasn't started yet, or has already ended, simply draws inside a narrower slice of the
+// shared width instead of the full 0–100. Every tile redraws whenever any tile's fetch grows the
+// window, since a later-opening market widening the window shifts everyone else's own slice too.
+const liveWindow = { start: null, end: null };
+const liveRedraws = [];
+
 function renderLiveIndex(elId, symbol, name) {
   const el = document.getElementById(elId);
   const gainEl = el.querySelector('.liveindex-gain');
@@ -3239,6 +3251,7 @@ function renderLiveIndex(elId, symbol, name) {
   // a real instrument does ("Price €…") — see priceLabel/fmtPrice there.
   const isIndex = symbol.startsWith('^');
   let latest = null;                      // stashed for the hover tip, below
+  let pcts = [], times = [], base = null, last = null; // stashed for draw(), below
 
   async function refresh() {
     let data;
@@ -3256,7 +3269,8 @@ function renderLiveIndex(elId, symbol, name) {
     let lastIdx = -1;
     for (let i = data.closes.length - 1; i >= 0; i--) if (data.closes[i] != null) { lastIdx = i; break; }
     if (openIdx < 0 || lastIdx < 0) return;
-    const open = data.closes[openIdx], last = data.closes[lastIdx];
+    const open = data.closes[openIdx];
+    last = data.closes[lastIdx];
     const highs = (data.highs || []).filter(v => v != null);
     const lows = (data.lows || []).filter(v => v != null);
     latest = {
@@ -3275,26 +3289,41 @@ function renderLiveIndex(elId, symbol, name) {
     // open: the badge could say +0.1% while the line visibly sat below its own zero, each one
     // correct by its own definition but not by the other's. One reference for both avoids that.
     // Falls back to today's own open only if Yahoo has no previous close to give.
-    const base = Number.isFinite(data.previousClose) ? data.previousClose : open;
+    base = Number.isFinite(data.previousClose) ? data.previousClose : open;
     const gain = (last - base) / base * 100;
     gainEl.textContent = fmtPct(gain);
     gainEl.className = 'liveindex-gain ' + posNeg(gain);
 
-    const pcts = data.closes.map(c => c == null ? null : (c / base - 1) * 100);
+    times = data.times;
+    pcts = data.closes.map(c => c == null ? null : (c / base - 1) * 100);
+    let grew = false;
+    for (let i = 0; i < pcts.length; i++) {
+      if (pcts[i] == null) continue;
+      const t = times[i];
+      if (liveWindow.start == null || t < liveWindow.start) { liveWindow.start = t; grew = true; }
+      if (liveWindow.end == null || t > liveWindow.end) { liveWindow.end = t; grew = true; }
+    }
+    // this tile's own slice of the shared window grew — every other tile's slice shifted too
+    if (grew) liveRedraws.forEach(fn => fn()); else draw();
+    updateStaleness();
+  }
+
+  function draw() {
     const finite = pcts.filter(Number.isFinite);
-    if (!finite.length) { svg.replaceChildren(); return; }
+    if (!finite.length || liveWindow.start == null) { svg.replaceChildren(); return; }
     const lo = Math.min(...finite, 0), hi = Math.max(...finite, 0);
     const span = hi - lo || 1;
     const W = 100, H = 28, PAD = 2;
-    const x = i => pcts.length > 1 ? (i / (pcts.length - 1)) * W : 0;
+    const domain = liveWindow.end - liveWindow.start || 1;
+    const x = t => (t - liveWindow.start) / domain * W;
     const y = v => H - PAD - (v - lo) / span * (H - 2 * PAD);
-    const pts = pcts.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
+    const pts = pcts.map((v, i) => v == null ? null : [x(times[i]), y(v)]).filter(Boolean);
     const line = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
     svg.innerHTML =
       `<line x1="0" y1="${y(0).toFixed(1)}" x2="${W}" y2="${y(0).toFixed(1)}" class="zero"/>` +
       `<path d="${line}" class="line ${posNeg(last - base)}"/>`;
-    updateStaleness();
   }
+  liveRedraws.push(draw);
 
   // Out of sync — the market this tracks has likely closed (or the fetch has been failing) —
   // once the newest tick on hand is more than 5 minutes behind the clock. Checked on its own

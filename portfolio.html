@@ -25,6 +25,15 @@
     <!-- reportError()'s own slot. #err below belongs to the file-picker fallback and lives inside
          the hidden #loader, so a runtime failure written there would never be seen. -->
     <div class="runtimeerr" id="runtimeErr" hidden></div>
+
+    <!-- a 2x2 grid: liveframe (below) and .maincol (below) fix the two column widths, #totalsCard
+         sits above .maincol in the right-hand column, and the top-left cell above liveframe is
+         deliberately empty — these are live tickers, not portfolio figures (see renderLiveIndex),
+         so nothing here pairs them with a header of their own the way #totalsCard pairs with
+         .maincol. Grid, not two flex rows: a grid is what makes liveframe's and .maincol's widths
+         agree between this row and the next without repeating either width twice. -->
+    <div class="pagegrid">
+    <div class="livecell-empty"></div>
     <div class="card" id="totalsCard">
       <div class="totals">
         <div class="tile curtile" id="tileCur"><div class="k" id="kCur">Current value</div><div class="v" id="tCur">–</div></div>
@@ -41,38 +50,53 @@
       <div class="tip" id="curTip"></div>
     </div>
 
-    <!-- live tickers, not portfolio figures — see renderLiveIndex. Nothing here is fetched
-         through the usual registry/gen_prices pipeline, and nothing it fetches is kept past the
-         tab closing. Its own frame, not more tiles on #totalsCard: these track markets, not this
-         portfolio, so they read as a separate strip rather than mixed in among what you hold. -->
     <div class="card liveframe" id="liveFrame">
       <div class="tile liveindex" id="liveIndexMSCI">
-        <div class="k"><span class="liveindex-symbol">World</span> <span class="liveindex-gain"></span></div>
+        <div class="liveindex-info">
+          <div class="liveindex-symbol">World</div>
+          <div class="liveindex-gain"></div>
+        </div>
         <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
       </div>
       <div class="tile liveindex" id="liveIndexIXIC">
-        <div class="k"><span class="liveindex-symbol">IXIC</span> <span class="liveindex-gain"></span></div>
+        <div class="liveindex-info">
+          <div class="liveindex-symbol">IXIC</div>
+          <div class="liveindex-gain"></div>
+        </div>
         <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
       </div>
       <div class="tile liveindex" id="liveIndexNDX">
-        <div class="k"><span class="liveindex-symbol">NDX</span> <span class="liveindex-gain"></span></div>
+        <div class="liveindex-info">
+          <div class="liveindex-symbol">NDX</div>
+          <div class="liveindex-gain"></div>
+        </div>
         <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
       </div>
       <div class="tile liveindex" id="liveIndexNDXT">
-        <div class="k"><span class="liveindex-symbol">NDXT</span> <span class="liveindex-gain"></span></div>
+        <div class="liveindex-info">
+          <div class="liveindex-symbol">NDXT</div>
+          <div class="liveindex-gain"></div>
+        </div>
         <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
       </div>
       <div class="tile liveindex" id="liveIndexSOX">
-        <div class="k"><span class="liveindex-symbol">SOX</span> <span class="liveindex-gain"></span></div>
+        <div class="liveindex-info">
+          <div class="liveindex-symbol">SOX</div>
+          <div class="liveindex-gain"></div>
+        </div>
         <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
       </div>
       <div class="tile liveindex" id="liveIndexGOOG">
-        <div class="k"><span class="liveindex-symbol">GOOG</span> <span class="liveindex-gain"></span></div>
+        <div class="liveindex-info">
+          <div class="liveindex-symbol">GOOG</div>
+          <div class="liveindex-gain"></div>
+        </div>
         <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
       </div>
       <div class="tip" id="liveTip"></div>
     </div>
 
+    <div class="maincol">
     <div class="card chartwrap">
       <div class="chartbar">
         <div class="chartbar-left" id="asOfWrap">
@@ -266,6 +290,8 @@
         </tr></thead>
         <tbody></tbody>
       </table>
+    </div>
+    </div>
     </div>
   </div>
 </div>

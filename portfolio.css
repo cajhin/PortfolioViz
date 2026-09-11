@@ -100,7 +100,16 @@
     font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .wrap { width: 100%; max-width: 1560px; margin: 0 auto; }   /* 1040 → +50%, capped by the viewport */
+  .wrap { width: 100%; max-width: 1820px; margin: 0 auto; }   /* 1040 → +50%, +260 for .pagegrid's
+    own left column (see .pagegrid) — grown to fit it rather than narrowing .maincol to make room */
+  /* the 2x2 grid: liveframe (fixed width) + .maincol (flexible) share their column widths across
+     both rows — see the HTML comment above #liveFrame for why the top-left cell is left empty.
+     gap matches .card's own margin-bottom (the spacing between cards stacked inside .maincol) —
+     its direct children (#totalsCard, .liveframe) zero that margin so the two don't add together
+     into a doubled gap between row 1 and row 2. */
+  .pagegrid { display: grid; grid-template-columns: 240px 1fr; gap: 20px; align-items: start; }
+  .pagegrid > .card { margin-bottom: 0; }
+  .maincol { min-width: 0; }
   .verttitle {
     position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
     writing-mode: vertical-rl; font-size: 3.45rem; font-weight: 600; letter-spacing: 0.1em;
@@ -120,21 +129,22 @@
   .curtile { cursor: help; }
   .curtile .k { text-decoration: underline dotted; text-underline-offset: 3px; }
 
-  /* its own strip between the header and the map/pie card — same flex-row-of-tiles shape as
-     .totals, and position:relative for the same reason #totalsCard has it: #liveTip inside is
-     placed relative to this card, not the page */
-  .liveframe { display: flex; flex-wrap: wrap; gap: 28px; position: relative; }
-  .liveindex { cursor: help; min-width: 90px; }
-  .liveindex .k { font-size: 1rem; font-weight: 600; color: var(--text-primary);
-                  text-transform: none; letter-spacing: normal; }
-  .liveindex-gain { font-size: 0.78rem; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .liveindex-chart { display: block; width: 100%; height: 28px; margin-top: 4px; }
+  /* width comes from .pagegrid's own first column, not from here — a column of stacked
+     name/gain/chart tiles has no reason to grow with the viewport the way the card stack does.
+     position:relative for the same reason #totalsCard has it: #liveTip inside is placed relative
+     to this card, not the page. */
+  .liveframe { display: flex; flex-direction: column; gap: 14px; position: relative; }
+  .liveindex { cursor: help; display: flex; align-items: center; gap: 10px; }
+  .liveindex-info { flex: 0 0 auto; }
+  .liveindex-symbol { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+  .liveindex-gain { display: block; font-size: 0.78rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .liveindex-chart { display: block; flex: 1 1 auto; min-width: 0; height: 28px; }
   .liveindex-chart .zero { stroke: var(--border); stroke-width: 1; }
   .liveindex-chart .line { fill: none; stroke-width: 1.4; }
   .liveindex-chart .line.pos { stroke: var(--series-2); }
   .liveindex-chart .line.neg { stroke: var(--loss); }
-  /* the symbol only, not the whole .k (which also holds the gain badge and its own pos/neg
-     colour) — stale means "this market's own last tick is 5+ minutes old," not "no gain to show" */
+  /* the name only, not the gain badge below it — stale means "this market's own last tick is 5+
+     minutes old," not "no gain to show" */
   .liveindex.stale .liveindex-symbol { color: var(--text-muted); }
 
   /* the odd one out in .totals: a note about the data, not a figure, so it sits on the tiles'

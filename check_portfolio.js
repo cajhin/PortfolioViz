@@ -127,9 +127,13 @@ const sandbox = {
   },
   fetch: async p => {
     const f = path.join(ROOT, p);
+    // .json() alongside .text(): every real fetch here is a CSV read, but the live-index widget
+    // (see renderLiveIndex) calls .json() on whatever it gets back — /live-index is never a real
+    // file, so this always takes the 404 branch and reports a clean "not found" the same way a
+    // real network failure would, rather than throwing on a missing method.
     return fs.existsSync(f)
-      ? { ok: true, status: 200, text: async () => fs.readFileSync(f, 'utf8') }
-      : { ok: false, status: 404, text: async () => '' };
+      ? { ok: true, status: 200, text: async () => fs.readFileSync(f, 'utf8'), json: async () => JSON.parse(fs.readFileSync(f, 'utf8')) }
+      : { ok: false, status: 404, text: async () => '', json: async () => ({ error: 'not found' }) };
   },
 };
 sandbox.globalThis = sandbox;
