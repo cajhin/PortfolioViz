@@ -133,7 +133,14 @@
      name/gain/chart tiles has no reason to grow with the viewport the way the card stack does.
      position:relative for the same reason #totalsCard has it: #liveTip inside is placed relative
      to this card, not the page. */
-  .liveframe { display: flex; flex-direction: column; gap: 14px; position: relative; }
+  .liveframe { display: flex; flex-direction: column; gap: 10px; position: relative; }
+  .liveframe-head { display: flex; align-items: center; justify-content: space-between; }
+  .liveframe-title { font-size: 0.78rem; font-weight: 500; text-transform: uppercase;
+                      letter-spacing: 0.05em; color: var(--text-muted); }
+  .liveframe-edit { appearance: none; border: 0; background: transparent; cursor: pointer;
+                     color: var(--text-muted); font-size: 0.9rem; line-height: 1; padding: 2px 4px; }
+  .liveframe-edit:hover { color: var(--text-primary); }
+  .liveframe-list { display: flex; flex-direction: column; gap: 14px; }
   .liveindex { cursor: help; display: flex; align-items: center; gap: 10px; }
   .liveindex-info { flex: 0 0 auto; }
   .liveindex-symbol { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
@@ -382,16 +389,21 @@
   .dtvola-e { stroke-dasharray: 1 2; }   /* fine dots — a smooth line, unlike the window's cliffs */
   .dtvolaaxis { font-size: 8px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
-  .colorpicker {
+  /* #colorPicker and #liveEditDialog share this shell — same header-with-close-button dialog
+     shape, just a different body below it */
+  .colorpicker, .liveedit {
     border: 1px solid var(--border); border-radius: 14px; padding: 0;
     background: var(--surface-1); color: var(--text-primary); width: min(360px, calc(100vw - 32px));
   }
-  .colorpicker::backdrop { background: rgba(0, 0, 0, .45); }
-  .colorpicker header { display: flex; align-items: flex-start; justify-content: space-between;
+  .liveedit { width: min(400px, calc(100vw - 32px)); }
+  .colorpicker::backdrop, .liveedit::backdrop { background: rgba(0, 0, 0, .45); }
+  .colorpicker header, .liveedit header { display: flex; align-items: flex-start; justify-content: space-between;
                         gap: 16px; padding: 16px 18px 6px; }
-  .colorpicker .cp-title { font-weight: 600; font-size: 1.05rem; }
-  .colorpicker button#cpClose { appearance: none; border: 0; background: transparent; cursor: pointer;
-                                color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px; }
+  .colorpicker .cp-title, .liveedit .cp-title { font-weight: 600; font-size: 1.05rem; }
+  .colorpicker button#cpClose, .liveedit button#liveEditClose {
+    appearance: none; border: 0; background: transparent; cursor: pointer;
+    color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px;
+  }
   .colorpicker .cp-sub { color: var(--text-secondary); font-size: 0.78rem; padding: 0 18px 12px; }
   .colorpicker .cp-sub code { font-size: 0.95em; }
   .cp-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; padding: 0 18px 18px; }
@@ -400,6 +412,33 @@
     aspect-ratio: 1; padding: 0;
   }
   .cp-cell:hover { transform: scale(1.12); }
+  .liveedit-rows { display: flex; flex-direction: column; padding: 4px 18px 8px; max-height: 320px; overflow-y: auto; }
+  .liveedit-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .liveedit-row:last-child { border-bottom: none; }
+  .liveedit-move { display: flex; flex-direction: column; flex: 0 0 auto; }
+  .liveedit-move button {
+    appearance: none; border: 0; background: transparent; cursor: pointer; color: var(--text-muted);
+    font-size: 0.6rem; line-height: 1; padding: 1px 4px;
+  }
+  .liveedit-move button:hover:not(:disabled) { color: var(--text-primary); }
+  .liveedit-move button:disabled { color: var(--border); cursor: default; }
+  .liveedit-label { flex: 1 1 auto; font-weight: 600; }
+  .liveedit-symbol { flex: 0 0 auto; color: var(--text-muted); font-size: 0.82rem; }
+  .liveedit-del {
+    appearance: none; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-0);
+    color: var(--loss); cursor: pointer; font-size: 0.9rem; line-height: 1; padding: 2px 9px; flex: 0 0 auto;
+  }
+  .liveedit-del:hover { background: var(--loss-light); }
+  .liveedit-add { display: flex; gap: 8px; padding: 12px 18px 18px; border-top: 1px solid var(--border); }
+  .liveedit-add input {
+    flex: 1 1 auto; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--surface-0); color: var(--text-primary);
+  }
+  .liveedit-addbtn {
+    appearance: none; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-0);
+    cursor: pointer; font-weight: 600; padding: 5px 14px; flex: 0 0 auto;
+  }
+  .liveedit-addbtn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
   .cp-cell.current { border: 2px solid var(--text-primary); }
   .dtgrid { stroke: var(--border); stroke-width: 0.6; }
   .dtqtick { stroke: var(--text-muted); stroke-width: 1; }   /* darker than .dtgrid — an actual

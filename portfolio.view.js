@@ -3318,6 +3318,41 @@ const LIVE_INDEX_REFRESH_MS = 5 * 60 * 1000;
 const fmtPoints = v => new Intl.NumberFormat('de-DE',
   { maximumFractionDigits: Math.abs(v) >= 1000 ? 0 : 1 }).format(v);
 
+/* ---------- trading hours ----------
+   Gates the *recurring* 5-minute refresh, not the one-off fetch on load — opening the page at 3am
+   still shows whatever Yahoo's range=1d last had (its own last completed session, same as it
+   would show live), but nothing then re-polls every 5 minutes overnight or across a weekend for a
+   market that's obviously shut. Regular hours only, no holiday calendar — this is "don't hit
+   Yahoo for no reason," not a trading calendar, and a stale holiday tick just sits there unpolled
+   until the next real session picks it back up. Matched by Yahoo's own symbol suffix (the exact
+   ticker every entry here already carries — see LIVE_TICKERS), first match wins.
+   An unrecognised symbol (added via the edit dialog for an exchange not listed here) gets no
+   restriction at all rather than a guessed window: wrongly silencing a market that's actually open
+   is a worse failure than the occasional extra poll this is meant to avoid in the first place. */
+const TRADING_HOURS = [
+  { test: s => /\.DE$/.test(s), tz: 'Europe/Berlin', open: 9 * 60, close: 17 * 60 + 30 },      // Xetra
+  { test: s => /\.(MU|F|SG|HM|DU|HA)$/.test(s), tz: 'Europe/Berlin', open: 8 * 60, close: 20 * 60 }, // gettex + regional German floors, wider hours than Xetra
+  { test: s => /\.SW$/.test(s), tz: 'Europe/Zurich', open: 9 * 60, close: 17 * 60 + 30 },       // SIX
+  { test: s => /\.L$/.test(s), tz: 'Europe/London', open: 8 * 60, close: 16 * 60 + 30 },        // LSE
+  { test: s => /^\^(GDAXI|STOXX50E)$/.test(s), tz: 'Europe/Berlin', open: 9 * 60, close: 17 * 60 + 30 },
+  { test: s => /^\^(IXIC|NDX|NDXT|SOX|GSPC|DJI|RUT)$/.test(s), tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 },
+  // a bare symbol with no suffix and no ^ — every US stock/ETF ticker (GOOG, AAPL, ...) looks
+  // like this, and every non-US one carries an exchange suffix instead, so this is the US catch-all
+  { test: s => !s.includes('.') && !s.startsWith('^'), tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 },
+];
+function isWithinTradingHours(symbol) {
+  const spec = TRADING_HOURS.find(e => e.test(symbol));
+  if (!spec) return true;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: spec.tz, hour: '2-digit', minute: '2-digit', hour12: false, weekday: 'short',
+  }).formatToParts(new Date());
+  const get = t => parts.find(p => p.type === t).value;
+  const weekday = get('weekday');
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+  const minutes = Number(get('hour')) * 60 + Number(get('minute'));
+  return minutes >= spec.open && minutes < spec.close;
+}
+
 // Shared across every renderLiveIndex tile, not per-tile state: the x-axis is real epoch time
 // (Yahoo's own timestamp unit, already comparable across timezones with no conversion), spanning
 // the union of every tile's own session seen so far, rather than each tile stretching its own
@@ -3345,6 +3380,7 @@ function renderLiveIndex(elId, symbol, name) {
   const isIndex = symbol.startsWith('^');
   let latest = null;                      // stashed for the hover tip, below
   let pcts = [], times = [], base = null, last = null; // stashed for draw(), below
+  let prevToTime = null;                  // the last refresh's own latest tick — see updateStaleness
 
   async function refresh() {
     let data;
@@ -3399,6 +3435,7 @@ function renderLiveIndex(elId, symbol, name) {
     // this tile's own slice of the shared window grew — every other tile's slice shifted too
     if (grew) liveRedraws.forEach(fn => fn()); else draw();
     updateStaleness();
+    prevToTime = latest.toTime;
   }
 
   function draw() {
@@ -3419,14 +3456,18 @@ function renderLiveIndex(elId, symbol, name) {
   liveRedraws.push(draw);
 
   // Out of sync — the market this tracks has likely closed (or the fetch has been failing) —
-  // once the newest tick on hand is more than 5 minutes behind the clock. Checked on its own
-  // timer, not only right after a fetch: refresh() only runs every 5 minutes itself, so waiting
-  // for the next one would leave a closed market looking live for up to 5 minutes longer than it
-  // takes to actually notice.
-  const STALE_AFTER_S = 5 * 60;
+  // means this refresh's own latest tick is the same one the last refresh already had, not "the
+  // tick is more than N minutes old." Wall-clock age alone doesn't say that: a source with a
+  // permanent, genuine delay (Yahoo's free feed is ~15-20 minutes behind on some EU exchanges,
+  // even mid-session) would look just as "old" as a market that's actually closed, no matter what
+  // threshold got picked. Whether *this* refresh brought anything new is the same question either
+  // way — a delayed-but-live feed keeps advancing every 5 minutes same as a fast one, just with a
+  // constant lag; a closed one stops advancing at all — so it needs no threshold, no per-market
+  // calibration, and no timer of its own beyond refresh()'s own 5-minute one: prevToTime (set at
+  // the end of refresh(), below) is compared against next time, once, right here.
   function updateStaleness() {
     if (!latest) return;
-    el.classList.toggle('stale', Date.now() / 1000 - latest.toTime > STALE_AFTER_S);
+    el.classList.toggle('stale', prevToTime != null && latest.toTime === prevToTime);
   }
 
   // epoch seconds (Yahoo's own timestamp unit) to the viewer's own local HH:MM — deliberately not
@@ -3453,16 +3494,142 @@ function renderLiveIndex(elId, symbol, name) {
   el.addEventListener('pointermove', e => placeTip(tip, wrapEl, e));
   el.addEventListener('pointerleave', () => tip.classList.remove('on'));
 
-  refresh();
-  setInterval(refresh, LIVE_INDEX_REFRESH_MS);
-  setInterval(updateStaleness, 30 * 1000);
+  refresh();   // always once on load, even outside trading hours — see isWithinTradingHours
+  // staleness now only ever changes inside refresh() itself (see updateStaleness above), so
+  // there's no separate fast timer to poll it with any more — one interval, not two
+  const iv1 = setInterval(() => { if (isWithinTradingHours(symbol)) refresh(); }, LIVE_INDEX_REFRESH_MS);
+  // handed back so rebuildLiveTickers() can tear a removed (or about-to-be-rebuilt) tile all the
+  // way down — both its own timer and its slot in the shared liveRedraws array — rather than
+  // leaving it fetching forever in the background for a tile no longer on the page
+  return {
+    destroy() {
+      clearInterval(iv1);
+      const i = liveRedraws.indexOf(draw);
+      if (i >= 0) liveRedraws.splice(i, 1);
+    },
+  };
 }
+
+/* ---------- editable ticker list ----------
+   Which symbols renderLiveIndex above ever runs for. localStorage only, like LABEL_OVERRIDES and
+   SECTOR_COLOR_OVERRIDE — there's no server route to persist this anywhere else, and a per-viewer
+   watchlist of markets to eyeball is exactly the kind of thing that doesn't need one. */
+const LIVE_TICKERS_KEY = 'portfolioviz.liveTickers';
 // EUNL.DE, not a made-up index ticker — the exact same MSCI World ETF this portfolio already
 // tracks (registry/price_sources.csv), so "World" here reads live and intraday the way the
 // others do, rather than picking a different, unrelated instrument for the same name.
-renderLiveIndex('liveIndexMSCI', 'EUNL.DE', 'World');
-renderLiveIndex('liveIndexIXIC', '^IXIC', 'Nasdaq Composite');
-renderLiveIndex('liveIndexNDX', '^NDX', 'Nasdaq-100');
-renderLiveIndex('liveIndexNDXT', '^NDXT', 'Nasdaq-100 Technology Sector');
-renderLiveIndex('liveIndexSOX', '^SOX', 'PHLX Semiconductor');
-renderLiveIndex('liveIndexGOOG', 'GOOG', 'Alphabet (Google) Class C');
+const DEFAULT_LIVE_TICKERS = [
+  { label: 'World', symbol: 'EUNL.DE' },
+  { label: 'IXIC', symbol: '^IXIC' },
+  { label: 'NDX', symbol: '^NDX' },
+  { label: 'NDXT', symbol: '^NDXT' },
+  { label: 'SOX', symbol: '^SOX' },
+  { label: 'GOOG', symbol: 'GOOG' },
+];
+let LIVE_TICKERS = DEFAULT_LIVE_TICKERS.map(t => ({ ...t }));
+function loadLiveTickers() {
+  try {
+    const saved = localStorage.getItem(LIVE_TICKERS_KEY);
+    if (saved != null) LIVE_TICKERS = JSON.parse(saved);
+  } catch { /* malformed, or storage inaccessible — the six defaults stand in for it */ }
+}
+function saveLiveTickers() {
+  try { localStorage.setItem(LIVE_TICKERS_KEY, JSON.stringify(LIVE_TICKERS)); }
+  catch { /* private browsing, storage disabled — the list just won't survive a reload */ }
+}
+
+// Every tile is torn down and rebuilt from scratch on any change (add, remove — there's no
+// in-place update) rather than patched: LIVE_TICKERS is short and this runs rarely (a manual edit,
+// not a redraw loop), so the simplicity of "destroy everything, recreate everything" outweighs the
+// cost of a full rebuild.
+let LIVE_TILES = [];
+function rebuildLiveTickers() {
+  LIVE_TILES.forEach(t => t.destroy());
+  LIVE_TILES = [];
+  const list = document.getElementById('liveList');
+  list.replaceChildren();
+  LIVE_TICKERS.forEach((t, i) => {
+    const id = `liveTicker${i}`;
+    const tile = document.createElement('div');
+    tile.className = 'tile liveindex';
+    tile.id = id;
+    tile.innerHTML =
+      `<div class="liveindex-info">` +
+        `<div class="liveindex-symbol">${t.label}</div>` +
+        `<div class="liveindex-gain"></div>` +
+      `</div>` +
+      `<svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>`;
+    list.appendChild(tile);
+    LIVE_TILES.push(renderLiveIndex(id, t.symbol, t.label));
+  });
+}
+
+// The edit dialog itself: a plain list with move/delete buttons per row (see the HTML comment
+// above #liveEditDialog) and an add form at the bottom. Re-filled on every open and every
+// add/remove/move rather than kept in sync incrementally — the list is short enough that a full
+// re-render is simpler and just as cheap as tracking which row changed. LIVE_TICKERS' own order is
+// what rebuildLiveTickers() reads to lay out #liveList, so reordering here is reordering the strip.
+function renderLiveEditRows() {
+  const rows = document.getElementById('liveEditRows');
+  const move = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= LIVE_TICKERS.length) return;
+    [LIVE_TICKERS[i], LIVE_TICKERS[j]] = [LIVE_TICKERS[j], LIVE_TICKERS[i]];
+    saveLiveTickers();
+    rebuildLiveTickers();
+    renderLiveEditRows();
+  };
+  rows.replaceChildren(...LIVE_TICKERS.map((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'liveedit-row';
+    row.innerHTML =
+      // same ▲▼ glyphs the sortable table headers already use for their own caret, not a new
+      // convention — disabled (not hidden) at either end so the row heights never shift as one
+      // reaches the top or bottom
+      `<span class="liveedit-move">` +
+        `<button type="button" class="liveedit-up" title="Move up" aria-label="Move ${t.label} up" ${i === 0 ? 'disabled' : ''}>▲</button>` +
+        `<button type="button" class="liveedit-down" title="Move down" aria-label="Move ${t.label} down" ${i === LIVE_TICKERS.length - 1 ? 'disabled' : ''}>▼</button>` +
+      `</span>` +
+      `<span class="liveedit-label">${t.label}</span>` +
+      `<span class="liveedit-symbol">Y-${t.symbol}</span>` +
+      `<button type="button" class="liveedit-del" title="Remove ${t.label}" aria-label="Remove ${t.label}">−</button>`;
+    row.querySelector('.liveedit-up').addEventListener('click', () => move(i, -1));
+    row.querySelector('.liveedit-down').addEventListener('click', () => move(i, 1));
+    row.querySelector('.liveedit-del').addEventListener('click', () => {
+      LIVE_TICKERS.splice(i, 1);
+      saveLiveTickers();
+      rebuildLiveTickers();
+      renderLiveEditRows();
+    });
+    return row;
+  }));
+}
+document.getElementById('liveEditOpen').addEventListener('click', () => {
+  renderLiveEditRows();
+  document.getElementById('liveEditDialog').showModal();
+});
+document.getElementById('liveEditClose').addEventListener('click', () => document.getElementById('liveEditDialog').close());
+document.getElementById('liveEditDialog').addEventListener('click', e => {
+  if (e.target.id === 'liveEditDialog') e.target.close();     // click the backdrop
+});
+function addLiveTicker() {
+  const labelEl = document.getElementById('liveAddLabel');
+  const symbolEl = document.getElementById('liveAddSymbol');
+  const label = labelEl.value.trim();
+  const symbol = symbolEl.value.trim();
+  if (!label || !symbol) return;
+  LIVE_TICKERS.push({ label, symbol });
+  saveLiveTickers();
+  rebuildLiveTickers();
+  renderLiveEditRows();
+  labelEl.value = '';
+  symbolEl.value = '';
+  labelEl.focus();
+}
+document.getElementById('liveAddBtn').addEventListener('click', addLiveTicker);
+['liveAddLabel', 'liveAddSymbol'].forEach(id => document.getElementById(id).addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); addLiveTicker(); }
+}));
+
+loadLiveTickers();
+rebuildLiveTickers();

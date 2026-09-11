@@ -51,50 +51,32 @@
     </div>
 
     <div class="card liveframe" id="liveFrame">
-      <div class="tile liveindex" id="liveIndexMSCI">
-        <div class="liveindex-info">
-          <div class="liveindex-symbol">World</div>
-          <div class="liveindex-gain"></div>
-        </div>
-        <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
+      <div class="liveframe-head">
+        <span class="liveframe-title">Live</span>
+        <!-- opens #liveEditDialog below — see renderLiveEditRows/rebuildLiveTickers -->
+        <button type="button" id="liveEditOpen" class="liveframe-edit" title="Edit live tickers" aria-label="Edit live tickers">✎</button>
       </div>
-      <div class="tile liveindex" id="liveIndexIXIC">
-        <div class="liveindex-info">
-          <div class="liveindex-symbol">IXIC</div>
-          <div class="liveindex-gain"></div>
-        </div>
-        <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
-      </div>
-      <div class="tile liveindex" id="liveIndexNDX">
-        <div class="liveindex-info">
-          <div class="liveindex-symbol">NDX</div>
-          <div class="liveindex-gain"></div>
-        </div>
-        <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
-      </div>
-      <div class="tile liveindex" id="liveIndexNDXT">
-        <div class="liveindex-info">
-          <div class="liveindex-symbol">NDXT</div>
-          <div class="liveindex-gain"></div>
-        </div>
-        <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
-      </div>
-      <div class="tile liveindex" id="liveIndexSOX">
-        <div class="liveindex-info">
-          <div class="liveindex-symbol">SOX</div>
-          <div class="liveindex-gain"></div>
-        </div>
-        <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
-      </div>
-      <div class="tile liveindex" id="liveIndexGOOG">
-        <div class="liveindex-info">
-          <div class="liveindex-symbol">GOOG</div>
-          <div class="liveindex-gain"></div>
-        </div>
-        <svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>
-      </div>
+      <!-- filled by rebuildLiveTickers() from LIVE_TICKERS (localStorage, defaulting to the same
+           six this strip always showed) — nothing static here any more, so a ticker added or
+           removed in the edit dialog needs no markup of its own -->
+      <div class="liveframe-list" id="liveList"></div>
       <div class="tip" id="liveTip"></div>
     </div>
+
+    <!-- same reasoning as #colorPicker: a direct child of #app so it can showModal() from
+         #liveEditOpen above, which sits inside a plain flow position rather than a hidden view. -->
+    <dialog id="liveEditDialog" class="liveedit">
+      <header>
+        <div class="cp-title">Live tickers</div>
+        <button type="button" id="liveEditClose" aria-label="Close">✕</button>
+      </header>
+      <div class="liveedit-rows" id="liveEditRows"></div>
+      <div class="liveedit-add">
+        <input type="text" id="liveAddLabel" placeholder="Label" maxlength="12">
+        <input type="text" id="liveAddSymbol" placeholder="Yahoo symbol, e.g. ^NDX" maxlength="20">
+        <button type="button" id="liveAddBtn" class="liveedit-addbtn" title="Add ticker">+</button>
+      </div>
+    </dialog>
 
     <div class="maincol">
     <div class="card chartwrap">
