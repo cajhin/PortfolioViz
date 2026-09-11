@@ -249,7 +249,7 @@
   /* text columns left, numeric columns right — same rule as td.posname's dotcell flex already
      gives its own column, just spelled out for th too, and per table since each one's count of
      leading text columns differs (Trades has a Type column after Position, Watch a Sector one) */
-  #tbl th:nth-child(-n+3), #tbl td:nth-child(-n+3),
+  #tbl th:nth-child(-n+4), #tbl td:nth-child(-n+4),
   #tblClosedPositions th:nth-child(-n+3), #tblClosedPositions td:nth-child(-n+3),
   #tblTrades th:nth-child(-n+4), #tblTrades td:nth-child(-n+4),
   #tblWatch th:nth-child(-n+3), #tblWatch td:nth-child(-n+3) { text-align: left; }
@@ -270,11 +270,11 @@
     content: '▲'; display: inline-block; width: 0.8em; margin-left: 4px;
     font-size: 0.85em; opacity: 0;
   }
-  #tbl th:nth-child(n+4).sortable::after,
+  #tbl th:nth-child(n+5).sortable::after,
   #tblClosedPositions th:nth-child(n+4).sortable::after,
   #tblTrades th:nth-child(n+5).sortable::after,
   #tblWatch th:nth-child(n+4).sortable::after { display: none; }
-  #tbl th:nth-child(n+4).sortable::before,
+  #tbl th:nth-child(n+5).sortable::before,
   #tblClosedPositions th:nth-child(n+4).sortable::before,
   #tblTrades th:nth-child(n+5).sortable::before,
   #tblWatch th:nth-child(n+4).sortable::before {
@@ -291,9 +291,19 @@
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; flex: none; }
   .tablescroll { overflow-x: auto; }
   td.src { color: var(--text-muted); font-size: 0.78rem; white-space: nowrap; }
+  td.src a { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+  td.src a:hover { color: var(--text-primary); text-decoration-style: solid; }
+  td.isin { color: var(--text-muted); font-size: 0.78rem; white-space: nowrap; }
   td.dotcell { display: flex; align-items: center; }
   td.posname { cursor: pointer; }
   td.posname:hover { text-decoration: underline; }
+  /* the same dotted-underline hint .curtile's own editable-looking label already uses — signals
+     "there's more here" before the title tooltip ever gets a chance to show */
+  .poslabel { text-decoration: underline dotted; text-underline-offset: 3px; }
+  .poslabel-input {
+    font: inherit; color: inherit; background: var(--surface-0); border: 1px solid var(--series-1);
+    border-radius: 4px; padding: 1px 4px; flex: 1 1 auto; min-width: 8em;
+  }
 
   .tip {
     position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;

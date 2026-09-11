@@ -126,14 +126,16 @@ const sandbox = {
     body: new El('body'),
   },
   fetch: async p => {
+    // the live-index widget (see renderLiveIndex) has nothing to fetch here — there's no server
+    // behind this harness to proxy Yahoo through, unlike start.sh's own /live-index route — so it
+    // gets an empty-but-valid payload rather than a 404. refresh() treats "no ticks yet" as a
+    // silent no-op (its own openIdx/lastIdx check), so this produces no console noise at all,
+    // instead of a caught error that only ever says the same harmless thing on every run.
+    if (p.startsWith('/live-index')) return { ok: true, status: 200, json: async () => ({ times: [], closes: [] }) };
     const f = path.join(ROOT, p);
-    // .json() alongside .text(): every real fetch here is a CSV read, but the live-index widget
-    // (see renderLiveIndex) calls .json() on whatever it gets back — /live-index is never a real
-    // file, so this always takes the 404 branch and reports a clean "not found" the same way a
-    // real network failure would, rather than throwing on a missing method.
     return fs.existsSync(f)
-      ? { ok: true, status: 200, text: async () => fs.readFileSync(f, 'utf8'), json: async () => JSON.parse(fs.readFileSync(f, 'utf8')) }
-      : { ok: false, status: 404, text: async () => '', json: async () => ({ error: 'not found' }) };
+      ? { ok: true, status: 200, text: async () => fs.readFileSync(f, 'utf8') }
+      : { ok: false, status: 404, text: async () => '' };
   },
 };
 sandbox.globalThis = sandbox;

@@ -542,6 +542,32 @@ function saveSectorColors() {
   } catch { /* private browsing, storage disabled — the pick just won't survive a reload */ }
 }
 
+// Renamed labels (see startRenaming, on the Positions table). Keyed by identifier (the ISIN),
+// same reason every other by-instrument lookup here is — a display name only means anything tied
+// to which instrument it's for. localStorage only: registry/instruments.csv's own "display"
+// column is the curated, committed source of truth for a name (see CLAUDE.md), and nothing in the
+// browser can write back to it — this is a per-viewer relabelling, not an edit to that file.
+const LABEL_OVERRIDES_KEY = 'portfolioviz.labelOverrides';
+let LABEL_OVERRIDES = new Map();
+function loadLabelOverrides() {
+  try {
+    const saved = localStorage.getItem(LABEL_OVERRIDES_KEY);
+    if (saved != null) LABEL_OVERRIDES = new Map(Object.entries(JSON.parse(saved)));
+  } catch { /* malformed, or storage inaccessible — no overrides, same as never having renamed */ }
+}
+function saveLabelOverrides() {
+  try {
+    localStorage.setItem(LABEL_OVERRIDES_KEY, JSON.stringify(Object.fromEntries(LABEL_OVERRIDES)));
+  } catch { /* private browsing, storage disabled — the rename just won't survive a reload */ }
+}
+// Applied to ITEMS and CLOSED right after ingest() rebuilds them (see load()) — both draw from the
+// same registry-driven displayName(), so a rename made once here is what every reader of `d.label`
+// downstream sees (the map, the pie, this table, the detail dialog), not just the row it was typed
+// into.
+function applyLabelOverrides(items) {
+  items.forEach(d => { const over = LABEL_OVERRIDES.get(d.identifier); if (over) d.label = over; });
+}
+
 /* ---------- sector colour picker ----------
    The legend's sector swatches (above) are the one place a sector's colour can be changed. Every
    cell is the sector's own hue/saturation grid: hue down the rows (8 steps around the full
@@ -588,11 +614,18 @@ function pickSectorColor(sector, hue, sat) {
 // instrument differ only by it (XNAS.DE vs IE00BMFKG444.SG), and that is exactly what this column
 // exists to disambiguate. Anything with no quotable source gets a dash.
 const SOURCE_LETTER = { yahoo: 'Y', manual: 'M' };
+// Yahoo's own quote page for the exact symbol update_prices.py and the live-index widget already
+// fetch by — the one source here with a page of its own to send anyone to; a manually-kept price
+// has no such page, so its tag stays plain text.
+const yahooQuoteUrl = symbol => `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`;
 function sourceTag(d) {
   const s = SOURCES.get(d.identifier);
   if (!s) return '–';
   const letter = SOURCE_LETTER[s.source] || (s.source || '?').slice(0, 1).toUpperCase();
-  return s.symbol ? `${letter}-${s.symbol}` : letter;
+  const tag = s.symbol ? `${letter}-${s.symbol}` : letter;
+  return s.source === 'yahoo' && s.symbol
+    ? `<a href="${yahooQuoteUrl(s.symbol)}" target="_blank" rel="noopener noreferrer" title="Open ${s.symbol} on Yahoo Finance">${tag}</a>`
+    : tag;
 }
 /* ---------- sortable tables ----------
    Click a header to sort, click again to reverse. One implementation for all four tables, working
@@ -723,21 +756,36 @@ function renderMeta(items, closed = []) {
     tr.innerHTML =
       `<td>${d.portfolio}</td>` +
       `<td class="src">${sourceTag(d)}</td>` +
-      `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
+      `<td class="isin">${d.identifier}</td>` +
+      `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>` +
+      `<span class="poslabel" title="Double-click to rename">${d.label}</span></td>` +
       `<td>${d.shares.toLocaleString('de-DE')}</td>` +
       `<td>${fmtMoney2(d.pur)}</td><td>${fmtMoney2(startValue)}</td><td>${fmtMoney2(d.cur)}</td>` +
       `<td class="${cls}">${flat ? '–' : fmtMoney2(rangeGain)}</td>` +
       `<td class="${cls}">${flat ? '–' : fmtPct(startValue > 0 ? rangeGain / startValue * 100 : 0)}</td>` +
       `<td class="${d.relPre > 0 ? 'realized' : d.relPre < 0 ? 'neg' : ''}">` +
       `${Math.abs(d.relPre) > 0.005 ? fmtMoney2(d.relPre) : '–'}</td>`;
-    // scoped to its own name cell, not the whole row, so the surrounding figures stay plain text
-    tr.querySelector('.posname').addEventListener('click', () => openDetail(d));
+    // a single click opens the detail dialog, same as ever; a double-click on the label itself
+    // renames instead — the pending single-click's openDetail is cancelled if a second click
+    // (i.e. the start of a dblclick) arrives before its own short delay fires, so a real
+    // double-click never also flashes the dialog open first.
+    const posCell = tr.querySelector('.posname');
+    let clickTimer = null;
+    posCell.addEventListener('click', () => {
+      if (clickTimer) clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => { clickTimer = null; openDetail(d); }, 300);
+    });
+    posCell.querySelector('.poslabel').addEventListener('dblclick', e => {
+      e.stopPropagation();
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+      startRenaming(posCell, d);
+    });
     trs.push(tr);
   });
   const s = totals(items);
   const sGain = s.cur - sumStart;
   const tr = document.createElement('tr'); tr.className = 'sub';
-  tr.innerHTML = `<td colspan="4">Total</td>` +
+  tr.innerHTML = `<td colspan="5">Total</td>` +
     `<td>${fmtMoney2(s.pur)}</td><td>${fmtMoney2(sumStart)}</td><td>${fmtMoney2(s.cur)}</td>` +
     `<td class="${sGain >= 0 ? 'pos' : 'neg'}">${fmtMoney2(sGain)}</td>` +
     `<td class="${sGain >= 0 ? 'pos' : 'neg'}">${sumStart > 0 ? fmtPct(sGain / sumStart * 100) : '–'}</td>` +
@@ -751,6 +799,45 @@ function renderMeta(items, closed = []) {
 
   document.getElementById('loader').hidden = true;
   document.getElementById('app').hidden = false;
+}
+
+// Swaps the dbl-clicked .poslabel span (see renderMeta) for a text input pre-filled with the
+// current label. Enter or a blur commits; Escape cancels. Committing stores the override and
+// redraws everything — the same shape pickSectorColor already uses for its own localStorage-only
+// edit — rather than patching just this one cell, since the same identifier can show up in the
+// map, the pie and the detail dialog too.
+function startRenaming(cell, d) {
+  const span = cell.querySelector('.poslabel');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'poslabel-input';
+  input.value = d.label;
+  cell.replaceChild(input, span);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = commit => {
+    if (done) return;
+    done = true;
+    const val = input.value.trim();
+    if (commit && val && val !== d.label) {
+      LABEL_OVERRIDES.set(d.identifier, val);
+      saveLabelOverrides();
+      applyLabelOverrides(ITEMS);
+      applyLabelOverrides(CLOSED);
+      redrawEverything();
+    } else {
+      renderMeta(ITEMS, CLOSED);
+    }
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  // without these the row's own click/dblclick listeners would fire again while typing
+  input.addEventListener('click', e => e.stopPropagation());
+  input.addEventListener('dblclick', e => e.stopPropagation());
 }
 
 // A flat list — deliberately not grouped by portfolio like the open-positions table above, since
@@ -3127,10 +3214,16 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 // page actually shows rather than at the model's 'abs' default under an already-ticked box.
 MODE = document.getElementById('relMode').checked ? 'rel' : 'abs';
 restoreRangeState();
+loadLabelOverrides();
 
 // ingest() builds the model; this draws it. Split so the model can be exercised without a DOM.
 function load(...texts) {
   ingest(...texts);
+  // renamed labels are a view-only concern (see LABEL_OVERRIDES) — applied here, right after the
+  // model rebuilds ITEMS/CLOSED from the fresh CSVs, so every reader of d.label downstream sees
+  // them rather than whatever registry/instruments.csv itself says
+  applyLabelOverrides(ITEMS);
+  applyLabelOverrides(CLOSED);
   // headers are static markup, so this is wired once rather than after every render
   ['tbl', 'tblClosedPositions', 'tblTrades', 'tblWatch'].forEach(makeSortable);
   // config.json only ever changes one thing a browser has no other way to pick up early: the date
