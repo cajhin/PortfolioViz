@@ -2063,6 +2063,10 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // looked up per date rather than mapped straight off `rows` (kept: the hover crosshair reads
   // back into it) — null wherever `rows` has nothing that far back, i.e. before a basket existed
   const stockVals = dates.map(dt => { const r = at(rows, dt); return r ? stockPct(r) : null; });
+  // the stock's own row at each date, for the price shown alongside its name in the header and
+  // the hover line — same lookup stockVals already does, kept separate since callers there want
+  // the row (for priceTag, defined below) rather than the derived percentage
+  const stockRowsAt = dates.map(dt => at(rows, dt));
 
   secondaries.forEach(s => {
     // bought partway through the window — not simply "existed from some date," but this specific
@@ -2193,18 +2197,26 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   });
   const L = Math.max(34, 10 + Math.max(...axisTexts.map(t => t.length)) * 5.6);
 
-  // The label's own last quote, no decimals — in the portfolio currency (row.close, already
-  // converted on write), the same figure every other price on the page shows, not the native
-  // quote it actually trades in. Masked the same way every other price is when "Show €" is off.
-  // Skipped for a synthetic index line (the whole Portfolio, or one sector, treated as a single
+  // The label's own last quote — in the portfolio currency (row.close, already converted on
+  // write), the same figure every other price on the page shows, not the native quote it
+  // actually trades in. Masked the same way every other price is when "Show €" is off. Skipped
+  // for a synthetic index line (the whole Portfolio, or one sector, treated as a single
   // instrument): its "close" is a return index starting at 100, not a price in any currency, and
   // printing a currency symbol in front of it would read as one.
+  // Rounded to a whole number for anything €10 or over, same as everywhere else on the page — but
+  // a sub-€10 quote gets one decimal instead, so a cheap name still shows two digits ("€5.3")
+  // rather than one ("€5") that rounding would otherwise throw away.
   const priceTag = (row, identifier) => {
     if (!row || identifier === PORTFOLIO_ID || identifier === SECTOR_ID) return '';
     if (!SHOW_MONEY) return ' ' + masked();
-    return ` ${ccySymbol()}${Math.round(row.close)}`;
+    const dp = Math.abs(row.close) < 10 ? 1 : 0;
+    return ` ${ccySymbol()}${row.close.toFixed(dp)}`;
   };
   const lastDate = dates[dates.length - 1];
+  // per date, same formatting as the on-chart key label above — the header and the hover line
+  // both name the stock's price at whichever date is current, so they share this rather than
+  // each re-deriving it
+  const stockPriceTags = stockRowsAt.map(r => priceTag(r, d.identifier));
   // the right margin is whatever the end labels need, so they can never be clipped
   const lastStock = stockVals[stockVals.length - 1];
   const keys = [{ text: `${d.label} ${fmtPct(lastStock)}${priceTag(rows[rows.length - 1], d.identifier)}`,
@@ -2391,11 +2403,13 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
     const r = at(rows, day);                 // looked up by date, not rows[i] — see stockPts above
     if (i === null || !r) return null;
     const type = trades.every(t => t.type === trades[0].type) ? trades[0].type : 'mixed';
-    const node = el('circle', {
-      cx: x(i), cy: y(stockPct(r)), r: 4.2, class: 'dtmark ' + type,
-    });
+    const cx = x(i), cy = y(stockPct(r));
+    const node = el('circle', { cx, cy, r: 4.2, class: 'dtmark ' + type });
     svg.appendChild(node);
-    return { node, trades, day, close: r.close, aligned: anchor === dates[i] };
+    // cx/cy carried alongside the node so a click that misses the tiny circle can still snap to
+    // it by proximity (see renderDetail's click handler) — the node's own attributes would work
+    // too, but re-parsing them on every click is needless when this is computed right here anyway
+    return { node, trades, day, close: r.close, aligned: anchor === dates[i], cx, cy };
   }).filter(Boolean);
 
   // Place the end labels at their line, then push apart if they would collide, keeping both
@@ -2464,7 +2478,7 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // pointer position back into "which day is this" for the hover crosshair, and each secondary's
   // .node back into "which slot was clicked", without redoing this geometry
   return { svg, valueSvg, from: rows[0].date, anchor, stock: lastStock, secondaries, volas,
-           marks: markNodes, dates, stockVals, gapRuns, vals, clsLabel, invLabel,
+           marks: markNodes, dates, stockVals, stockPriceTags, gapRuns, vals, clsLabel, invLabel,
            // per date, not per row — same reason stockVals moved off a straight rows.map: false
            // (not "held flat") for any date before a basket's own rows start, which is correct,
            // that stretch isn't a bridged gap, it's genuinely before there was anything to hold
@@ -2496,26 +2510,35 @@ function renderDetail() {
       ` and run <code>python3 update_prices.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }
+  const title = document.getElementById('dtTitle');
   const sub = document.getElementById('dtSub');
   const vals = document.getElementById('dtVals');
+  title.textContent = d.label || d.name;
+  // the price named here is always the anchor's own — the day "0 %" refers to — never the latest
+  // quote or the hovered day, since this line is describing what the anchor point actually was
+  const anchorPrice = (() => {
+    const i = drawn.dates.indexOf(drawn.anchor);
+    return i >= 0 ? drawn.stockPriceTags[i] : '';
+  })();
   // built once so hovering can restore exactly this on pointerleave, instead of re-deriving it
   const subAt = (day, isFilled) =>
-    `${d.portfolio} · 0 % at ${drawn.anchor}` +
+    `${d.portfolio} ·${anchorPrice} 0 % at ${drawn.anchor}` +
     (day ? ` — ${day}` : '') +
     (isFilled ? ' (no data — held flat)' : '');
   // every line on the chart reports here at the crosshair, sigma included — unsigned, since it is
   // a spread and not a change, which is also what tells the two units apart in one line of text
   // stock can be non-finite now too — the crosshair sitting before a basket line's own first
   // date (see drawDetail's widened axis) — same "nothing to show" dash every other line here uses
-  const valsAt = (stock, secVals, volaVals) =>
-    `${d.label} ${Number.isFinite(stock) ? fmtPct(stock) : '–'}` +
+  const valsAt = (stock, secVals, volaVals, priceTag) =>
+    `${d.label}${priceTag} ${Number.isFinite(stock) ? fmtPct(stock) : '–'}` +
     drawn.secondaries.map((s, i) =>
       Number.isFinite(secVals[i]) ? ` · ${s.label} ${fmtPct(secVals[i])}` : '').join('') +
     drawn.volas.map((v, i) =>
       Number.isFinite(volaVals[i]) ? ` · ${v.label} ${volaVals[i].toFixed(1)}%` : '').join('');
   const defaultSub = subAt(null, false);
   const defaultVals = valsAt(drawn.stock, drawn.secondaries.map(s => s.last),
-                             drawn.volas.map(v => v.last));
+                             drawn.volas.map(v => v.last),
+                             drawn.stockPriceTags[drawn.stockPriceTags.length - 1]);
   sub.textContent = defaultSub;
   vals.textContent = defaultVals;
 
@@ -2601,6 +2624,10 @@ function renderDetail() {
     const rect = drawn.svg.getBoundingClientRect();
     return (e.clientX - rect.left) / rect.width * drawn.W;
   };
+  const vyOf = e => {
+    const rect = drawn.svg.getBoundingClientRect();
+    return (e.clientY - rect.top) / rect.height * drawn.H;
+  };
   drawn.svg.addEventListener('pointerdown', e => {
     const vx = vxOf(e);
     if (vx < L || vx > drawn.W - R) return;
@@ -2635,7 +2662,8 @@ function renderDetail() {
     crosshair.setAttribute('x1', x(i)); crosshair.setAttribute('x2', x(i));
     crosshair.classList.add('on');
     sub.textContent = subAt(dates[i], filled[i]);
-    vals.textContent = valsAt(stockVals[i], secondaries.map(s => s.vals[i]), volas.map(v => v.vals[i]));
+    vals.textContent = valsAt(stockVals[i], secondaries.map(s => s.vals[i]), volas.map(v => v.vals[i]),
+                              drawn.stockPriceTags[i]);
     valueAt(i);
   });
   drawn.svg.addEventListener('pointerup', e => {
@@ -2676,16 +2704,26 @@ function renderDetail() {
   // "the day already marked"; on a sparse window the neighbouring day is far enough away in
   // pixels, and on a dense one it is not separately clickable to begin with.
   const ANCHOR_HIT = 5;                  // viewBox units, ~0.6% of the plot
+  // A buy/sell dot is its own click target (see drawn.marks.forEach below) and already wins
+  // whenever the click lands exactly on it, thanks to stopPropagation there. This is the near
+  // miss: pinning to a purchase date shouldn't require hitting a ~4px circle dead-centre, so a
+  // click that lands close to one (but not close enough to trigger its own listener) still snaps
+  // to that dot's day instead of whatever trading day happens to sit under the pixel.
+  const MARK_HIT = 7;                    // viewBox units — a bit more forgiving than the dot itself
   drawn.svg.addEventListener('click', e => {
     if (dragMoved) { dragMoved = false; return; }   // that click was the tail end of a real drag
     const vx = vxOf(e);
     if (vx < L || vx > drawn.W - R) return;
+    const vy = vyOf(e);
+    const nearMark = drawn.marks.find(m => Math.hypot(m.cx - vx, m.cy - vy) <= MARK_HIT);
     const i = idxAt(vx);
+    const day = nearMark ? nearMark.day : dates[i];
     // only when an anchor is actually set: with none, drawn.anchor is just the first day in the
     // window, and treating a click there as "clear" would swallow it instead of anchoring
     const anchorI = DETAIL.alignDate ? dates.indexOf(drawn.anchor) : -1;
-    const onAnchor = anchorI >= 0 && (i === anchorI || Math.abs(vx - x(anchorI)) <= ANCHOR_HIT);
-    DETAIL.alignDate = onAnchor ? null : dates[i];
+    const onAnchor = DETAIL.alignDate != null && (day === DETAIL.alignDate ||
+      (anchorI >= 0 && (i === anchorI || Math.abs(vx - x(anchorI)) <= ANCHOR_HIT)));
+    DETAIL.alignDate = onAnchor ? null : day;
     renderDetail();
   });
 
