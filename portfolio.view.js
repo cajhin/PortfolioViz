@@ -1150,9 +1150,19 @@ function gradeColor(v) {
   const arm = v >= 0 ? st.up : st.down;
   return rgb(lerp(st.zero, arm.full, grade(v, v >= 0 ? GRADE_UP : GRADE_DOWN)));
 }
+// d.irr can come back NaN from a short as-of window (see asOfIrr/xirr): annualizing even a modest
+// multi-day move compounds it into a rate past xirr's own +10000%/-99.99% search bounds, so no
+// root brackets and it gives up. Falling back to the tile's own d.ret there — as this used to —
+// picked the one value guaranteed to paint the bar the same colour as the tile behind it (the base
+// fill is gradeColor(d.ret) too, see the maprect fill above), making the box invisible exactly for
+// the positions whose short-range move was extreme enough to break the solver in the first place.
+// GRADE_UP/-GRADE_DOWN instead, not ±Infinity: gradeColor's own !Number.isFinite guard (above)
+// treats Infinity the same as NaN — "no data", the neutral zero colour — so it has to be a real
+// number. Handing it the cap directly clamps grade() to exactly 1 either way, landing at the top
+// of the ramp, sign matching the move.
 const barColor = d => MODE === 'rel'
   ? gradeColor(d.ret)
-  : gradeColor(Number.isFinite(d.irr) ? d.irr : d.ret);
+  : gradeColor(Number.isFinite(d.irr) ? d.irr : (d.ret >= 0 ? GRADE_UP : -GRADE_DOWN));
 
 // the bar is the result measured against the tile it sits in — the current value.
 // +100% return → half the tile; −50% return → the loss equals the current value, so the whole tile.
