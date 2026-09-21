@@ -2179,9 +2179,14 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // of an already generous scale" — not a chart that quietly re-stretches every time one name has
   // a rough month.
   const VOLA_LO = 0, VOLA_HI = 200, VOLA_CLAMP = 210;   // CLAMP is deliberately off-scale — see above
+  // Straight to pixels, not through y(): y() is keyed to this window's own yLo/yHi (and, under
+  // LOG_SCALE, is nonlinear in them), so routing a fixed sigma value through it would make the
+  // sigma line's screen position drift with the window even though the value and its axis labels
+  // don't move. volaToChart instead lands directly on the same fixed fraction of the plot height
+  // every time, keeping the 0-200% scale actually fixed regardless of range or scale mode.
   const volaToChart = v =>
-    yLo + ((v > VOLA_HI ? VOLA_CLAMP : v) - VOLA_LO) / (VOLA_HI - VOLA_LO) * (yHi - yLo);
-  const yVola = v => y(volaToChart(v));
+    T + (H - T - B) * (1 - ((v > VOLA_HI ? VOLA_CLAMP : v) - VOLA_LO) / (VOLA_HI - VOLA_LO));
+  const yVola = v => volaToChart(v);
   // One decimal or none, decided once for the whole chart rather than per label: a bond fund
   // living between 2% and 11% would otherwise print "σ 11%" against "σ 2.0%" at the other end of
   // the same axis and read as two different scales. The decimal comes out for a low or a narrow
@@ -2231,7 +2236,10 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   // the leader lines land on the right place without knowing anything about the second unit
   volas.forEach(v => {
     if (Number.isFinite(v.last))
-      keys.push({ text: `${v.label} ${fmtVola(v.last)}`, v: volaToChart(v.last), colour: v.colour });
+      // py, not v: its position is already fixed pixels (see volaToChart above) — routing it
+      // through y() like the price keys below would reintroduce the same window-dependent drift
+      // on the label that volaToChart exists to keep the line itself free of.
+      keys.push({ text: `${v.label} ${fmtVola(v.last)}`, py: volaToChart(v.last), colour: v.colour });
   });
   const R = Math.min(210, 14 + Math.max(...keys.map(k => k.text.length)) * 5.6);
   const fits = Math.floor((R - 14) / 5.6);              // a very long name gets clipped, not the label
@@ -2423,7 +2431,8 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   const MIN_GAP = 9;
   const top0 = T + 8, bottom0 = H - B - 2;
   const gap = keys.length > 1 ? Math.min(MIN_GAP, (bottom0 - top0) / (keys.length - 1)) : MIN_GAP;
-  keys.forEach(k => { k.y = y(k.v); });
+  const keyY = k => k.py != null ? k.py : y(k.v);        // py: already pixels (sigma); v: needs y()
+  keys.forEach(k => { k.y = keyY(k); });
   keys.sort((a, b) => a.y - b.y);
   for (let i = 1; i < keys.length; i++)
     if (keys[i].y - keys[i - 1].y < gap) keys[i].y = keys[i - 1].y + gap;
@@ -2432,8 +2441,8 @@ function drawDetail(d, series, alignDate, range, custom, extras) {
   const top = top0 - keys[0].y;
   if (top > 0) keys.forEach(k => { k.y += top; });
   keys.forEach(k => {
-    if (Math.abs(k.y - y(k.v)) > 1.5)                    // moved: draw a leader to its line
-      svg.appendChild(el('line', { x1: W - R - 1, y1: y(k.v), x2: W - R + 4, y2: k.y - 3,
+    if (Math.abs(k.y - keyY(k)) > 1.5)                   // moved: draw a leader to its line
+      svg.appendChild(el('line', { x1: W - R - 1, y1: keyY(k), x2: W - R + 4, y2: k.y - 3,
                                    class: 'dtgrid' }));
     const t = el('text', { x: W - R + 6, y: k.y, class: 'dtkey', fill: k.colour });
     t.textContent = k.text;
@@ -3400,7 +3409,18 @@ function isWithinTradingHours(symbol) {
 // session hasn't started yet, or has already ended, simply draws inside a narrower slice of the
 // shared width instead of the full 0–100. Every tile redraws whenever any tile's fetch grows the
 // window, since a later-opening market widening the window shifts everyone else's own slice too.
-const liveWindow = { start: null, end: null };
+//
+// That union only holds within one trading day, though — `day` (a UTC-date string, coarse on
+// purpose: this only has to tell weekday from weekend, not pin an exact rollover instant) tracks
+// which one. Queried early on a US-hours ticker before the NYSE opens, Yahoo's range=1d hands back
+// Friday's whole last session — by design (see refresh()'s own comment) — while a German ticker
+// fetched at the same moment is already on Monday. Folding both into one min/max window used to
+// stretch the axis across the entire elapsed weekend: Friday's session compressed to a sliver on
+// the left, Monday's to a sliver on the right, blank in between. A tile that lands on an *older*
+// day than the one already established here is left out of the window (and draws nothing, below)
+// until its own next refresh rolls it onto the current day; a tile that lands on a *newer* one
+// starts the window over, since the old day is no longer "now" for anyone.
+const liveWindow = { start: null, end: null, day: null };
 const liveRedraws = [];
 
 function renderLiveIndex(elId, symbol, name) {
@@ -3418,6 +3438,7 @@ function renderLiveIndex(elId, symbol, name) {
   const isIndex = symbol.startsWith('^');
   let latest = null;                      // stashed for the hover tip, below
   let pcts = [], times = [], base = null, last = null; // stashed for draw(), below
+  let tileDay = null;                     // this tile's own last-fetched session — see liveWindow.day
   let prevToTime = null;                  // the last refresh's own latest tick — see updateStaleness
 
   async function refresh() {
@@ -3463,13 +3484,24 @@ function renderLiveIndex(elId, symbol, name) {
 
     times = data.times;
     pcts = data.closes.map(c => c == null ? null : (c / base - 1) * 100);
+    tileDay = new Date(latest.toTime * 1000).toISOString().slice(0, 10);
     let grew = false;
-    for (let i = 0; i < pcts.length; i++) {
-      if (pcts[i] == null) continue;
-      const t = times[i];
-      if (liveWindow.start == null || t < liveWindow.start) { liveWindow.start = t; grew = true; }
-      if (liveWindow.end == null || t > liveWindow.end) { liveWindow.end = t; grew = true; }
+    if (liveWindow.day == null || tileDay > liveWindow.day) {
+      // a genuinely newer day than anything seen yet — Friday's window (if any) is no longer
+      // "now" for anyone, so start it over rather than stretch it across the gap
+      liveWindow.start = null; liveWindow.end = null; liveWindow.day = tileDay;
+      grew = true;
     }
+    if (tileDay === liveWindow.day) {
+      for (let i = 0; i < pcts.length; i++) {
+        if (pcts[i] == null) continue;
+        const t = times[i];
+        if (liveWindow.start == null || t < liveWindow.start) { liveWindow.start = t; grew = true; }
+        if (liveWindow.end == null || t > liveWindow.end) { liveWindow.end = t; grew = true; }
+      }
+    }
+    // tileDay < liveWindow.day: this tile hasn't rolled over yet (its market isn't open today) —
+    // leave the window alone and let draw() below skip this tile until its next refresh catches up
     // this tile's own slice of the shared window grew — every other tile's slice shifted too
     if (grew) liveRedraws.forEach(fn => fn()); else draw();
     updateStaleness();
@@ -3478,7 +3510,11 @@ function renderLiveIndex(elId, symbol, name) {
 
   function draw() {
     const finite = pcts.filter(Number.isFinite);
-    if (!finite.length || liveWindow.start == null) { svg.replaceChildren(); return; }
+    // stale relative to the shared window's own day (see liveWindow.day above): this tile's
+    // market hasn't opened yet today, so its last-fetched session is still yesterday's (or
+    // Friday's) — draw nothing rather than squeeze it into a sliver against a window it isn't
+    // actually part of; the next refresh that rolls it onto today's day will redraw it for real
+    if (!finite.length || liveWindow.start == null || tileDay !== liveWindow.day) { svg.replaceChildren(); return; }
     const lo = Math.min(...finite, 0), hi = Math.max(...finite, 0);
     const span = hi - lo || 1;
     const W = 100, H = 28, PAD = 2;
