@@ -64,6 +64,14 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def handle_error(self, request, client_address):
+        # A client that vanished mid-response (tab closed, laptop slept/resumed) shows up here
+        # as a broken pipe or reset connection — cosmetic, not a bug in this server. Anything
+        # else still gets the normal traceback.
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
     def do_POST(self):
         if self.path != "/update-prices":
             self.send_error(404)
