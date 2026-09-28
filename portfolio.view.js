@@ -3343,7 +3343,7 @@ document.getElementById('btnUpdatePrices').addEventListener('click', async () =>
   btn.disabled = true;
   btn.textContent = 'Updating…';
   try {
-    const r = await fetch('/update-prices', { method: 'POST' });
+    const r = await fetch('update-prices', { method: 'POST' });
     const text = await r.text();
     if (!r.ok) throw new Error(text.trim().split('\n').pop() || `HTTP ${r.status}`);
     try { localStorage.setItem(LAST_FETCH_KEY, new Date().toISOString()); }
@@ -3454,7 +3454,7 @@ function renderLiveIndex(elId, symbol, name) {
   async function refresh() {
     let data;
     try {
-      const r = await fetch(`/live-index?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      const r = await fetch(`live-index?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       data = await r.json();
       if (data.error) throw new Error(data.error);
     } catch (err) {
