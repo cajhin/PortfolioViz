@@ -93,6 +93,14 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        # The bare directory means the page, not a listing of it. Relative, so it resolves
+        # correctly behind a proxy that mounts this server under a sub-path.
+        if urllib.parse.urlparse(self.path).path == "/":
+            self.send_response(302)
+            self.send_header("Location", "portfolio.html")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if urllib.parse.urlparse(self.path).path != "/live-index":
             super().do_GET()
             return
