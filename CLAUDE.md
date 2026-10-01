@@ -15,6 +15,8 @@ update_prices.py   fetches price history per registry/price_sources.csv
 import_tr.py            imports a Trade Republic transaction export into a manual profile, and
                           rebuilds a manual profile's CSVs from its ledgers
 manual_tx.py            adds/edits/deletes a transaction in a manual profile (demo portfolios)
+trade.py                demo accounts for agents (or anyone) from the command line — live only,
+                          JSON out; works only on profiles with "allow-cli": true (see below)
 add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
                           "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
@@ -73,6 +75,16 @@ instrument…" writes to the **committed** `registry/` (via `add_instrument.py`)
 can leave a git change there, which is meant: the registry is the shared catalog. A missing `source` counts as Parqet, the side that refuses imports; start.sh,
 `import_tr.py` and the page all hold to it, so `main` cannot be overwritten by a stray import. Its conversion follows Parqet's conventions and was checked
 against Parqet's own import of the same account; its docstring lists them.
+
+**Agent accounts.** `trade.py` creates and trades demo accounts — `trade.py --help` is the whole
+interface, every answer is one JSON object. It touches only profiles whose `profile.json` has
+`"allow-cli": true` (which `trade.py create` sets); the script cannot tell an agent from a human,
+so that flag is the boundary. It is **live only**: no date can be given, cash moves today, and an
+order fills at the first close dated *after* the day it was placed — never at a price already known
+when it was placed. Orders wait in the profile's `orders.csv` until then; any later call settles
+them, fetching the closes it needs. Filled trades land in `manual_ledger.csv` like hand-entered
+ones (their `--reason` in its description), so the page shows and can edit them — which, on an
+agent's account, is the one way round live-only; leave them alone if accounts are to be compared.
 
 `config.json` is committed, not generated — an agent edits it directly to change the as-of
 picker's earliest date, the portfolio currency, or which ISIN is the benchmark. `ingest()` reads it
