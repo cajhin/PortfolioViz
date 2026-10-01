@@ -14,9 +14,10 @@ manage, not this script's.
 <instrument> is an ISIN, a ticker or a name; anything ambiguous answers with the candidates.
 Every answer is one JSON object; on error {"ok": false, "error": ..., "hint": ...}, exit code 1.
 
-Live only. There is no date to give: a buy or sell executes now, at the latest price — fetched
-fresh first, so `quote` shows the price a trade would get. Trades are taken only while the
-listing's market is open and its price is under 30 minutes old; `quote` says whether they are. Each trade costs €10 + 1% of its value,
+Live only. There is no date to give: a buy or sell executes now, at a live price — on gettex
+(weekdays 08:00–22:00 German time) a buy pays the ask and a sale gets the bid; otherwise at the
+home exchange while it is open. `quote` shows what a buy and a sale would get right now, or why
+no trade is possible. Each trade costs €10 + 1% of its value,
 which makes trading in and out at every tick a losing game. Cash can never go below zero: a buy
 must be covered, fee included. Prices are in the portfolio currency.
 
@@ -166,7 +167,7 @@ def register_isin(isin):
         raise Refusal(f"Yahoo lists no symbol for {isin}", "it cannot be priced, so it cannot be traded")
     name = (found[0]["name"] if found else "") or listings[0]["name"] or isin
     proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "add_instrument.py"), isin,
-                           listings[0]["symbol"], name, "Other"],
+                           listings[0]["symbol"], name, "Other", "registered by trade.py on a first buy"],
                           capture_output=True, text=True, timeout=240)
     if proc.returncode != 0:
         raise Refusal(f"could not register {isin}: {(proc.stderr or proc.stdout).strip()[-200:]}")
@@ -295,6 +296,69 @@ def tradable(inst):
     return m
 
 
+# Where a trade is priced. First choice: gettex (Munich), a venue open weekdays 08:00–22:00 German
+# time that quotes European *and* US stocks and most ETFs live, in euros — a buy pays its ask, a sale
+# gets its bid, so the spread is a real cost as at any broker. Its quotes come from onvista's API
+# (unofficial). Fallback, when gettex is closed or has no fresh quote: the listing's home exchange
+# via Yahoo, under the market-hours rule above.
+GETTEX_HOURS = (8, 22)                    # local time, Mon–Fri
+GETTEX_MAX_AGE_MIN = 15                   # a market maker's quote is re-stamped only when it changes
+BERLIN = None
+
+
+def gettex_open(now=None):
+    global BERLIN
+    if BERLIN is None:
+        from zoneinfo import ZoneInfo
+        BERLIN = ZoneInfo("Europe/Berlin")
+    t = (now or datetime.now(timezone.utc)).astimezone(BERLIN)
+    return t.weekday() < 5 and GETTEX_HOURS[0] <= t.hour < GETTEX_HOURS[1]
+
+
+def gettex_quote(isin):
+    """gettex's bid and ask for an ISIN, with the age of the quote — or None when onvista has none.
+    Stocks and funds (ETFs among them) live under different onvista addresses."""
+    import add_instrument
+    for kind in ("stocks", "funds"):
+        try:
+            raw = add_instrument.yahoo(f"https://api.onvista.de/api/v1/{kind}/ISIN:{isin}/snapshot")
+        except Exception:
+            continue
+        for q in (raw.get("quoteList") or {}).get("list", []):
+            if (q.get("market") or {}).get("name") != "gettex":
+                continue
+            bid, ask = num(q.get("bid")), num(q.get("ask"))
+            stamp = max(q.get("datetimeBid") or "", q.get("datetimeAsk") or "")
+            if not (bid > 0 and ask >= bid and stamp) or q.get("isoCurrency") != "EUR":
+                return None
+            at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            age = (datetime.now(timezone.utc) - at).total_seconds() / 60
+            return {"bid": bid, "ask": ask, "age_min": round(age, 1),
+                    "spread_pct": round((ask - bid) / ((ask + bid) / 2) * 100, 2)}
+        return None
+    return None
+
+
+def venue_price(inst, side):
+    """The price a buy or a sale gets now, and where — or a Refusal saying why there is none.
+    gettex when it is open and its quote fresh; otherwise the home exchange, open and fresh."""
+    g = gettex_quote(inst["isin"]) if gettex_open() else None
+    if g and g["age_min"] <= GETTEX_MAX_AGE_MIN:
+        return {"venue": "gettex", "price": g["ask"] if side == "buy" else g["bid"],
+                "bid": g["bid"], "ask": g["ask"], "spread_pct": g["spread_pct"], "price_age_min": g["age_min"]}
+    try:
+        mkt = tradable(inst)
+    except Refusal as r:
+        why = ("gettex is closed (weekdays 08:00–22:00 German time)" if not gettex_open() else
+               "gettex has no quote for it" if not g else
+               f"gettex's quote is {g['age_min']} minutes old")
+        raise Refusal(f"{r.error}, and {why}", r.hint)
+    day, price = latest_close(inst)
+    if day != mkt["local_date"]:
+        raise Refusal(f"no price from today's session for {inst['name']} yet (latest is {day})", "try again shortly")
+    return {"venue": mkt["exchange"] or "home exchange", "price": price, "price_age_min": mkt["price_age_min"]}
+
+
 def latest_close(inst):
     """The newest close on file, after asking Yahoo for any newer one."""
     fetch_prices(inst)
@@ -314,11 +378,10 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
             if prior:
                 return {"repeat": True, **trade_view(prior), "cash": cash_of(d)}
         inst = resolve(inst_text, register=(side == "buy"))
-        mkt = tradable(inst)
-        day, price = latest_close(inst)
-        if day != mkt["local_date"]:
-            raise Refusal(f"no price from today's session for {inst['name']} yet (latest is {day})",
-                          "try again shortly")
+        if not series(inst):
+            fetch_prices(inst)           # a first buy of a new instrument: its history, for valuing it later
+        px = venue_price(inst, side)
+        price = px["price"]
         cash = cash_of(d)
         if side == "buy":
             if ((eur or 0) > 0) == ((shares or 0) > 0):
@@ -357,8 +420,10 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
         rows.append(row)
         write_csv(path, manual_tx.FIELDS, sorted(rows, key=lambda r: r["datetime"]))
         quiet(import_tr.rebuild, name, d)
-        out = {**trade_view(row), "name": inst["name"], "price_date": day,
-               "price_age_min": mkt["price_age_min"], "cash": cash_of(d)}
+        out = {**trade_view(row), "name": inst["name"], "venue": px["venue"],
+               "price_age_min": px["price_age_min"], "cash": cash_of(d)}
+        if "spread_pct" in px:
+            out.update(bid=px["bid"], ask=px["ask"], spread_pct=px["spread_pct"])
         if side == "sell":
             out["gain"] = gain
         if inst.get("registered"):
@@ -435,17 +500,22 @@ def rules():
 
 
 def quote(text):
+    """What a buy and a sale would get right now, and where — or why neither can happen."""
     inst = resolve(text, register=False)
-    day, price = latest_close(inst)
-    m = market(inst)
-    fresh = m["open"] and m["price_age_min"] is not None and m["price_age_min"] <= MAX_AGE_MIN \
-        and day == m["local_date"]
-    return {**inst, "price": price, "date": day, "market_open": m["open"], "session": m["session"],
-            "price_age_min": m["price_age_min"], "tradable_now": fresh,
-            "note": (f"a buy or sell now executes at this price; it costs €{FEE_FIXED:g} + "
-                     f"{FEE_RATE * 100:g}% of its value" if fresh else
-                     f"no trades now — only while the market is open ({m['session']}) and the price "
-                     f"is under {MAX_AGE_MIN} minutes old")}
+    out = dict(inst)
+    try:
+        buy, sell = venue_price(inst, "buy"), venue_price(inst, "sell")
+    except Refusal as r:
+        day, last = latest_close(inst)
+        return {**out, "tradable_now": False, "last_close": last, "last_close_date": day,
+                "why": r.error, "hint": r.hint}
+    out.update(tradable_now=True, venue=buy["venue"], buy_price=buy["price"], sell_price=sell["price"],
+               price_age_min=buy["price_age_min"])
+    if "spread_pct" in buy:
+        out["spread_pct"] = buy["spread_pct"]
+    out["note"] = (f"a buy now pays {buy['price']:g}, a sale gets {sell['price']:g} ({buy['venue']}); "
+                   f"each trade also costs €{FEE_FIXED:g} + {FEE_RATE * 100:g}% of its value")
+    return out
 
 
 # ---------- command line ----------

@@ -10,8 +10,9 @@ Goals:
 How to:
 - run /Users/jjj/git/portfolioviz/scripts/trade.py -h for tool instructions, and trade.py rules for general trading rules
 - do not run other scripts in this project
+- call trade.py always by its full path, one command per call: no `cd`, no loops, no `;`/`&&` chains — anything else is refused. Several quotes = several calls
 - you are free to research stocks on the internet
 - you will run in irregular intervals; maybe daily, maybe after 3 weeks
-- write all your working files to ./var — it is the only place you can write
+- write all your working files to ./var — it is the only place you can write, and only with the Write/Edit tools (shell commands that write files, like `cat > file` or `mkdir`, are refused; ./var already exists)
 - maintain 2 .md files there: 1) var/memory.md with what you want to recall on next session 2) var/strategy.md where you describe your high-level trading strategy
 - at the start of every session: read var/memory.md and var/strategy.md (if they exist yet), then run `trade.py status claude1`; at its end, update both files

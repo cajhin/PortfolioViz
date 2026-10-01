@@ -82,8 +82,10 @@ against Parqet's own import of the same account; its docstring lists them.
 them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every answer
 is one JSON object. Both touch only profiles whose `profile.json` has `"allow-cli": true` (which
 `manage-accounts.py create` sets); the scripts cannot tell an agent from a human, so that flag is
-the boundary — and splitting the two lets an agent be handed trading alone. It is **live only**: no date can be given. A trade executes at once at the latest close, fetched
-fresh first (so during trading hours that is Yahoo's current price), and costs €10 + 1% of its
+the boundary — and splitting the two lets an agent be handed trading alone. It is **live only**: no date can be given. A trade executes at once at a live price: gettex's ask
+(buy) or bid (sell) while gettex is open (weekdays 08:00–22:00 German time) and its quote is under
+15 minutes old — read from onvista's unofficial API — else the home exchange via Yahoo while that is
+open and its price under 30 minutes old, else not at all. Valuation stays on Yahoo's closes. A trade and costs €10 + 1% of its
 value — to make in-and-out trading a losing game; a sale also pays 20% tax on its gain. Cash can
 never go below zero: buys (fee included) and withdrawals are refused past it. The rules, with
 examples, are `trading-rules.md` — keep it in step with `trade.py`'s FEE_*/TAX_RATE. `buy --eur` is the total that leaves the account,

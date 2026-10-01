@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Register a new instrument and fetch its prices — so a hand-entered transaction can use it.
 
-    python3 scripts/add_instrument.py <ISIN> <yahoo symbol> <name> [<sector>]
+    python3 scripts/add_instrument.py <ISIN> <yahoo symbol> <name> [<sector> [<note>]]
     python3 scripts/add_instrument.py --find <name or ISIN>       # instruments by name, with ISIN (JSON)
     python3 scripts/add_instrument.py --symbols <ISIN>            # Yahoo listings of an ISIN, best first (JSON)
 
@@ -105,7 +105,7 @@ def config():
         return {}
 
 
-def add(isin, symbol, name, sector=""):
+def add(isin, symbol, name, sector="", note="added from the page"):
     isin, symbol, name = isin.strip().upper(), symbol.strip(), name.strip()
     if not ISIN.match(isin):
         sys.exit(f"{isin!r} is not an ISIN (two letters, nine letters or digits, one check digit)")
@@ -130,7 +130,7 @@ def add(isin, symbol, name, sector=""):
 
     append(INSTRUMENTS, {"id": isin, "isin": isin, "slug": slug, "name": name, "display": name,
                          "type": "security", "currency": home, "sector": sector or "Other",
-                         "note": "added from the page"})
+                         "note": note or "added from the page"})
     append(SOURCES, {"id": isin, "source": "yahoo", "symbol": symbol, "quote_currency": ccy or home,
                      "fx_symbol": fx, "note": ""})
     start = config().get("timelineStart") or "2019-01-01"
@@ -151,7 +151,7 @@ def main():
         print(json.dumps(find(args[1])))
     elif len(args) == 2 and args[0] == "--symbols":
         print(json.dumps(symbols(args[1])))
-    elif len(args) in (3, 4):
+    elif len(args) in (3, 4, 5):
         add(*args)
     else:
         sys.exit(__doc__.strip().split("\n\n")[1])

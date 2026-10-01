@@ -3,19 +3,25 @@
 The rules `trade.py` enforces on every demo account. They are the same for every account, so
 results can be compared fairly.
 
-## Time
+## Time and price
 
 - **Live only.** No trade, deposit or withdrawal can be dated: everything happens now.
-- **Price.** A buy or sell executes at once at the latest price, fetched fresh just before.
-  `trade.py quote <instrument>` shows that price, and whether a trade would be taken now (`tradable_now`).
-- **Market hours.** Trades are taken only while the instrument's own exchange is in its regular
-  session — e.g. 09:30–16:00 New York time for NVIDIA, 09:00–17:30 Amsterdam time for ASML. Outside
-  it the last price is stale while the instrument goes on trading elsewhere, so a trade is refused,
-  with the session hours in the answer.
-- **Fresh prices only.** A trade is refused if the latest price is more than 30 minutes old. Some
-  exchanges reach Yahoo about 15 minutes late; that is allowed for, and nothing more.
-- **Currency.** All prices, fees and taxes are in euros. Instruments quoted in another currency are
-  converted at that day's rate.
+- **Where trades are priced.** A buy or sell executes at once at a live price:
+  1. **gettex** (Munich), weekdays 08:00–22:00 German time, if it has a quote under 15 minutes old.
+     gettex quotes European and US stocks and most ETFs in euros. **A buy pays the ask, a sale gets
+     the bid** — the gap between them (the spread) is a real cost, as at any broker: around 0.02% for
+     a large US stock, 0.5% for a mid-sized German one, several percent for thinly traded names.
+  2. Otherwise the instrument's **home exchange**, but only during its regular session — e.g.
+     09:30–16:00 New York time for NVIDIA, 09:00–15:30 Tokyo time for Lasertec — and only with a price
+     under 30 minutes old (some exchanges reach us about 15 minutes late; that is allowed for).
+  3. Otherwise **no trade**: the answer says why, and when the instrument can next be traded. A last
+     close is never used — the instrument goes on moving elsewhere while it stands still.
+- **`trade.py quote <instrument>`** shows what a buy and a sale would get right now, where, and the
+  spread — or why no trade is possible.
+- **Currency.** All prices, fees and taxes are in euros. gettex quotes in euros; a home-exchange
+  price in another currency is converted at that day's rate.
+- **Valuation.** Positions are valued at their home exchange's daily close, so right after a trade
+  on gettex an account's value can differ slightly from what was paid; it evens out at the next close.
 
 ## Costs
 
@@ -23,6 +29,7 @@ results can be compared fairly.
 |---|---|
 | **Fee, every buy and every sell** | €10 + 1% of the trade's value |
 | **Tax, every sale with a gain** | 20% of the gain |
+| **Spread, on gettex** | buy at the ask, sell at the bid (see Time and price) |
 
 - The fee exists to make trading in and out on every move a losing game.
 - **Gain** = sale value − the sale's fee − what the sold shares cost. Cost is taken oldest-bought first
