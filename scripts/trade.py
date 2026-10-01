@@ -18,13 +18,13 @@ Every answer is one JSON object; on error {"ok": false, "error": ..., "hint": ..
 
 Live only. There is no date to give: a buy or sell executes now, at a live price — on gettex
 (weekdays 08:00–22:00 German time) a buy pays the ask and a sale gets the bid; otherwise at the
-home exchange while it is open. `quote` shows what a buy and a sale would get right now, or why
-no trade is possible. Each trade costs €10 + 1% of its value,
-which makes trading in and out at every tick a losing game. Cash can never go below zero: a buy
-must be covered, fee included. Prices are in the portfolio currency.
+home exchange while it is open, where a buy pays its price +1% and a sale gets it −1%. `quote` shows what a buy and a sale would get right now, or why
+no trade is possible. Each trade costs a €10 fee, on top of the spread a gettex trade pays.
+Cash can never go below zero: a buy must be covered, fee included. Prices are in the portfolio
+currency.
 
-buy --eur is everything that leaves the account, the fee included (--eur 2000 buys €1970.30 of
-shares and pays €29.70); buy --shares adds the fee on top. A sale's fee comes off its proceeds,
+buy --eur is everything that leaves the account, the fee included (--eur 2000 buys €1990 of
+shares and pays €10); buy --shares adds the fee on top. A sale's fee comes off its proceeds,
 and so does a 20% tax on its gain, if any. The full rules, with examples: trade.py rules.
 
 Only accounts set up for command-line trading can be traded; any other is refused. --id makes a
@@ -204,17 +204,17 @@ def fetch_prices(inst):
 
 
 # ---------- trading ----------
-# A buy or sell executes at once, at the latest close on file — fetched fresh first — and costs
-# FEE_FIXED + FEE_RATE of the trade's value: enough to make trading in and out on every tick a
-# losing game. Cash may never go below zero: a buy (fee included) or a withdrawal that would take
-# it there is refused.
+# A buy or sell executes at once at a live price (see venue_price) and costs FEE_FIXED. That, the
+# spread a gettex trade pays (buy at the ask, sell at the bid) and the tax on gains are what make
+# trading in and out on every tick a losing game. Cash may never go below zero: a buy (fee
+# included) or a withdrawal that would take it there is refused.
 
-FEE_FIXED, FEE_RATE = 10.0, 0.01
+FEE_FIXED = 10.0
 TAX_RATE = 0.20          # of a sale's gain, if any — see sale_tax
 
 
 def fee_for(value):
-    return round(FEE_FIXED + FEE_RATE * value, 2)
+    return FEE_FIXED
 
 
 def sale_tax(rows, isin, shares, value, fee):
@@ -304,6 +304,10 @@ def tradable(inst):
 # (unofficial). Fallback, when gettex is closed or has no fresh quote: the listing's home exchange
 # via Yahoo, under the market-hours rule above.
 GETTEX_HOURS = (8, 22)                    # local time, Mon–Fri
+# The home exchange gives a last price, no bid/ask — so a trade there pays an assumed spread
+# instead: a buy FALLBACK_SPREAD above that price, a sale as much below it. On purpose more than
+# gettex's spread usually is, so that the fallback is never the cheaper venue to aim for.
+FALLBACK_SPREAD = 0.01
 GETTEX_MAX_AGE_MIN = 15                   # a market maker's quote is re-stamped only when it changes
 BERLIN = None
 
@@ -355,10 +359,13 @@ def venue_price(inst, side):
                "gettex has no quote for it" if not g else
                f"gettex's quote is {g['age_min']} minutes old")
         raise Refusal(f"{r.error}, and {why}", r.hint)
-    day, price = latest_close(inst)
+    day, last = latest_close(inst)
     if day != mkt["local_date"]:
         raise Refusal(f"no price from today's session for {inst['name']} yet (latest is {day})", "try again shortly")
-    return {"venue": mkt["exchange"] or "home exchange", "price": price, "price_age_min": mkt["price_age_min"]}
+    bid, ask = round(last * (1 - FALLBACK_SPREAD), 6), round(last * (1 + FALLBACK_SPREAD), 6)
+    return {"venue": mkt["exchange"] or "home exchange", "price": ask if side == "buy" else bid,
+            "bid": bid, "ask": ask, "last": last, "surcharge_pct": FALLBACK_SPREAD * 100,
+            "price_age_min": mkt["price_age_min"]}
 
 
 def latest_close(inst):
@@ -390,9 +397,9 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
                 raise Refusal("give either --eur or --shares, as a positive number")
             if eur:
                 # --eur is everything that leaves the account, the fee included
-                value = (eur - FEE_FIXED) / (1 + FEE_RATE)
+                value = eur - FEE_FIXED
                 if value <= 0:
-                    raise Refusal(f"€{eur:g} does not cover the €{FEE_FIXED:g} minimum fee")
+                    raise Refusal(f"€{eur:g} does not cover the €{FEE_FIXED:g} fee")
                 shares = value / price
             shares = round(shares, 6)
             value = shares * price
@@ -424,8 +431,10 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
         quiet(import_tr.rebuild, name, d)
         out = {**trade_view(row), "name": inst["name"], "venue": px["venue"],
                "price_age_min": px["price_age_min"], "cash": cash_of(d)}
-        if "spread_pct" in px:
-            out.update(bid=px["bid"], ask=px["ask"], spread_pct=px["spread_pct"])
+        out.update(bid=px["bid"], ask=px["ask"])
+        for k in ("spread_pct", "last", "surcharge_pct"):
+            if k in px:
+                out[k] = px[k]
         if side == "sell":
             out["gain"] = gain
         if inst.get("registered"):
@@ -513,10 +522,11 @@ def quote(text):
                 "why": r.error, "hint": r.hint}
     out.update(tradable_now=True, venue=buy["venue"], buy_price=buy["price"], sell_price=sell["price"],
                price_age_min=buy["price_age_min"])
-    if "spread_pct" in buy:
-        out["spread_pct"] = buy["spread_pct"]
+    for k in ("spread_pct", "last", "surcharge_pct"):
+        if k in buy:
+            out[k] = buy[k]
     out["note"] = (f"a buy now pays {buy['price']:g}, a sale gets {sell['price']:g} ({buy['venue']}); "
-                   f"each trade also costs €{FEE_FIXED:g} + {FEE_RATE * 100:g}% of its value")
+                   f"each trade also costs a €{FEE_FIXED:g} fee")
     return out
 
 

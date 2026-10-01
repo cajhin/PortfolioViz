@@ -85,10 +85,11 @@ is one JSON object. Both touch only profiles whose `profile.json` has `"allow-cl
 the boundary — and splitting the two lets an agent be handed trading alone. It is **live only**: no date can be given. A trade executes at once at a live price: gettex's ask
 (buy) or bid (sell) while gettex is open (weekdays 08:00–22:00 German time) and its quote is under
 15 minutes old — read from onvista's unofficial API — else the home exchange via Yahoo while that is
-open and its price under 30 minutes old, else not at all. Valuation stays on Yahoo's closes. A trade and costs €10 + 1% of its
-value — to make in-and-out trading a losing game; a sale also pays 20% tax on its gain. Cash can
+open and its price under 30 minutes old, else not at all. Valuation stays on Yahoo's closes. A trade
+costs a €10 fee, on top of the spread — gettex's own, or 1% each way at the home exchange, which has
+no bid/ask; a sale also pays 20% tax on its gain. Cash can
 never go below zero: buys (fee included) and withdrawals are refused past it. The rules, with
-examples, are `trading-rules.md` — keep it in step with `trade.py`'s FEE_*/TAX_RATE. `buy --eur` is the total that leaves the account,
+examples, are `trading-rules.md` — keep it in step with `trade.py`'s FEE_FIXED/TAX_RATE. `buy --eur` is the total that leaves the account,
 fee included. Trades land in `manual_ledger.csv` like hand-entered ones (their `--reason` in its
 description), so the page shows and can edit them — the one way round these rules; leave them
 alone if accounts are to be compared.
