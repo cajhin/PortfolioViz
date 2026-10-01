@@ -2,6 +2,7 @@
 """Trade a demo account from the command line — live only, JSON in every answer.
 
     trade.py quote    <instrument> [<instrument> ...]
+    trade.py chart    <instrument> [<instrument> ...]
     trade.py buy      <account> <instrument> (--eur EUR | --shares N) [--reason TEXT] [--id ID]
     trade.py sell     <account> <instrument> (--shares N | --all)      [--reason TEXT] [--id ID]
     trade.py status   <account>
@@ -14,6 +15,9 @@ manage, not this script's.
 <instrument> is an ISIN, a ticker or a name; anything ambiguous answers with the candidates.
 Quoting several at once answers {"quotes": [...]}, one entry each — an instrument that cannot be
 quoted gets its own {"ok": false, "error": ...} entry there, and the rest are still answered.
+`chart` is the price history the same way ({"charts": [...]} for several): returns over 1m to 3y,
+the 52-week range, volatility, the deepest drops and two years of month-end closes. Any ISIN can be
+quoted and charted, held or not.
 Every answer is one JSON object; on error {"ok": false, "error": ..., "hint": ...}, exit code 1.
 
 Live only. There is no date to give: a buy or sell executes now, at a live price — on gettex
@@ -84,6 +88,12 @@ def profile(d):
 
 
 def require_cli(name):
+    # an agent's session is bound to its own account: its start script sets TRADE_ACCOUNT, and
+    # another account — someone else's demo, to look at or to trade — is refused. (The variable cannot
+    # be changed from inside the session: a command not starting with this script is not allowed.)
+    bound = os.environ.get("TRADE_ACCOUNT")
+    if bound and name != bound:
+        raise Refusal(f"this session trades account {bound!r} only, not {name!r}")
     d = account_dir(name)
     cfg = profile(d)
     if cfg.get("source") != "manual" or cfg.get("allow-cli") is not True:
@@ -345,9 +355,10 @@ def gettex_quote(isin):
     return None
 
 
-def venue_price(inst, side):
+def venue_price(inst, side, closes=None):
     """The price a buy or a sale gets now, and where — or a Refusal saying why there is none.
-    gettex when it is open and its quote fresh; otherwise the home exchange, open and fresh."""
+    gettex when it is open and its quote fresh; otherwise the home exchange, open and fresh.
+    `closes` stands in for the stored series of an instrument not registered (see quote)."""
     g = gettex_quote(inst["isin"]) if gettex_open() else None
     if g and g["age_min"] <= GETTEX_MAX_AGE_MIN:
         return {"venue": "gettex", "price": g["ask"] if side == "buy" else g["bid"],
@@ -359,7 +370,7 @@ def venue_price(inst, side):
                "gettex has no quote for it" if not g else
                f"gettex's quote is {g['age_min']} minutes old")
         raise Refusal(f"{r.error}, and {why}", r.hint)
-    day, last = latest_close(inst)
+    day, last = closes() if closes else latest_close(inst)
     if day != mkt["local_date"]:
         raise Refusal(f"no price from today's session for {inst['name']} yet (latest is {day})", "try again shortly")
     bid, ask = round(last * (1 - FALLBACK_SPREAD), 6), round(last * (1 + FALLBACK_SPREAD), 6)
@@ -511,13 +522,29 @@ def rules():
 
 
 def quote(text):
-    """What a buy and a sale would get right now, and where — or why neither can happen."""
-    inst = resolve(text, register=False)
-    out = dict(inst)
+    """What a buy and a sale would get right now, and where — or why neither can happen. Any ISIN
+    can be quoted, registered or not: an unregistered one is priced without being stored, and its
+    first buy registers it."""
+    closes = None
     try:
-        buy, sell = venue_price(inst, "buy"), venue_price(inst, "sell")
+        inst = resolve(text, register=False)
+    except Refusal:
+        q = (text or "").strip().upper()
+        if not ISIN.match(q):
+            raise
+        inst = unregistered(q)
+        cache = {}
+        def closes():
+            if "last" not in cache:
+                cache["last"] = unregistered_closes(q, inst)[1][-1]
+            return cache["last"]
+    out = {k: v for k, v in inst.items() if k != "slug"}
+    if inst.get("registered") is False:
+        out["note_registry"] = "not held by anyone yet; a buy registers it"
+    try:
+        buy, sell = venue_price(inst, "buy", closes), venue_price(inst, "sell", closes)
     except Refusal as r:
-        day, last = latest_close(inst)
+        day, last = closes() if closes else latest_close(inst)
         return {**out, "tradable_now": False, "last_close": last, "last_close_date": day,
                 "why": r.error, "hint": r.hint}
     out.update(tradable_now=True, venue=buy["venue"], buy_price=buy["price"], sell_price=sell["price"],
@@ -528,6 +555,104 @@ def quote(text):
     out["note"] = (f"a buy now pays {buy['price']:g}, a sale gets {sell['price']:g} ({buy['venue']}); "
                    f"each trade also costs a €{FEE_FIXED:g} fee")
     return out
+
+
+# ---------- price history ----------
+# What an agent needs to judge a price, not just a story: returns over several horizons, where it
+# stands against its year's range, how much it swings and how deep it has fallen — from the daily
+# closes this project keeps anyway (in euros, without dividends). An instrument not registered yet
+# is fetched from Yahoo for the answer only, so researching a candidate leaves nothing behind.
+
+def unregistered(isin):
+    """An instrument the registry does not have yet, looked up for the answer only: its name and
+    best Yahoo listing — enough to quote or chart it, nothing stored."""
+    import add_instrument
+    try:
+        listings = add_instrument.symbols(isin)
+    except Exception as err:
+        raise Refusal(f"could not look {isin} up: {err}", "try again later")
+    if not listings:
+        raise Refusal(f"Yahoo lists no symbol for {isin}", "it cannot be priced")
+    return {"isin": isin, "id": isin, "name": listings[0]["name"] or isin,
+            "symbol": listings[0]["symbol"], "registered": False}
+
+
+def unregistered_closes(isin, inst=None):
+    import add_instrument, update_prices
+    inst = inst or unregistered(isin)
+    best = {"symbol": inst["symbol"], "name": inst["name"]}
+    since = (date.today() - timedelta(days=3 * 366 + 40)).isoformat()
+    try:
+        ccy = add_instrument.quote_currency(best["symbol"])
+        raw = quiet(update_prices.fetch, best["symbol"], update_prices.as_stamp(since))
+    except Refusal:
+        raise
+    except Exception as err:
+        raise Refusal(f"no price history for {isin}: {err}")
+    home = update_prices.portfolio_currency()
+    if ccy and ccy != home:
+        pair = f"{home}{'GBP' if ccy == 'GBp' else ccy.upper()}=X"
+        rates = quiet(update_prices.fx_series, pair, since)
+        rows = [(d, update_prices.to_portfolio_ccy(c, ccy, rates, d)) for d, c in sorted(raw.items())]
+    else:
+        rows = sorted(raw.items())
+    return inst, [(d, c) for d, c in rows if c]
+
+
+def chart(text):
+    try:
+        inst = resolve(text, register=False)
+        fetch_prices(inst)
+        rows = series(inst)
+    except Refusal:
+        q = (text or "").strip().upper()
+        if not ISIN.match(q):
+            raise
+        inst, rows = unregistered_closes(q)
+    if len(rows) < 2:
+        raise Refusal(f"no price history for {inst['name']}")
+    import math
+    dates, closes = [d for d, _ in rows], [c for _, c in rows]
+    last_day, last = rows[-1]
+
+    def back(days):
+        """The close on or before `days` ago — None when the history does not reach that far."""
+        cut = (date.fromisoformat(last_day) - timedelta(days=days)).isoformat()
+        older = [c for d, c in rows if d <= cut]
+        return older[-1] if older and dates[0] <= cut else None
+
+    def ret(days):
+        then = back(days)
+        return round((last / then - 1) * 100, 1) if then else None
+
+    year = [c for d, c in rows if d > (date.fromisoformat(last_day) - timedelta(days=365)).isoformat()]
+    hi, lo = max(year), min(year)
+    ytd_base = [c for d, c in rows if d < last_day[:4] + "-01-01"]
+    logs = [math.log(b / a) for a, b in zip(year, year[1:]) if a > 0 and b > 0]
+    vol = (sum((x - sum(logs) / len(logs)) ** 2 for x in logs) / (len(logs) - 1)) ** 0.5 * math.sqrt(252) \
+        if len(logs) > 20 else None
+
+    def max_drop(cs):
+        peak, worst = cs[0], 0.0
+        for c in cs:
+            peak = max(peak, c)
+            worst = min(worst, c / peak - 1)
+        return round(worst * 100, 1)
+
+    months = {}
+    for d, c in rows:
+        months[d[:7]] = c                      # the last close of each month
+    return {**{k: inst[k] for k in ("isin", "name", "symbol") if k in inst},
+            **({"registered": False} if inst.get("registered") is False else {}),
+            "currency": "EUR", "last": round(last, 4), "last_date": last_day, "history_from": dates[0],
+            "return_pct": {"1m": ret(30), "3m": ret(91), "ytd": round((last / ytd_base[-1] - 1) * 100, 1)
+                           if ytd_base else None, "1y": ret(365), "3y": ret(3 * 365)},
+            "high_52w": round(hi, 4), "low_52w": round(lo, 4),
+            "below_52w_high_pct": round((last / hi - 1) * 100, 1),
+            "volatility_1y_pct": round(vol * 100, 1) if vol else None,
+            "max_drawdown_pct": {"1y": max_drop(year), "all": max_drop(closes)},
+            "month_end_closes": [[m, round(c, 4)] for m, c in sorted(months.items())[-24:]],
+            "note": "daily closes in euros, without dividends; returns and drawdowns are price only"}
 
 
 # ---------- command line ----------
@@ -553,6 +678,7 @@ def run(doc, prog, configure, dispatch):
 
 def configure(sub):
     sub.add_parser("quote").add_argument("instrument", nargs="+")
+    sub.add_parser("chart").add_argument("instrument", nargs="+")
     for side in ("buy", "sell"):
         s = sub.add_parser(side); s.add_argument("account"); s.add_argument("instrument")
         s.add_argument("--shares", type=float)
@@ -567,16 +693,17 @@ def configure(sub):
 
 
 def dispatch(a):
-    if a.cmd == "quote":
+    if a.cmd in ("quote", "chart"):
+        fn = quote if a.cmd == "quote" else chart
         if len(a.instrument) == 1:
-            return quote(a.instrument[0])
+            return fn(a.instrument[0])
         out = []
         for text in a.instrument:
             try:
-                out.append({"ok": True, "query": text, **quote(text)})
+                out.append({"ok": True, "query": text, **fn(text)})
             except Refusal as r:
                 out.append({"ok": False, "query": text, "error": r.error, **({"hint": r.hint} if r.hint else {})})
-        return {"quotes": out}
+        return {"quotes" if a.cmd == "quote" else "charts": out}
     if a.cmd == "buy":
         return execute(a.account, "buy", a.instrument, shares=a.shares, eur=a.eur, reason=a.reason, oid=a.id)
     if a.cmd == "sell":
