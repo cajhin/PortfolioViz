@@ -687,7 +687,10 @@ function applySort(id) {
     out.push(...group, ...(tail ? [tail] : []));
     group.length = 0;
   };
-  for (const tr of [...tbody.children]) isSubRow(tr) ? flush(tr) : group.push(tr);
+  for (const tr of [...tbody.children]) {
+    if (tr.classList.contains('txedit')) continue;    // an open transaction editor closes on re-sort
+    isSubRow(tr) ? flush(tr) : group.push(tr);
+  }
   flush(null);
   tbody.replaceChildren(...out);
 }
@@ -889,6 +892,9 @@ function renderTrades() {
   const feesTotal = TRADES.reduce((t, r) => t + num(r.fee), 0);
   document.getElementById('tradesHead').textContent =
     `${rows.length} Trades (${fmtMoney(feesTotal)} Fees)`;
+  // a manual profile's rows each name the ledger row they came from, and can be edited by it
+  const deletable = PROFILE_SOURCE === 'manual';
+  document.getElementById('txDelHead').hidden = !deletable;
   const tb = document.querySelector('#tblTrades tbody');
   tb.replaceChildren(...rows.map(t => {
     const tr = document.createElement('tr');
@@ -904,6 +910,19 @@ function renderTrades() {
       `<td class="${cls}">${fmtMoney2(num(t.amountNet))}</td>` +
       `<td>${num(t.fee) > 0.005 ? fmtMoney2(num(t.fee)) : '–'}</td>` +
       `<td>${num(t.tax) > 0.005 ? fmtMoney2(num(t.tax)) : '–'}</td>`;
+    if (deletable) {
+      const td = document.createElement('td');
+      td.className = 'txdel';
+      if (t.transactionId) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dt-addsel';
+        btn.textContent = 'Edit';
+        btn.addEventListener('click', () => openTxEditor(tr, t));
+        td.appendChild(btn);
+      }
+      tr.appendChild(td);
+    }
     return tr;
   }));
   applySort('tblTrades');
@@ -3341,7 +3360,8 @@ document.getElementById('file').addEventListener('change', e => {
 const DEV_HOST = 'maigold';
 fetch('host', { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(({ host }) => {
+  .then(({ host, stale }) => {
+    if (stale) staleServer();
     if (String(host).toLowerCase().split('.')[0] !== DEV_HOST) return;
     const t = document.getElementById('vertTitle');
     t.textContent = 'PV dev';
@@ -3380,37 +3400,50 @@ function renderProfilePicker() {
       // every start.sh that knows about profile kinds says one; none at all means the running
       // server predates this page — say so, rather than let "no source" read as Parqet
       if (!('source' in me)) staleServer();
-      else applyProfileSource(me.source);
+      else applyProfileSource(me.source, me.label);
     })
     .catch(() => { sel.hidden = true; });
   sel.addEventListener('change', () => gotoProfile(sel.value));
 }
 
 // A profile is controlled by Parqet or manually (profile.json's "source"; start.sh reads it, and
-// treats anything but "manual" as Parqet). Only a manual one is offered the import — and start.sh
-// and import_tr.py both refuse a Parqet one regardless, so hiding it here is a courtesy, not the
-// guard. Unknown (no /profiles to ask) leaves the import hidden.
+// treats anything but "manual" as Parqet). That decides the Transactions tab: a Parqet profile's
+// list is read-only, with a note saying where it comes from; a manual one gets the import, a
+// delete per row and the add form. start.sh and the scripts refuse a Parqet profile regardless, so
+// hiding the tools here is a courtesy, not the guard. Unknown (no /profiles to ask) shows neither.
 let PROFILE_SOURCE = null;
-function applyProfileSource(source) {
+function applyProfileSource(source, label) {
   PROFILE_SOURCE = source === 'manual' ? 'manual' : 'parqet';
   const manual = PROFILE_SOURCE === 'manual';
-  document.getElementById('manualTools').hidden = !manual;
+  document.getElementById('txImport').hidden = !manual;
+  document.getElementById('txAdd').hidden = !manual;
+  const note = document.getElementById('txSourceNote');
+  note.hidden = manual;
+  note.textContent = `All ${label || PROFILE} transactions are imported from Parqet. Create a ` +
+    `'manual' profile to edit transactions or import Trade Republic exports.`;
+  // the delete column depends on this, and the list may already be drawn without it
+  TRADES_DRAWN_FOR = null;
+  if (VIEW === 'trades' && ITEMS.length) renderTrades();
   refreshManualTools();
   document.getElementById('profileSource').textContent =
-    manual ? '· manual — filled by imports' : '· controlled by Parqet — no manual imports';
+    manual ? '· manual — transactions entered or imported here' : '· controlled by Parqet — no manual changes';
   document.getElementById('emptyProfileHow').innerHTML = manual
-    ? 'Import a Trade Republic transaction export below, then reload.'
+    ? 'Import a Trade Republic transaction export, or add transactions by hand, below.'
     : 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.';
 }
 
 // start.sh is a long-running process, so it can be older than the page it serves — and then
-// lacks routes this page relies on. Shown where the profile's kind would be, and in the empty
-// profile's note, since both would otherwise be wrong rather than just missing.
+// lacks routes this page relies on. Three ways that shows: /host says start.sh changed on disk
+// since the server started (see markDevHost's fetch); /profiles lacks a field every current
+// server sends; or a route answers 404, which from start.sh means "no such route" — routeFailure
+// turns that into the same advice instead of a bare "File not found".
+const STALE_MSG = 'start.sh is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
 function staleServer() {
-  const msg = 'start.sh is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
-  document.getElementById('profileSource').textContent = '· ' + msg;
-  document.getElementById('emptyProfileHow').textContent = msg;
+  document.getElementById('profileSource').textContent = '· ' + STALE_MSG;
+  document.getElementById('emptyProfileHow').textContent = STALE_MSG;
+  reportError('server', STALE_MSG);
 }
+const routeFailure = r => r.status === 404 ? STALE_MSG : `${r.status} ${r.statusText}`;
 
 // The Config tab's first row: renames the current profile's label (profile.json) — the folder,
 // and so the ?profile= in every URL, stays as it is. The picker's own entry follows without a
@@ -3425,7 +3458,7 @@ document.getElementById('profileLabelForm').addEventListener('submit', async e =
   try {
     const r = await fetch(`profile-label?profile=${encodeURIComponent(PROFILE)}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
-    if (!r.ok) throw new Error(r.statusText || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : r.statusText || `HTTP ${r.status}`);
     const opt = [...document.getElementById('profileSel').options].find(o => o.value === PROFILE);
     if (opt) opt.textContent = label;
     msg.className = 'muted';
@@ -3451,7 +3484,7 @@ async function createProfile(label) {
     const r = await fetch('profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({ name, label, source }) });
     // statusText, not the body: send_error's body is an HTML page, its status line the message
-    if (!r.ok) throw new Error(r.statusText || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : r.statusText || `HTTP ${r.status}`);
     gotoProfile(name);
   } catch (e) {
     err.textContent = `Could not create profile "${label}": ${e.message}`;
@@ -3471,12 +3504,13 @@ function showEmptyProfile() {
   if (!PROFILE_SOURCE) document.getElementById('emptyProfileHow').textContent = 'Fill it, then reload.';
   const slot = document.getElementById('emptyProfileSlot');
   slot.appendChild(document.getElementById('profileSel'));
-  slot.appendChild(document.getElementById('manualTools'));
+  slot.appendChild(document.getElementById('txImport'));
+  slot.appendChild(document.getElementById('txAdd'));
   refreshManualTools();
   document.getElementById('emptyProfile').hidden = false;
 }
 
-// The Config tab's "Import Trade Republic file": the export goes to start.sh's /import-tr route,
+// The Transactions tab's "Import Trade Republic file": the export goes to start.sh's /import-tr route,
 // which keeps it under the profile's exports/ and runs import_tr.py on it. That script's own
 // report — how many rows were new, how many already imported, anything it could not place — is
 // shown as-is; a reload then picks up the rebuilt CSVs, the same as after Update.
@@ -3494,7 +3528,7 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
                           { method: 'POST', body: file });
     const text = (await r.text()).trim();
     // a route-level refusal (send_error) comes back as an HTML page — its status line says it
-    log.textContent = r.ok || !text.startsWith('<') ? text : `${r.status} ${r.statusText}`;
+    log.textContent = r.ok || !text.startsWith('<') ? text : routeFailure(r);
     if (r.ok) document.getElementById('manualReload').hidden = false;
   } catch (err) {
     log.textContent = `Import failed: ${err.message}`;
@@ -3502,44 +3536,67 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
     btn.disabled = false;
   }
 });
-document.getElementById('manualReload').addEventListener('click', () => location.reload());
+document.getElementById('manualReload').addEventListener('click', () => reloadOnTransactions());
+
+// Every change to a manual profile rebuilds its CSVs on the server, and a reload is what brings
+// them in (the same as after Update) — back onto this tab, so the list shows the change at once.
+function reloadOnTransactions() {
+  const q = new URLSearchParams(location.search);
+  q.set('view', 'trades');
+  if ('?' + q.toString() === location.search) location.reload();
+  else location.search = q.toString();
+}
 
 // "Add transaction": buys and sells entered by hand, for a virtual demo portfolio. start.sh's
 // /manual-tx route runs manual_tx.py, which validates (instrument in the registry, no sale beyond
 // what is held, no future date), writes the profile's manual_ledger.csv and rebuilds its CSVs.
 // The instruments offered are the registry's priced ones — a virtual position is tracked by its
-// price series, so one without a series would have nothing to show — and the price is prefilled
-// with that series' close on the date picked, editable after.
+// price series — plus "+ New instrument…", which registers one first (see the dialog below). The
+// price is prefilled with that series' close on the date picked, editable after.
 //
 // Two things must be in hand before this can draw: the profile's kind (from /profiles, see
 // applyProfileSource) and the registry (from ingest). Either can land first, so both call this and
 // it simply waits for the other.
+const NEW_INSTRUMENT = '+new';            // not an ISIN, so never confused with one
+const TX_FORM_KEY = 'portfolioviz.txForm';   // date and type, kept across the reload an add causes
+let TX_ISIN_PREV = '';
+function txOption(inst) {
+  const o = document.createElement('option');
+  o.value = inst.id;
+  o.textContent = inst.display || inst.name;
+  return o;
+}
 function refreshManualTools() {
   if (PROFILE_SOURCE !== 'manual' || !INSTRUMENTS.size) return;
   const sel = document.getElementById('txIsin');
-  if (!sel.options.length) {
-    const priced = [...new Set(INSTRUMENTS.values())]
-      .filter(inst => (SOURCES.get(inst.id) || {}).symbol)
-      .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
-    sel.replaceChildren(...priced.map(inst => {
-      const o = document.createElement('option');
-      o.value = inst.id;
-      o.textContent = inst.display || inst.name;
-      return o;
-    }));
-    const day = document.getElementById('txDate');
-    day.max = TODAY;
-    if (!day.value) day.value = TODAY;
-    prefillTxPrice();
-  }
-  renderManualTx();
+  if (sel.options.length) return;
+  const priced = [...new Set(INSTRUMENTS.values())]
+    .filter(inst => (SOURCES.get(inst.id) || {}).symbol)
+    .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
+  // nothing picked to start with — the select is required, so an instrument has to be chosen
+  // rather than whatever happened to sort first; "+ New instrument…" heads the list
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = 'Choose instrument…';
+  none.disabled = none.selected = true;
+  const add = document.createElement('option');
+  add.value = NEW_INSTRUMENT;
+  add.textContent = '+ New instrument…';
+  sel.replaceChildren(none, add, ...priced.map(txOption));
+  const day = document.getElementById('txDate');
+  day.max = TODAY;
+  let kept = {};
+  try { kept = JSON.parse(sessionStorage.getItem(TX_FORM_KEY) || '{}'); } catch { /* none */ }
+  day.value = kept.date || TODAY;
+  if (kept.type) document.getElementById('txType').value = kept.type;
+  TX_ISIN_PREV = '';
 }
 
 let PREFILL_TOKEN = 0;
 async function prefillTxPrice() {
   const isin = document.getElementById('txIsin').value, day = document.getElementById('txDate').value;
   const hint = document.getElementById('txHint');
-  if (!isin || !day) return;
+  if (!isin || isin === NEW_INSTRUMENT || !day) { hint.textContent = ''; return; }
   const token = ++PREFILL_TOKEN;
   const series = await loadSeries(seriesSlug({ identifier: isin }));
   if (token !== PREFILL_TOKEN) return;                 // a newer pick is on its way
@@ -3549,70 +3606,216 @@ async function prefillTxPrice() {
   document.getElementById('txPrice').value = +row.close.toFixed(4);
   hint.textContent = `close on ${row.date}`;
 }
-['txIsin', 'txDate'].forEach(id => document.getElementById(id).addEventListener('change', prefillTxPrice));
+document.getElementById('txDate').addEventListener('change', prefillTxPrice);
+document.getElementById('txIsin').addEventListener('change', e => {
+  if (e.target.value === NEW_INSTRUMENT) { openInstrumentDialog(); return; }
+  TX_ISIN_PREV = e.target.value;
+  prefillTxPrice();
+});
 
-// The hand-entered rows, newest first, each with a delete. Read straight off manual_ledger.csv —
-// a static file like the rest — so it shows what is actually stored, not what this page sent.
-async function renderManualTx() {
-  const table = document.getElementById('tblManualTx');
-  let rows = [];
-  try {
-    const r = await fetch(profilePath('manual_ledger.csv'), { cache: 'no-store' });
-    if (r.ok) rows = parseCSV(await r.text());
-  } catch { /* none yet */ }
-  table.hidden = !rows.length;
-  rows.sort((a, b) => a.datetime < b.datetime ? 1 : -1);
-  document.querySelector('#tblManualTx tbody').replaceChildren(...rows.map(t => {
-    const tr = document.createElement('tr');
-    const inst = INSTRUMENTS.get(t.symbol);
-    tr.innerHTML =
-      `<td>${t.date}</td><td>${t.type === 'BUY' ? 'Buy' : 'Sell'}</td>` +
-      `<td>${inst ? inst.display || inst.name : t.symbol}</td>` +
-      `<td>${Math.abs(num(t.shares))}</td><td>${fmtMoney2(num(t.price))}</td>` +
-      `<td>${num(t.fee) ? fmtMoney2(-num(t.fee)) : '–'}</td>`;
-    const td = document.createElement('td');
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.textContent = '✕';
-    del.title = 'Delete this transaction';
-    del.addEventListener('click', () => {
-      if (confirm(`Delete ${t.date} ${t.type.toLowerCase()} of ${tr.children[2].textContent}?`)) {
-        postManualTx(`&delete=${encodeURIComponent(t.transaction_id)}`, null);
-      }
-    });
-    td.appendChild(del);
-    tr.appendChild(td);
-    return tr;
-  }));
-}
-
-// Both the add and the delete: manual_tx.py's own report (or refusal — "cannot sell 50, only 6
-// held") goes in the log as-is, and a success redraws the list and offers the reload that brings
-// the rebuilt CSVs into the charts.
-async function postManualTx(query, tx) {
-  const log = document.getElementById('trImportLog');
-  log.hidden = false;
+// The add, a row's edit and its delete. manual_tx.py's refusal ("that would sell more than is
+// held …") is shown by the form it came from; a success reloads onto this tab, where the list
+// already shows it.
+async function postManualTx(query, tx, msg = document.getElementById('txMsg')) {
+  msg.textContent = '';
   try {
     const r = await fetch(`manual-tx?profile=${encodeURIComponent(PROFILE)}${query}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tx || {}) });
     const text = (await r.text()).trim();
-    log.textContent = r.ok || !text.startsWith('<') ? text : `${r.status} ${r.statusText}`;
-    if (r.ok) {
-      document.getElementById('manualReload').hidden = false;
-      renderManualTx();
-    }
-    return r.ok;
+    if (!r.ok) throw new Error(text && !text.startsWith('<') ? text.split('\n').pop() : routeFailure(r));
+    reloadOnTransactions();
   } catch (err) {
-    log.textContent = `Failed: ${err.message}`;
-    return false;
+    msg.textContent = err.message;
   }
 }
-document.getElementById('txForm').addEventListener('submit', async e => {
+document.getElementById('txForm').addEventListener('submit', e => {
   e.preventDefault();
   const val = id => document.getElementById(id).value;
-  const ok = await postManualTx('', { date: val('txDate'), isin: val('txIsin'), type: val('txType'),
-                                      shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
-  if (ok) document.getElementById('txShares').value = '';
+  if (val('txIsin') === NEW_INSTRUMENT) return;
+  try {
+    sessionStorage.setItem(TX_FORM_KEY, JSON.stringify({ date: val('txDate'), type: val('txType') }));
+  } catch { /* the form just starts fresh after the reload */ }
+  postManualTx('', { date: val('txDate'), isin: val('txIsin'), type: val('txType'),
+                     shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
+});
+
+// A row's Edit, in a manual profile's list (see renderTrades): an editor row opens under it, one
+// at a time. A buy or sell entered by hand can be changed — date, type, shares, price, fee; its
+// instrument stays (delete and add again for another). An imported row is what the broker booked,
+// so it can only be deleted — set aside, so re-importing the same export does not revive it.
+function openTxEditor(tr, t) {
+  document.querySelectorAll('#tblTrades tr.txedit').forEach(r => r.remove());
+  const what = `${t.datetime.slice(0, 10)} ${TYPE_LABEL[t.type] || t.type} of ${NAMES.get(t.name) || tidyName(t.name)}`;
+  const editable = t.transactionId.startsWith('manual-') && (t.type === 'buy' || t.type === 'sell');
+  const row = document.createElement('tr');
+  row.className = 'txedit';
+  const td = document.createElement('td');
+  td.colSpan = tr.children.length;
+  const form = document.createElement('form');
+  form.className = 'configrow';
+  form.innerHTML = editable
+    ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
+      `<select name="type" class="pick" aria-label="Type"><option value="buy">Buy</option><option value="sell">Sell</option></select>` +
+      `<input type="number" name="shares" min="0" step="any" required placeholder="Shares" value="${num(t.shares)}">` +
+      `<input type="number" name="price" min="0" step="any" required placeholder="Price" value="${num(t.price)}">` +
+      `<input type="number" name="fee" min="0" step="any" placeholder="Fee" aria-label="Fee" value="${num(t.fee) || ''}">` +
+      `<button type="submit" class="dt-addsel">Save</button>`
+    : `<span class="muted">Imported from Trade Republic — it can be deleted, not edited.</span>`;
+  form.insertAdjacentHTML('beforeend',
+    `<button type="button" class="dt-addsel txdanger" data-act="delete">Delete</button>` +
+    `<button type="button" class="dt-addsel" data-act="cancel">Cancel</button><span class="err"></span>`);
+  if (editable) form.elements.type.value = t.type;
+  const msg = form.querySelector('.err');
+  const id = encodeURIComponent(t.transactionId);
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const f = form.elements;
+    postManualTx(`&edit=${id}`, { date: f.date.value, type: f.type.value, shares: f.shares.value,
+                                  price: f.price.value, fee: f.fee.value || 0 }, msg);
+  });
+  form.querySelector('[data-act="delete"]').addEventListener('click', () => {
+    if (confirm(`Delete ${what}?`)) postManualTx(`&delete=${id}`, null, msg);
+  });
+  form.querySelector('[data-act="cancel"]').addEventListener('click', () => row.remove());
+  td.appendChild(form);
+  row.appendChild(td);
+  tr.after(row);
+}
+
+/* ---------- new instrument ----------
+   Opened by "+ New instrument…" in the add form. Two look-ups, through start.sh's
+   /instrument-search (add_instrument.py): Look up turns the name typed ("Porsche") into candidates
+   with their ISINs; picking one fills name and ISIN and then asks Yahoo which symbols list that
+   ISIN — the best guess goes in the symbol field, the rest are offered there. The sector starts at
+   "Other" (Yahoo's own sector is only mentioned). Every field stays editable: check the symbol's name in the
+   list, since Yahoo's ISIN search has been wrong before. Adding registers the instrument in
+   registry/ and fetches its prices (via /instrument), which takes a few seconds; the page then
+   knows it without a reload, and it is selected in the add form. */
+const instDialog = document.getElementById('instDialog');
+const fillOptions = (id, values) => document.getElementById(id).replaceChildren(...values.map(v => {
+  const o = document.createElement('option');
+  o.value = v.value ?? v;
+  if (v.label) o.label = v.label;
+  return o;
+}));
+function openInstrumentDialog() {
+  ['instIsin', 'instSymbol', 'instName'].forEach(id => { document.getElementById(id).value = ''; });
+  const groups = [...new Set([...INSTRUMENTS.values()].map(i => i.sector).filter(Boolean).concat('Other'))].sort();
+  const sector = document.getElementById('instSector');
+  sector.replaceChildren(...groups.map(g => new Option(g, g)), new Option('+ New sector…', NEW_SECTOR));
+  sector.value = 'Other';
+  document.getElementById('instCands').replaceChildren();
+  document.getElementById('instMsg').textContent = '';
+  fillOptions('instSymbols', []);
+  instDialog.showModal();
+  document.getElementById('instName').focus();
+}
+// "+ New sector…": a name for a group the map does not have yet, added to the list and picked
+const NEW_SECTOR = '+new';
+document.getElementById('instSector').addEventListener('change', e => {
+  if (e.target.value !== NEW_SECTOR) return;
+  const name = (prompt('Name of the new sector') || '').trim();
+  if (!name) { e.target.value = 'Other'; return; }
+  if (![...e.target.options].some(o => o.value === name)) e.target.insertBefore(new Option(name, name), e.target.lastChild);
+  e.target.value = name;
+});
+// however the dialog closes, an instrument select left on "+ New instrument…" goes back
+instDialog.addEventListener('close', () => {
+  const sel = document.getElementById('txIsin');
+  if (sel.value === NEW_INSTRUMENT) sel.value = TX_ISIN_PREV;
+});
+['instClose', 'instCancel'].forEach(id =>
+  document.getElementById(id).addEventListener('click', () => instDialog.close()));
+
+async function instrumentSearch(kind, q) {
+  const r = await fetch(`instrument-search?${kind}=${encodeURIComponent(q)}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(routeFailure(r));
+  return r.json();
+}
+async function lookUpInstrument() {
+  const q = document.getElementById('instName').value.trim();
+  const box = document.getElementById('instCands'), msg = document.getElementById('instMsg');
+  msg.textContent = '';
+  if (!q) return;
+  box.textContent = 'Searching…';
+  try {
+    const found = await instrumentSearch('find', q);
+    if (!found.length) { box.textContent = 'Nothing found — enter ISIN and symbol yourself.'; return; }
+    box.replaceChildren(...found.map(c => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.innerHTML = `<b>${c.name}</b> <span class="muted">· ${c.type} · ${c.isin}</span>`;
+      b.addEventListener('click', () => pickInstrument(c));
+      return b;
+    }));
+  } catch (err) {
+    box.textContent = '';
+    msg.textContent = err.message === STALE_MSG ? STALE_MSG
+      : `Look-up failed: ${err.message} — enter ISIN and symbol yourself.`;
+  }
+}
+async function pickInstrument(c) {
+  const box = document.getElementById('instCands'), msg = document.getElementById('instMsg');
+  document.getElementById('instName').value = c.name;
+  document.getElementById('instIsin').value = c.isin;
+  box.textContent = `${c.name} · ${c.isin} — asking Yahoo for its symbol…`;
+  try {
+    const listings = await instrumentSearch('symbols', c.isin);
+    fillOptions('instSymbols', listings.map(l => ({ value: l.symbol, label: `${l.exchange} · ${l.name}` })));
+    if (!listings.length) {
+      box.textContent = `${c.name} · ${c.isin} — Yahoo lists no symbol for it; enter one yourself.`;
+      return;
+    }
+    const best = listings[0];
+    document.getElementById('instSymbol').value = best.symbol;
+    // Yahoo's sector is its own taxonomy, not this map's groups — mentioned, never filled in; the
+    // field keeps "Other" until a group is picked by hand
+    const sector = listings.map(l => l.sector).find(Boolean);
+    box.textContent = `${c.name} · ${c.isin} — ${best.symbol} on ${best.exchange}` +
+      (listings.length > 1 ? ` (${listings.length - 1} other listing${listings.length > 2 ? 's' : ''} in the symbol field)` : '') +
+      (sector ? ` · Yahoo calls it ${sector}` : '');
+  } catch (err) {
+    box.textContent = '';
+    msg.textContent = `Yahoo look-up failed: ${err.message} — enter the symbol yourself.`;
+  }
+}
+document.getElementById('instLookup').addEventListener('click', lookUpInstrument);
+// Enter in the name field looks it up, rather than submitting a half-filled form
+document.getElementById('instName').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); lookUpInstrument(); }
+});
+document.getElementById('instForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const val = id => document.getElementById(id).value.trim();
+  const btn = document.getElementById('instSubmit'), msg = document.getElementById('instMsg');
+  msg.textContent = '';
+  btn.disabled = true;
+  btn.textContent = 'Adding — fetching prices…';
+  try {
+    const r = await fetch('instrument', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isin: val('instIsin').toUpperCase(), symbol: val('instSymbol'),
+                             name: val('instName'), sector: val('instSector') }) });
+    if (!r.ok) {
+      const text = (await r.text()).trim();
+      throw new Error(text && !text.startsWith('<') ? text.split('\n').pop() : routeFailure(r));
+    }
+    const { instrument: inst } = await r.json();
+    INSTRUMENTS.set(inst.id, inst);
+    SOURCES.set(inst.id, { id: inst.id, source: 'yahoo', symbol: inst.symbol, quote_currency: inst.quote_currency });
+    const sel = document.getElementById('txIsin');
+    // in its alphabetical place among the others, after the two fixed entries at the top
+    const label = inst.display || inst.name;
+    const after = [...sel.options].slice(2).find(o => o.textContent.localeCompare(label) > 0);
+    sel.insertBefore(txOption(inst), after || null);
+    sel.value = TX_ISIN_PREV = inst.id;
+    instDialog.close();
+    prefillTxPrice();
+  } catch (err) {
+    msg.textContent = err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Add instrument';
+  }
 });
 
 // Runs update_prices.py on whatever's serving this page — see start.sh's own update-prices

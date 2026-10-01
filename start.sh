@@ -46,7 +46,7 @@ fi
 exec python3 -c '
 import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.request
 
-# The seven non-static routes this server answers.
+# The nine non-static routes this server answers.
 #
 # POST /update-prices?profile=NAME — the page'"'"'s "Update prices" button, instead of you running
 # update_prices.py by hand. Runs it with just --profile — the instruments that profile holds,
@@ -81,13 +81,24 @@ import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.
 # Manual profiles only — a Parqet one gets a 403 before anything is written.
 #
 # POST /manual-tx?profile=NAME {date, isin, type, shares, price, fee} — the Config tab'"'"'s "Add
-# transaction", for building a virtual demo portfolio by hand; with &delete=ID instead, removes
-# one. Both run manual_tx.py, which validates, writes manual_ledger.csv and rebuilds the profile.
+# transaction", for building a virtual demo portfolio by hand; with &edit=ID, rewrites that
+# hand-entered row (same body, instrument ignored); with &delete=ID, removes one. Both run manual_tx.py, which validates, writes manual_ledger.csv and rebuilds the profile.
 # Manual profiles only, like the import.
+#
+# GET /instrument-search?find=NAME | ?symbols=ISIN and POST /instrument {isin, symbol, name,
+# sector} — the Transactions tab'"'"'s "new instrument" dialog: instruments by name (with their
+# ISIN), Yahoo'"'"'s listings of the one picked, then registering it (registry/instruments.csv +
+# price_sources.csv) and fetching its prices. All run add_instrument.py; /instrument answers
+# {instrument, log} as JSON, or the reason as text.
 #
 # GET /host — the machine this server runs on, so the page can tell the dev copy from the live one
 # (see markDevHost). Not knowable from the browser: both are reached through localhost or a proxy.
+# Also says whether start.sh has changed on disk since this server started — "stale": the page
+# then asks for a restart, rather than failing on whichever new route this process lacks.
 #
+SELF = os.path.join(os.getcwd(), "start.sh")
+STARTED = os.path.getmtime(SELF)
+
 PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")   # a directory name, never a path
 
 # A profile is controlled by Parqet (REFRESH_PARQET_DATA.md writes its CSVs) or manually (imports
@@ -194,6 +205,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if parsed.path == "/instrument":
+            self.add_instrument()
+            return
         if parsed.path == "/manual-tx":
             self.manual_tx(urllib.parse.parse_qs(parsed.query))
             return
@@ -232,6 +246,28 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def add_instrument(self):
+        try:
+            req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            args = [str(req.get(k) or "") for k in ("isin", "symbol", "name", "sector")]
+        except ValueError:
+            self.send_error(400, "body must be JSON")
+            return
+        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "add_instrument.py")] + args,
+                              capture_output=True, text=True, timeout=240)
+        out = (proc.stdout + proc.stderr).strip()
+        if proc.returncode != 0:
+            self.send_text(400, out)
+            return
+        # the script'"'"'s last line is the new registry row, as JSON; everything above it is the log
+        log, _, last = out.rpartition("\n")
+        body = json.dumps({"instrument": json.loads(last), "log": log}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def manual_tx(self, query):
         data = self.rfile.read(int(self.headers.get("Content-Length") or 0))   # before any refusal
         profile = (query.get("profile") or [""])[0]
@@ -239,16 +275,19 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(403, "not a manual profile")
             return
         delete = (query.get("delete") or [""])[0]
+        edit = (query.get("edit") or [""])[0]
         if delete:
             args = ["delete", delete]
         else:
             try:
                 tx = json.loads(data or b"{}")
-                args = ["add"] + [str(tx.get(k, "")) for k in ("date", "isin", "type", "shares", "price")] \
-                       + [str(tx.get("fee") or 0)]
             except ValueError:
                 self.send_error(400, "body must be JSON")
                 return
+            fields = [str(tx.get(k, "")) for k in ("date", "isin", "type", "shares", "price")] \
+                     + [str(tx.get("fee") or 0)]
+            # an edit keeps its instrument: the id names the row, the rest is what it becomes
+            args = ["edit", edit] + fields[:1] + fields[2:] if edit else ["add"] + fields
         proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "manual_tx.py"), profile] + args,
                               capture_output=True, text=True, timeout=60)
         self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
@@ -303,9 +342,26 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if urllib.parse.urlparse(self.path).path == "/instrument-search":
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            kind = "find" if "find" in query else "symbols"
+            q = (query.get(kind) or [""])[0]
+            proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "add_instrument.py"),
+                                   "--" + kind, q], capture_output=True, text=True, timeout=30)
+            if proc.returncode != 0:
+                self.send_text(502, (proc.stdout + proc.stderr).strip())
+                return
+            body = proc.stdout.strip().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if urllib.parse.urlparse(self.path).path in ("/profiles", "/host"):
             body = json.dumps(list_profiles() if self.path.startswith("/profiles")
-                              else {"host": socket.gethostname()}).encode("utf-8")
+                              else {"host": socket.gethostname(),
+                                    "stale": os.path.getmtime(SELF) != STARTED}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

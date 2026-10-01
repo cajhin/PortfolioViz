@@ -47,15 +47,19 @@ PORTFOLIO = "Trade Republic"
 MANUAL_PORTFOLIO = "Manual"              # where hand-entered rows (account_type MANUAL) book
 LEDGER = "tr_ledger.csv"
 MANUAL_LEDGER = "manual_ledger.csv"      # hand-entered rows, same format — see manual_tx.py
+TR_DELETED = "tr_deleted.csv"            # imported rows deleted on the page — kept out of the rebuild
+                                         # but left in the ledger, so a re-import does not revive them
 REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_class", "name",
             "symbol", "shares", "price", "amount", "fee", "tax", "currency"}
 
 POSITIONS_FIELDS = ["portfolio", "name", "identifier", "assetType", "isSold", "shares", "currency",
                     "currentValue", "purchaseValue", "lastPriceDate", "lastPrice",
                     "realizedGainNet", "unrealizedGainNet", "earliestActivityDate", "activityCount"]
+# Parqet's schema, plus the ledger row each activity came from — what the Transactions tab's delete
+# names. A Parqet profile's activities.csv has no such column, and nothing there is deletable.
 ACTIVITIES_FIELDS = ["portfolio", "name", "identifier", "type", "datetime", "shares", "price",
                      "amount", "amountNet", "fee", "tax", "realizedGains", "realizedGainsNet",
-                     "currency"]
+                     "currency", "transactionId"]
 DIVIDEND_TYPES = {"DIVIDEND", "DISTRIBUTION", "EARNINGS"}
 EPS = 1e-9
 
@@ -154,7 +158,7 @@ def convert(ledger):
             "type": kind, "datetime": t["datetime"], "shares": fmt(shares), "price": fmt(price),
             "amount": fmt(amount, 2), "amountNet": fmt(net, 2), "fee": fmt(fee, 2),
             "tax": fmt(tax, 2), "realizedGains": fmt(rg), "realizedGainsNet": fmt(rgn),
-            "currency": t["currency"] or "EUR"})
+            "currency": t["currency"] or "EUR", "transactionId": t["transaction_id"]})
         if isin:
             first.setdefault(k, t["date"])
             count[k] += 1
@@ -286,6 +290,10 @@ def rebuild(profile, d, tr_rows=None):
     if tr_rows is None:
         path = os.path.join(d, LEDGER)
         tr_rows = read_csv(path) if os.path.exists(path) else []
+    path = os.path.join(d, TR_DELETED)
+    if os.path.exists(path):
+        gone = {r["transaction_id"] for r in read_csv(path)}
+        tr_rows = [r for r in tr_rows if r["transaction_id"] not in gone]
     path = os.path.join(d, MANUAL_LEDGER)
     manual = read_csv(path) if os.path.exists(path) else []
     ledger = sorted(tr_rows + manual, key=lambda r: (r["datetime"], r["transaction_id"]))

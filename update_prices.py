@@ -321,8 +321,10 @@ def main():
             row = future.result()
             if row:
                 latest.append(row)
-    if not args and latest:
-        write_latest(latest, merge=bool(profile))
+    # a partial run — one profile, or one instrument — merges into _latest.csv rather than
+    # replacing it, so every other instrument keeps its row
+    if latest:
+        write_latest(latest, merge=bool(profile or args))
 
 
 if __name__ == "__main__":

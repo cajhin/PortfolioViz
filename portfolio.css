@@ -266,6 +266,11 @@
   td:nth-child(2) { white-space: normal; }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr.sub td { background: color-mix(in srgb, var(--text-primary) 4%, transparent); font-weight: 600; }
+  /* a summary row's label spans the leading columns, so its figures sit at child positions the
+     left-aligning rules above mean for text — every cell after the spanning one is a figure.
+     Scoped by the same table ids as those rules: without an id it loses to them on specificity. */
+  :is(#tbl, #tblClosedPositions, #tblTrades, #tblWatch) tbody tr.sub td[colspan] ~ td {
+    text-align: right; white-space: nowrap; }
   /* Sortable headers. The caret is always in the box and merely invisible until the column is
      sorted, so clicking one never shifts the header text sideways. It sits inside the cell's own
      padding rather than adding to it, which keeps a header flush with the column it labels.
@@ -513,15 +518,33 @@
   .importlog { margin: 8px 0 0; padding: 8px 10px; font-size: 0.78rem; white-space: pre-wrap;
                text-align: left; color: var(--text-secondary); background: transparent;
                border: 1px solid var(--border); border-radius: 6px; max-height: 18em; overflow: auto; }
-  #manualTools { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
-  #manualTools[hidden] { display: none; }
-  #manualTools .importlog { align-self: stretch; }
-  #tblManualTx { font-size: 0.82rem; border-collapse: collapse; }
-  #tblManualTx th, #tblManualTx td { padding: 3px 10px; text-align: right; }
-  #tblManualTx th:nth-child(-n+3), #tblManualTx td:nth-child(-n+3) { text-align: left; }
-  #tblManualTx button { appearance: none; border: 0; background: transparent; cursor: pointer;
-                        color: var(--text-muted); padding: 0 4px; }
-  #tblManualTx button:hover { color: var(--loss); }
+  /* the Transactions tab's manual-profile tools, above and below the list (see #tradesCard) */
+  .txtools { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin: 10px 0; }
+  .txtools[hidden] { display: none; }
+  .txtools .importlog { align-self: stretch; }
+  .txnote { margin: 6px 0 2px; font-size: 0.85rem; color: var(--text-secondary); }
+  .txdel .dt-addsel { padding: 1px 10px; font-size: 0.75rem; }
+  /* the editor row under a transaction: one cell across the table, the form left-aligned in it */
+  tr.txedit td { text-align: left; white-space: normal; padding: 8px 10px;
+                 background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
+  .txdanger { color: var(--loss); }
+  .txdanger:hover { color: var(--loss); border-color: var(--loss); }
+  /* the new-instrument dialog: label above field, in the .liveedit shell */
+  .instform { display: flex; flex-direction: column; gap: 10px; padding: 6px 18px 18px; font-size: 0.85rem;
+              color: var(--text-secondary); }
+  .instform label { display: flex; flex-direction: column; gap: 4px; }
+  .instform .pick { align-self: flex-start; min-width: 12em; }
+  .instform input { font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px;
+                    background: var(--surface-0); color: var(--text-primary); }
+  .instrow { display: flex; gap: 8px; }
+  .instrow input { flex: 1 1 auto; min-width: 0; }
+  .instcands { display: flex; flex-direction: column; gap: 2px; }
+  .instcands button { appearance: none; border: 1px solid var(--border); border-radius: 6px; text-align: left;
+                      background: transparent; color: var(--text-primary); cursor: pointer; font: inherit;
+                      font-size: 0.82rem; padding: 4px 8px; }
+  .instcands button:hover { border-color: var(--text-secondary); }
+  .instcands .muted { color: var(--text-muted); }
+  .instbtns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
   /* each Config row's own label, in one column of equal width so the controls line up */
   .configrow > label:first-child { flex: 0 0 13.5em; }
   .configrow input[type="text"], .configrow input[type="date"], .configrow input[type="number"] {

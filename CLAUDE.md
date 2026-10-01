@@ -14,14 +14,17 @@ start.sh                serves the directory on localhost and opens the page
 update_prices.py   fetches price history per registry/price_sources.csv
 import_tr.py            imports a Trade Republic transaction export into a manual profile, and
                           rebuilds a manual profile's CSVs from its ledgers
-manual_tx.py            adds/deletes a hand-entered buy or sell in a manual profile (demo portfolios)
+manual_tx.py            adds/edits/deletes a transaction in a manual profile (demo portfolios)
+add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
+                          "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
 registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
 private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.csv, plus its own
                           profile.json; gitignored, regenerate the CSVs. A TR-fed profile also
                           has tr_ledger.csv (every TR row imported, by transaction_id),
-                          manual_ledger.csv (hand-entered rows, same format) — its real source;
-                          the two CSVs are rebuilt from both — and exports/ (uploads)
+                          manual_ledger.csv (hand-entered rows, same format), tr_deleted.csv
+                          (imported rows deleted on the page) — its real source; the two CSVs
+                          are rebuilt from these — and exports/ (uploads)
 gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
 gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
 ```
@@ -59,7 +62,9 @@ A profile is controlled **either** by Parqet **or** manually, and `profile.json`
 which: `"parqet"` — refreshed by REFRESH_PARQET_DATA.md, never imported into — or `"manual"` — fed
 by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand (`manual_tx.py`,
 for virtual demo portfolios; booked under portfolio "Manual", so never merged with a real
-position), both from the Config tab, never refreshed from Parqet. A missing `source` counts as Parqet, the side that refuses imports; start.sh,
+position), both on the Transactions tab, never refreshed from Parqet. That tab's "+ New
+instrument…" writes to the **committed** `registry/` (via `add_instrument.py`) — so a page action
+can leave a git change there, which is meant: the registry is the shared catalog. A missing `source` counts as Parqet, the side that refuses imports; start.sh,
 `import_tr.py` and the page all hold to it, so `main` cannot be overwritten by a stray import. Its conversion follows Parqet's conventions and was checked
 against Parqet's own import of the same account; its docstring lists them.
 

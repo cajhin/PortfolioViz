@@ -92,7 +92,9 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     SOURCES = new Map(),          // instrument id → its price source row, for the Source column
     BENCH = [], CCY = 'EUR',
     MODE = 'abs',                                      // 'abs' | 'rel' (vs. the benchmark)
-    VIEW = new URLSearchParams(location.search).get('view') === 'pie' ? 'pie' : 'map',
+    // any of the view switcher's own views; the Transactions tab reloads onto itself this way
+    VIEW = ['pie', 'positions', 'trades', 'watch', 'config']
+      .find(v => v === new URLSearchParams(location.search).get('view')) || 'map',
     AS_OF = null,                                      // an ISO date, or null for "today"
     AS_FROM = null,                                    // an ISO date, or null for "beginning of time"
     PF = [],                                           // [{ name }] — portfolios in draw order

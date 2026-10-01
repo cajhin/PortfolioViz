@@ -139,7 +139,7 @@
             <button type="button" id="btnMap" class="on" aria-pressed="true">Map</button>
             <button type="button" id="btnPie" aria-pressed="false">Pie</button>
             <button type="button" id="btnPositions" aria-pressed="false">Positions</button>
-            <button type="button" id="btnTrades" aria-pressed="false">Trades</button>
+            <button type="button" id="btnTrades" aria-pressed="false">Transactions</button>
             <button type="button" id="btnWatch" aria-pressed="false">Watch</button>
             <button type="button" id="btnConfig" aria-pressed="false">Config</button>
           </div>
@@ -264,17 +264,75 @@
     </div>
 
     <div class="card tablescroll" id="tradesCard" hidden>
+      <!-- which of the two kinds of profile this is decides what else this tab offers (see
+           applyProfileSource): a Parqet one only says where its transactions come from; a manual
+           one gets the import above the list, a delete per row, and "add" below it. #txImport and
+           #txAdd move into #emptyProfile while the profile has nothing yet (showEmptyProfile) —
+           a new profile's first entry is exactly when #app, and this tab with it, is hidden -->
+      <div class="txnote" id="txSourceNote" hidden></div>
+      <div id="txImport" class="txtools" hidden>
+        <form id="trImportForm" class="configrow">
+          <label for="trImportFile">Import Trade Republic file</label>
+          <input type="file" id="trImportFile" accept=".csv,text/csv" required>
+          <button type="submit" class="dt-addsel">Import</button>
+          <button type="button" id="manualReload" class="dt-addsel" hidden>Reload</button>
+        </form>
+        <pre class="importlog" id="trImportLog" hidden></pre>
+      </div>
       <div class="closedhead"><b id="tradesHead"></b></div>
       <table id="tblTrades">
         <thead><tr>
           <th>Date</th><th>Portfolio</th><th>Position</th><th>Type</th><th>Shares</th>
           <th>Price</th>
           <th title="Where the price stands now against what this trade booked, on today's split scale. Green means the trade beat not making it: a buy whose price has risen, a sale whose price has fallen.">Now %</th>
-          <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th>
+          <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th><th id="txDelHead" class="txdel" hidden></th>
         </tr></thead>
         <tbody></tbody>
       </table>
+      <div id="txAdd" class="txtools" hidden>
+        <form id="txForm" class="configrow">
+          <label for="txDate">Add transaction</label>
+          <input type="date" id="txDate" required>
+          <select id="txType" class="pick" aria-label="Type">
+            <option value="buy">Buy</option><option value="sell">Sell</option>
+          </select>
+          <!-- the registry's priced instruments, then "+ New instrument…" (opens #instDialog) -->
+          <select id="txIsin" class="pick" aria-label="Instrument" required></select>
+          <input type="number" id="txShares" min="0" step="any" placeholder="Shares" required>
+          <input type="number" id="txPrice" min="0" step="any" placeholder="Price" required>
+          <input type="number" id="txFee" min="0" step="any" placeholder="Fee" aria-label="Fee">
+          <button type="submit" class="dt-addsel">Add</button>
+          <span class="muted" id="txHint"></span>
+        </form>
+        <div class="err" id="txMsg"></div>
+      </div>
     </div>
+
+    <!-- "+ New instrument…" in the add form: registers an ISIN with a Yahoo symbol (start.sh's
+         /instrument route → add_instrument.py) so a demo portfolio can hold something the registry
+         did not have. Type a name, Look up, pick one: ISIN, symbol and sector fill themselves in
+         (see the dialog's own script), and stay editable. -->
+    <dialog id="instDialog" class="liveedit">
+      <header>
+        <div class="cp-title">New instrument</div>
+        <button type="button" id="instClose" aria-label="Close">✕</button>
+      </header>
+      <form id="instForm" class="instform">
+        <label>Name <span class="instrow"><input type="text" id="instName" required
+          placeholder="e.g. Porsche, or an ISIN" autocomplete="off">
+          <button type="button" id="instLookup" class="dt-addsel">Look up</button></span></label>
+        <div class="instcands" id="instCands"></div>
+        <label>ISIN <input type="text" id="instIsin" maxlength="12" required placeholder="e.g. DE000PAH0038" autocomplete="off"></label>
+        <label>Yahoo symbol <input type="text" id="instSymbol" list="instSymbols" required placeholder="e.g. PAH3.DE" autocomplete="off"></label>
+        <datalist id="instSymbols"></datalist>
+        <label>Sector <select id="instSector" class="pick"></select></label>
+        <div class="err" id="instMsg"></div>
+        <div class="instbtns">
+          <button type="button" id="instCancel" class="dt-addsel">Cancel</button>
+          <button type="submit" class="dt-addsel" id="instSubmit">Add instrument</button>
+        </div>
+      </form>
+    </dialog>
 
     <div class="card tablescroll" id="watchCard" hidden>
       <div class="closedhead"><b id="watchHead"></b></div>
@@ -308,36 +366,6 @@
         <button type="submit" class="dt-addsel">Create</button>
         <span class="err" id="newProfileErr"></span>
       </form>
-      <!-- a manual profile's two ways in: import a TR export, or enter buys and sells by hand (a
-           virtual demo portfolio). Shown for manual profiles only (see applyProfileSource), and
-           moved into #emptyProfile by showEmptyProfile when the profile has nothing yet — a new
-           profile's first entry is exactly when #app, and this tab with it, is hidden -->
-      <div id="manualTools" hidden>
-        <form id="trImportForm" class="configrow">
-          <label for="trImportFile">Import Trade Republic file</label>
-          <input type="file" id="trImportFile" accept=".csv,text/csv" required>
-          <button type="submit" class="dt-addsel">Import</button>
-        </form>
-        <form id="txForm" class="configrow">
-          <label for="txDate">Add transaction</label>
-          <input type="date" id="txDate" required>
-          <select id="txType" class="pick" aria-label="Type">
-            <option value="buy">Buy</option><option value="sell">Sell</option>
-          </select>
-          <select id="txIsin" class="pick" aria-label="Instrument" required></select>
-          <input type="number" id="txShares" min="0" step="any" placeholder="Shares" required>
-          <input type="number" id="txPrice" min="0" step="any" placeholder="Price" required>
-          <input type="number" id="txFee" min="0" step="any" placeholder="Fee" aria-label="Fee">
-          <button type="submit" class="dt-addsel">Add</button>
-          <span class="muted" id="txHint"></span>
-        </form>
-        <table id="tblManualTx" hidden>
-          <thead><tr><th>Date</th><th>Type</th><th>Instrument</th><th>Shares</th><th>Price</th><th>Fee</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <button type="button" id="manualReload" class="dt-addsel" hidden>Reload to see the changes</button>
-        <pre class="importlog" id="trImportLog" hidden></pre>
-      </div>
     </div>
     </div>
     </div>
