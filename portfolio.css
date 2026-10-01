@@ -382,6 +382,22 @@
     font: inherit; font-size: 0.82rem; padding: 5px 12px; line-height: 1.4;
   }
   .dt-addsel:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+  /* Two kinds of control, kept apart by shape. A pill (.dt-addsel, .seg) *does* something or
+     switches a view; a choice from a list (.pick, every <select>) is a box with a chevron, like
+     the text and date fields it sits beside. The chevron is a fixed mid-grey: a background image
+     cannot read the theme's colour variables, and this grey reads on both. */
+  .pick {
+    appearance: none; border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.4'/%3E%3C/svg%3E") no-repeat right 9px center;
+    color: var(--text-primary); font: inherit; font-size: 0.82rem; line-height: 1.4;
+    padding: 4px 26px 4px 9px;
+  }
+  .pick:hover { border-color: var(--text-secondary); }
+  .pick option { color: initial; }
+  #profileSel { text-align: center; text-align-last: center; }
+  /* the range bar on a view it does not apply to (Trades, Watch, Config): still there, so the bar
+     does not jump between views, but visibly out of play — the controls are disabled as well */
+  .chartbar-left.inactive { opacity: 0.35; pointer-events: none; }
   .detail .empty { padding: 28px 0 34px; text-align: center; color: var(--text-muted); }
   .dtline { fill: none; stroke-width: 1.6; }
   .dtline-fill { stroke-dasharray: 4 3; opacity: 0.55; }   /* a bridged gap — price held flat, not real */
@@ -485,7 +501,8 @@
   .runtimeerr { border: 1px solid var(--loss); border-radius: 10px; padding: 8px 12px;
                 margin-bottom: 14px; color: var(--loss); font-size: 0.82rem; }
   .loader { border: 1px dashed var(--border); border-radius: 12px; padding: 22px; text-align: center; color: var(--text-secondary); }
-  .loader input, #emptyProfileSlot select { margin-top: 10px; }
+  /* the file-picker fallback's own input only — not the Config tools showEmptyProfile moves in */
+  #file, #emptyProfileSlot > select { margin-top: 10px; }
   .configrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 0.9rem;
                color: var(--text-secondary); }
   .configrow .muted { color: var(--text-muted); font-size: 0.82rem; }
@@ -496,7 +513,24 @@
   .importlog { margin: 8px 0 0; padding: 8px 10px; font-size: 0.78rem; white-space: pre-wrap;
                text-align: left; color: var(--text-secondary); background: transparent;
                border: 1px solid var(--border); border-radius: 6px; max-height: 18em; overflow: auto; }
-  .configrow input[type="text"] { font: inherit; color: var(--text-primary); background: transparent;
-                                  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px;
-                                  min-width: 16em; }
+  #manualTools { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+  #manualTools[hidden] { display: none; }
+  #manualTools .importlog { align-self: stretch; }
+  #tblManualTx { font-size: 0.82rem; border-collapse: collapse; }
+  #tblManualTx th, #tblManualTx td { padding: 3px 10px; text-align: right; }
+  #tblManualTx th:nth-child(-n+3), #tblManualTx td:nth-child(-n+3) { text-align: left; }
+  #tblManualTx button { appearance: none; border: 0; background: transparent; cursor: pointer;
+                        color: var(--text-muted); padding: 0 4px; }
+  #tblManualTx button:hover { color: var(--loss); }
+  /* each Config row's own label, in one column of equal width so the controls line up */
+  .configrow > label:first-child { flex: 0 0 13.5em; }
+  .configrow input[type="text"], .configrow input[type="date"], .configrow input[type="number"] {
+    font: inherit; color: var(--text-primary); background: transparent;
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  .configrow input[type="text"] { min-width: 16em; }
+  .configrow input[type="number"] { width: 7em; }
+  /* the file field's own text ("No file chosen", or a long export name) must not push Import
+     onto a line of its own */
+  #trImportForm { flex-wrap: nowrap; }
+  #trImportForm input[type="file"] { min-width: 0; max-width: 22em; }
   .err { color: var(--loss); }

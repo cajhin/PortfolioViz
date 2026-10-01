@@ -2,7 +2,10 @@
 """Import a Trade Republic transaction export into a profile, in place of a Parqet refresh.
 
     python3 import_tr.py <profile> <transactions*.csv> [...]
-    python3 import_tr.py <profile>                  # just rebuild from what is already imported
+    python3 import_tr.py <profile>                  # just rebuild from what is already in
+
+Manual profiles only — profile.json's "source": "manual". A Parqet profile (the default when the
+key is missing) is refused, since its CSVs belong to the Parqet refresh.
 
 Trade Republic's export (app → Profile → Transaction export) is one CSV of every booking, each
 with a `transaction_id`. Every row ever imported is kept, untouched, in
@@ -12,7 +15,9 @@ with a `transaction_id`. Every row ever imported is kept, untouched, in
 keyed by that id — so importing the same file twice, or two exports whose date ranges overlap,
 adds only the rows not seen before. The two files the page reads, positions.csv and
 activities.csv, are then rebuilt from the whole ledger on every run, in exactly the schema
-REFRESH_PARQET_DATA.md writes from Parqet. They are output, never input: a fix to the conversion
+REFRESH_PARQET_DATA.md writes from Parqet. Rows entered by hand (manual_tx.py — a virtual demo
+portfolio, say) live in manual_ledger.csv beside it, in the same TR row format, and the rebuild
+reads both. The two CSVs are output, never input: a fix to the conversion
 below is applied by re-running this, not by repairing data.
 
 The conventions are Parqet's, matched against Parqet's own import of the same account:
@@ -39,7 +44,9 @@ from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PORTFOLIO = "Trade Republic"
+MANUAL_PORTFOLIO = "Manual"              # where hand-entered rows (account_type MANUAL) book
 LEDGER = "tr_ledger.csv"
+MANUAL_LEDGER = "manual_ledger.csv"      # hand-entered rows, same format — see manual_tx.py
 REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_class", "name",
             "symbol", "shares", "price", "amount", "fee", "tax", "currency"}
 
@@ -122,36 +129,41 @@ def latest_prices():
 
 
 def convert(ledger):
-    """Ledger rows → (activities, positions, notes). Walks each instrument's history once, FIFO."""
+    """Ledger rows → (activities, positions, notes). Walks each position's history once, FIFO.
+
+    A position is (portfolio, ISIN), as on the page: TR rows book under "Trade Republic", rows
+    entered by hand under "Manual" — so a virtual position never mixes with a real one in the
+    same instrument."""
     registry = registry_names()
     names = {}                                  # ISIN → the name to print, registry first
     activities, notes = [], defaultdict(int)
-    lots = defaultdict(list)                    # ISIN → [[shares, gross price, fee per share]]
-    realized = defaultdict(float)               # ISIN → realised gain net, summed
-    first = {}                                  # ISIN → earliest activity date
+    lots = defaultdict(list)                    # position → [[shares, gross price, fee per share]]
+    realized = defaultdict(float)               # position → realised gain net, summed
+    first = {}                                  # position → earliest activity date
     count = defaultdict(int)
-    last_trade = {}                             # ISIN → (date, price) of the last buy/sell
+    last_trade = {}                             # position → (date, price) of the last buy/sell
     payouts = {(r["symbol"], r["date"]): num(r["amount"]) for r in ledger if r["type"] == "TILG"}
 
-    def row(t, isin, kind, shares, amount, fee=0.0, tax=0.0, net=None, rg=0.0, rgn=0.0):
+    def row(t, k, kind, shares, amount, fee=0.0, tax=0.0, net=None, rg=0.0, rgn=0.0):
         if net is None:
             net = amount + fee if kind == "buy" else amount - tax - fee
         price = amount / shares if shares else 0.0
+        pf, isin = k
         activities.append({
-            "portfolio": PORTFOLIO, "name": names.get(isin, t["name"]), "identifier": isin,
+            "portfolio": pf, "name": names.get(isin, t["name"]), "identifier": isin,
             "type": kind, "datetime": t["datetime"], "shares": fmt(shares), "price": fmt(price),
             "amount": fmt(amount, 2), "amountNet": fmt(net, 2), "fee": fmt(fee, 2),
             "tax": fmt(tax, 2), "realizedGains": fmt(rg), "realizedGainsNet": fmt(rgn),
             "currency": t["currency"] or "EUR"})
         if isin:
-            first.setdefault(isin, t["date"])
-            count[isin] += 1
+            first.setdefault(k, t["date"])
+            count[k] += 1
 
-    def retire(isin, shares):
+    def retire(k, shares):
         """Take `shares` off the oldest lots; return (gross cost, buy fees) of what was taken."""
         cost = fees = 0.0
         left = shares
-        q = lots[isin]
+        q = lots[k]
         while left > EPS and q:
             take = min(left, q[0][0])
             cost += take * q[0][1]
@@ -161,58 +173,59 @@ def convert(ledger):
             if q[0][0] <= EPS:
                 q.pop(0)
         if left > 1e-6:
-            notes[f"{isin}: sold {left:g} more shares than were bought — gain computed on the rest"] += 1
+            notes[f"{k[1]}: sold {left:g} more shares than were bought — gain computed on the rest"] += 1
         return cost, fees
 
     for t in ledger:
         kind, isin = t["type"], t["symbol"]
+        k = (MANUAL_PORTFOLIO if t.get("account_type") == "MANUAL" else PORTFOLIO, isin)
         if isin:
             names.setdefault(isin, (registry.get(isin) or {}).get("name") or t["name"])
         if kind == "BUY":
             shares, amount, fee = num(t["shares"]), -num(t["amount"]), -num(t["fee"])
-            lots[isin].append([shares, amount / shares, fee / shares])
-            row(t, isin, "buy", shares, amount, fee=fee, tax=-num(t["tax"]))
-            last_trade[isin] = (t["date"], amount / shares)
+            lots[k].append([shares, amount / shares, fee / shares])
+            row(t, k, "buy", shares, amount, fee=fee, tax=-num(t["tax"]))
+            last_trade[k] = (t["date"], amount / shares)
         elif kind == "SELL":
             shares, amount = -num(t["shares"]), num(t["amount"])
             fee, tax = -num(t["fee"]), -num(t["tax"])
-            cost, buy_fees = retire(isin, shares)
+            cost, buy_fees = retire(k, shares)
             rg = amount - cost
             rgn = rg - tax - fee - buy_fees
-            realized[isin] += rgn
-            row(t, isin, "sell", shares, amount, fee=fee, tax=tax, rg=rg, rgn=rgn)
-            last_trade[isin] = (t["date"], amount / shares)
+            realized[k] += rgn
+            row(t, k, "sell", shares, amount, fee=fee, tax=tax, rg=rg, rgn=rgn)
+            last_trade[k] = (t["date"], amount / shares)
         elif kind == "WARRANT_EXERCISE":
             shares = -num(t["shares"])
             amount = payouts.get((isin, t["date"]), 0.0)
-            cost, buy_fees = retire(isin, shares)
+            cost, buy_fees = retire(k, shares)
             rg = amount - cost
-            realized[isin] += rg - buy_fees
-            row(t, isin, "sell", shares, amount, rg=rg, rgn=rg - buy_fees)
-            last_trade[isin] = (t["date"], amount / shares if shares else 0.0)
+            realized[k] += rg - buy_fees
+            row(t, k, "sell", shares, amount, rg=rg, rgn=rg - buy_fees)
+            last_trade[k] = (t["date"], amount / shares if shares else 0.0)
         elif kind == "TILG":
             pass                                # folded into its WARRANT_EXERCISE above
         elif kind in DIVIDEND_TYPES:
             amount, tax = num(t["amount"]), -num(t["tax"])
-            row(t, isin, "dividend", num(t["shares"]) or 1.0, amount, tax=tax)
+            row(t, k, "dividend", num(t["shares"]) or 1.0, amount, tax=tax)
         elif kind == "SPLIT":
             # TR states the shares the split *added* (9 held, 4:1 → "27"), not the new total. The
             # lots are rescaled so later sales match up with them; the trades themselves keep the
             # scale they were booked at (Parqet's way).
-            held = sum(l[0] for l in lots[isin])
+            held = sum(l[0] for l in lots[k])
             added = num(t["shares"])
             if held > EPS and added > EPS:
                 ratio = (held + added) / held
-                for l in lots[isin]:
+                for l in lots[k]:
                     l[0] *= ratio
                     l[1] /= ratio
                     l[2] /= ratio
-            first.setdefault(isin, t["date"])
-            count[isin] += 1
+            first.setdefault(k, t["date"])
+            count[k] += 1
         elif kind == "TAX_OPTIMIZATION":
             refund = num(t["tax"])
             names[""] = "Tax optimisation"      # the one row with no ISIN, so this is its name
-            row(t, "", "fees_taxes", 0.0, 0.0, tax=-refund, net=-refund)
+            row(t, k, "fees_taxes", 0.0, 0.0, tax=-refund, net=-refund)
         elif t["category"] == "CASH":
             notes["cash bookings ignored (deposits, transfers, interest)"] += 1
         else:
@@ -220,60 +233,69 @@ def convert(ledger):
 
     latest = latest_prices()
     positions = []
-    for isin in sorted(first):
-        if not isin:
-            continue
-        shares = sum(l[0] for l in lots[isin])
+    for k in sorted(first):
+        pf, isin = k
+        shares = sum(l[0] for l in lots[k])
         if shares < 1e-6:
             shares = 0.0
         # what the shares still held cost, buy fees included — as Parqet's purchaseValue does
-        cost = sum(l[0] * (l[1] + l[2]) for l in lots[isin]) if shares else 0.0
+        cost = sum(l[0] * (l[1] + l[2]) for l in lots[k]) if shares else 0.0
         quote = latest.get(isin)
         if quote and num(quote["close"]) > 0:
             price_date, price = quote["date"], num(quote["close"])
         else:
-            price_date, price = last_trade.get(isin, (first[isin], 0.0))
+            price_date, price = last_trade.get(k, (first[k], 0.0))
             if shares:
                 notes[f"{isin}: no price in gen_prices/_latest.csv — valued at its last trade"] += 1
         value = shares * price
         positions.append({
-            "portfolio": PORTFOLIO, "name": names.get(isin, isin), "identifier": isin,
+            "portfolio": pf, "name": names.get(isin, isin), "identifier": isin,
             "assetType": "security", "isSold": "0" if shares else "1", "shares": fmt(shares),
             "currency": "EUR", "currentValue": fmt(value, 4), "purchaseValue": fmt(cost, 4),
             "lastPriceDate": price_date, "lastPrice": fmt(price),
-            "realizedGainNet": fmt(realized[isin], 2),
+            "realizedGainNet": fmt(realized[k], 2),
             "unrealizedGainNet": fmt(value - cost, 4) if shares else "0",
-            "earliestActivityDate": first[isin], "activityCount": str(count[isin])})
+            "earliestActivityDate": first[k], "activityCount": str(count[k])})
     activities.sort(key=lambda r: r["datetime"])
     return activities, positions, notes
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.exit(f"usage: {sys.argv[0]} <profile> [<transactions.csv> ...]")
-    profile, files = sys.argv[1], sys.argv[2:]
+def manual_profile_dir(profile):
+    """The profile's directory, or exit: it must exist and be marked "source": "manual".
+
+    A Parqet one has its CSVs written by the refresh task, and rebuilding them from these ledgers
+    would throw its other portfolios away — so no key, or any other value, counts as Parqet: the
+    side that refuses."""
     d = os.path.join(ROOT, "private-profiles", profile)
     if not os.path.isdir(d):
         sys.exit(f"no profile {profile!r} — expected {d}/ (create it on the page's Config tab)")
-    ledger_path = os.path.join(d, LEDGER)
+    try:
+        with open(os.path.join(d, "profile.json")) as fh:
+            source = json.load(fh).get("source")
+    except (OSError, ValueError):
+        source = None
+    if source != "manual":
+        sys.exit(f"{profile} is controlled by Parqet, not manually — refusing to change it "
+                 f"(set \"source\": \"manual\" in its profile.json only if that is really meant)")
+    return d
 
-    # A profile fed by Parqet has activities but no ledger. Rebuilding its files from TR alone
-    # would throw its other portfolios away, so the two sources are not mixed.
-    acts = os.path.join(d, "activities.csv")
-    if not os.path.exists(ledger_path) and os.path.exists(acts) and read_csv(acts):
-        sys.exit(f"{profile}: activities.csv already holds data that did not come from a TR "
-                 f"import (a Parqet refresh?) — not overwriting it")
 
-    ledger = merge_into_ledger(ledger_path, files)
-    if not ledger:
-        sys.exit("nothing imported yet — pass a Trade Republic transactions CSV")
+def rebuild(profile, d, tr_rows=None):
+    """positions.csv + activities.csv from both ledgers — the TR imports and the hand-entered rows
+    (manual_tx.py), which share one row format and so one conversion."""
+    if tr_rows is None:
+        path = os.path.join(d, LEDGER)
+        tr_rows = read_csv(path) if os.path.exists(path) else []
+    path = os.path.join(d, MANUAL_LEDGER)
+    manual = read_csv(path) if os.path.exists(path) else []
+    ledger = sorted(tr_rows + manual, key=lambda r: (r["datetime"], r["transaction_id"]))
     activities, positions, notes = convert(ledger)
-    write_csv(acts, ACTIVITIES_FIELDS, activities)
+    write_csv(os.path.join(d, "activities.csv"), ACTIVITIES_FIELDS, activities)
     write_csv(os.path.join(d, "positions.csv"), POSITIONS_FIELDS, positions)
 
     open_n = sum(1 for p in positions if p["isSold"] == "0")
-    print(f"{profile}: {len(ledger)} ledger rows → {len(activities)} activities, "
-          f"{open_n} open and {len(positions) - open_n} closed positions")
+    print(f"{profile}: {len(tr_rows)} imported + {len(manual)} hand-entered rows → "
+          f"{len(activities)} activities, {open_n} open and {len(positions) - open_n} closed positions")
     for note, n in sorted(notes.items()):
         print(f"  {note}" + (f" (×{n})" if n > 1 else ""))
 
@@ -282,6 +304,14 @@ def main():
     if unknown:
         print(f"  not in registry/instruments.csv yet ({len(unknown)}): " + ", ".join(unknown))
         print("  — they show under their export name with no price chart until a row is added")
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(f"usage: {sys.argv[0]} <profile> [<transactions.csv> ...]")
+    profile, files = sys.argv[1], sys.argv[2:]
+    d = manual_profile_dir(profile)
+    rebuild(profile, d, merge_into_ledger(os.path.join(d, LEDGER), files))
 
 
 if __name__ == "__main__":

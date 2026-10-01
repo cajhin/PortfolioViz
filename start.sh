@@ -46,7 +46,7 @@ fi
 exec python3 -c '
 import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.request
 
-# The six non-static routes this server answers.
+# The seven non-static routes this server answers.
 #
 # POST /update-prices?profile=NAME — the page'"'"'s "Update prices" button, instead of you running
 # update_prices.py by hand. Runs it with just --profile — the instruments that profile holds,
@@ -62,11 +62,12 @@ import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.
 # the day'"'"'s 5-minute bars. Nothing is written to disk — the whole point of this route is that
 # it has no memory between requests, unlike every other price this page ever shows.
 #
-# GET /profiles — the page'"'"'s profile picker: one {name, label} per private-profiles/<name>/
+# GET /profiles — the page'"'"'s profile picker: one {name, label, source} per private-profiles/<name>/
 # that has a positions.csv, label from its profile.json when it has one. A static server cannot
 # list a directory in any form a page could rely on, hence a route.
 #
-# POST /profiles {name, label} — the Config tab'"'"'s "Create new profile": creates private-profiles/<name>/
+# POST /profiles {name, label, source} — the Config tab'"'"'s "Create new profile", source "parqet"
+# or "manual" (see SOURCES below): creates private-profiles/<name>/
 # with a profile.json and header-only positions.csv/activities.csv (the schema
 # REFRESH_PARQET_DATA.md writes), ready for its first refresh. 409 if it already exists.
 # POST /profile-label?profile=NAME {label} — the Config tab'"'"'s rename: rewrites only the label
@@ -77,26 +78,37 @@ import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.
 # the body is the export itself. Kept in private-profiles/<name>/exports/ (the record of what
 # was imported), then import_tr.py merges it into that profile — rows already imported are
 # skipped by their transaction_id, so uploading an overlapping or repeated export is harmless.
+# Manual profiles only — a Parqet one gets a 403 before anything is written.
+#
+# POST /manual-tx?profile=NAME {date, isin, type, shares, price, fee} — the Config tab'"'"'s "Add
+# transaction", for building a virtual demo portfolio by hand; with &delete=ID instead, removes
+# one. Both run manual_tx.py, which validates, writes manual_ledger.csv and rebuilds the profile.
+# Manual profiles only, like the import.
 #
 # GET /host — the machine this server runs on, so the page can tell the dev copy from the live one
 # (see markDevHost). Not knowable from the browser: both are reached through localhost or a proxy.
 #
 PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")   # a directory name, never a path
 
+# A profile is controlled by Parqet (REFRESH_PARQET_DATA.md writes its CSVs) or manually (imports
+# from the Config tab). profile.json says which; anything else, or nothing, counts as Parqet — the
+# side that refuses manual imports, so a slip can never overwrite a Parqet export.
+SOURCES = ("parqet", "manual")
+
+def read_profile(name):
+    try:
+        with open(os.path.join(os.getcwd(), "private-profiles", name, "profile.json")) as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        cfg = {}
+    return {"name": name, "label": cfg.get("label") or name,
+            "source": "manual" if cfg.get("source") == "manual" else "parqet"}
+
 def list_profiles():
     root = os.path.join(os.getcwd(), "private-profiles")
-    out = []
-    for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-        d = os.path.join(root, name)
-        if not PROFILE_NAME.match(name) or not os.path.isfile(os.path.join(d, "positions.csv")):
-            continue
-        try:
-            with open(os.path.join(d, "profile.json")) as fh:
-                label = json.load(fh).get("label") or name
-        except (OSError, ValueError):
-            label = name
-        out.append({"name": name, "label": label})
-    return out
+    return [read_profile(name)
+            for name in (sorted(os.listdir(root)) if os.path.isdir(root) else [])
+            if PROFILE_NAME.match(name) and os.path.isfile(os.path.join(root, name, "positions.csv"))]
 
 POSITIONS_HEADER = ("portfolio,name,identifier,assetType,isSold,shares,currency,currentValue,"
                     "purchaseValue,lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,"
@@ -115,11 +127,11 @@ def set_profile_label(name, label):
         fh.write("\n")
     os.replace(tmp, path)
 
-def create_profile(name, label):
+def create_profile(name, label, source):
     d = os.path.join(os.getcwd(), "private-profiles", name)
     os.makedirs(d)                      # FileExistsError if taken — the caller answers 409
     with open(os.path.join(d, "profile.json"), "w") as fh:
-        json.dump({"label": label, "watchlist": []}, fh, indent=2)
+        json.dump({"label": label, "source": source, "watchlist": []}, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     for f, head in (("positions.csv", POSITIONS_HEADER), ("activities.csv", ACTIVITIES_HEADER)):
         with open(os.path.join(d, f), "w") as fh:
@@ -143,13 +155,17 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 name, label = str(req.get("name") or ""), str(req.get("label") or "").strip()
+                source = str(req.get("source") or "")
             except ValueError:
-                name, label = "", ""
+                name, label, source = "", "", ""
             if not PROFILE_NAME.match(name):
                 self.send_error(400, "bad profile name")
                 return
+            if source not in SOURCES:
+                self.send_error(400, "source must be parqet or manual")
+                return
             try:
-                create_profile(name, label or name)
+                create_profile(name, label or name, source)
             except FileExistsError:
                 self.send_error(409, f"profile {name} already exists")
                 return
@@ -178,6 +194,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if parsed.path == "/manual-tx":
+            self.manual_tx(urllib.parse.parse_qs(parsed.query))
+            return
         if parsed.path == "/import-tr":
             self.import_tr(urllib.parse.parse_qs(parsed.query))
             return
@@ -205,15 +224,51 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_text(self, status, text):
+        body = text.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def manual_tx(self, query):
+        data = self.rfile.read(int(self.headers.get("Content-Length") or 0))   # before any refusal
+        profile = (query.get("profile") or [""])[0]
+        if not PROFILE_NAME.match(profile) or read_profile(profile)["source"] != "manual":
+            self.send_error(403, "not a manual profile")
+            return
+        delete = (query.get("delete") or [""])[0]
+        if delete:
+            args = ["delete", delete]
+        else:
+            try:
+                tx = json.loads(data or b"{}")
+                args = ["add"] + [str(tx.get(k, "")) for k in ("date", "isin", "type", "shares", "price")] \
+                       + [str(tx.get("fee") or 0)]
+            except ValueError:
+                self.send_error(400, "body must be JSON")
+                return
+        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "manual_tx.py"), profile] + args,
+                              capture_output=True, text=True, timeout=60)
+        self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
+
     def import_tr(self, query):
+        size = int(self.headers.get("Content-Length") or 0)
+        if not 0 < size <= 20 * 1024 * 1024:
+            self.send_error(400, "empty or oversized upload")
+            return
+        # read before any refusal: answering mid-upload closes the connection under the client,
+        # which then reports a reset instead of the reason
+        data = self.rfile.read(size)
         profile = (query.get("profile") or [""])[0]
         if not PROFILE_NAME.match(profile) or not os.path.isfile(
                 os.path.join(os.getcwd(), "private-profiles", profile, "profile.json")):
             self.send_error(400, "unknown profile")
             return
-        size = int(self.headers.get("Content-Length") or 0)
-        if not 0 < size <= 20 * 1024 * 1024:
-            self.send_error(400, "empty or oversized upload")
+        if read_profile(profile)["source"] != "manual":
+            # ASCII only: the reason goes into the status line, which is latin-1
+            self.send_error(403, f"{profile} is controlled by Parqet - no manual imports")
             return
         # the uploaded name, reduced to something safe to put in a path
         name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename((query.get("name") or [""])[0])).lstrip(".")
@@ -224,7 +279,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         os.makedirs(exports, exist_ok=True)
         path = os.path.join(exports, name)
         with open(path, "wb") as fh:
-            fh.write(self.rfile.read(size))
+            fh.write(data)
         proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "import_tr.py"), profile, path],
                               capture_output=True, text=True, timeout=120)
         if proc.returncode != 0:

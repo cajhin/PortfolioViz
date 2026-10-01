@@ -12,13 +12,16 @@ config.json             settings — timeline start, portfolio currency, benchma
 check_portfolio.js      regression check for both scripts (see below)
 start.sh                serves the directory on localhost and opens the page
 update_prices.py   fetches price history per registry/price_sources.csv
-import_tr.py            imports a Trade Republic transaction export into a profile (instead of Parqet)
+import_tr.py            imports a Trade Republic transaction export into a manual profile, and
+                          rebuilds a manual profile's CSVs from its ledgers
+manual_tx.py            adds/deletes a hand-entered buy or sell in a manual profile (demo portfolios)
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
 registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
 private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.csv, plus its own
                           profile.json; gitignored, regenerate the CSVs. A TR-fed profile also
-                          has tr_ledger.csv (every TR row imported, by transaction_id — its
-                          real source; the two CSVs are rebuilt from it) and exports/ (uploads)
+                          has tr_ledger.csv (every TR row imported, by transaction_id),
+                          manual_ledger.csv (hand-entered rows, same format) — its real source;
+                          the two CSVs are rebuilt from both — and exports/ (uploads)
 gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
 gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
 ```
@@ -52,9 +55,12 @@ every other profile's holdings into it. The page picks the profile from `?profil
 stays shared because the price series are converted into it on write. The Update button runs
 `update_prices.py --profile <p>`, fetching only that profile's instruments.
 
-A profile is fed by **either** Parqet (REFRESH_PARQET_DATA.md) **or** Trade Republic exports
-(`import_tr.py`, or the Config tab's import button) — never both: `import_tr.py` refuses a profile
-whose activities.csv it did not write. Its conversion follows Parqet's conventions and was checked
+A profile is controlled **either** by Parqet **or** manually, and `profile.json`'s `source` says
+which: `"parqet"` — refreshed by REFRESH_PARQET_DATA.md, never imported into — or `"manual"` — fed
+by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand (`manual_tx.py`,
+for virtual demo portfolios; booked under portfolio "Manual", so never merged with a real
+position), both from the Config tab, never refreshed from Parqet. A missing `source` counts as Parqet, the side that refuses imports; start.sh,
+`import_tr.py` and the page all hold to it, so `main` cannot be overwritten by a stray import. Its conversion follows Parqet's conventions and was checked
 against Parqet's own import of the same account; its docstring lists them.
 
 `config.json` is committed, not generated — an agent edits it directly to change the as-of

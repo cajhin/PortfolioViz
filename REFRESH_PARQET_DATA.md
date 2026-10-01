@@ -8,7 +8,9 @@ and write new ones with **exactly the same schema**. `portfolio.html` reads
 not rename those two working filenames or move them out of their profile's directory.
 
 **Which profile.** Refresh one profile at a time — the one the user names, else `main`
-(`config.json`'s `defaultProfile`). Its `profile.json` may carry `"parqetPortfolios": [...]`, the
+(`config.json`'s `defaultProfile`). Only a profile whose `profile.json` says `"source": "parqet"`
+(or has no `source` at all) is yours to refresh; a `"manual"` one is filled by Trade Republic
+imports (`import_tr.py`), and overwriting its CSVs would lose them — stop and say so instead. Its `profile.json` may carry `"parqetPortfolios": [...]`, the
 Parqet portfolio names that belong to it; pull only those. Without that key, pull every portfolio
 the account has. Never touch `profile.json` itself, nor any other profile's directory. A new
 profile is a new directory with a `profile.json` (at least `{"label": "..."}`) — create it only

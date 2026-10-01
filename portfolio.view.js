@@ -2916,7 +2916,9 @@ async function show(view) {
   document.getElementById('chartBody').hidden = !isChart;
   document.getElementById('keyPie').hidden = view !== 'pie';
   document.getElementById('keyMap').hidden = view !== 'map';
-  document.getElementById('asOfWrap').hidden = !rangeUsable;
+  // greyed, not hidden: the bar keeps its layout across views, and the range picked stays in sight
+  // as what the map will show again — just not editable from a view it does not apply to
+  document.getElementById('asOfWrap').classList.toggle('inactive', !rangeUsable);
   document.getElementById('positionsCard').hidden = view !== 'positions';
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
@@ -3314,6 +3316,7 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
   .then(texts => {
     loadSectorColors(texts.pop());
     load(...texts);
+    refreshManualTools();
   })
   .catch(err => {
     if (err && err.message === EMPTY_PROFILE_MSG) { showEmptyProfile(); return; }
@@ -3372,10 +3375,41 @@ function renderProfilePicker() {
       }));
       sel.value = PROFILE;
       sel.hidden = false;
-      document.getElementById('profileLabel').value = list.find(p => p.name === PROFILE).label || PROFILE;
+      const me = list.find(p => p.name === PROFILE);
+      document.getElementById('profileLabel').value = me.label || PROFILE;
+      // every start.sh that knows about profile kinds says one; none at all means the running
+      // server predates this page — say so, rather than let "no source" read as Parqet
+      if (!('source' in me)) staleServer();
+      else applyProfileSource(me.source);
     })
     .catch(() => { sel.hidden = true; });
   sel.addEventListener('change', () => gotoProfile(sel.value));
+}
+
+// A profile is controlled by Parqet or manually (profile.json's "source"; start.sh reads it, and
+// treats anything but "manual" as Parqet). Only a manual one is offered the import — and start.sh
+// and import_tr.py both refuse a Parqet one regardless, so hiding it here is a courtesy, not the
+// guard. Unknown (no /profiles to ask) leaves the import hidden.
+let PROFILE_SOURCE = null;
+function applyProfileSource(source) {
+  PROFILE_SOURCE = source === 'manual' ? 'manual' : 'parqet';
+  const manual = PROFILE_SOURCE === 'manual';
+  document.getElementById('manualTools').hidden = !manual;
+  refreshManualTools();
+  document.getElementById('profileSource').textContent =
+    manual ? '· manual — filled by imports' : '· controlled by Parqet — no manual imports';
+  document.getElementById('emptyProfileHow').innerHTML = manual
+    ? 'Import a Trade Republic transaction export below, then reload.'
+    : 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.';
+}
+
+// start.sh is a long-running process, so it can be older than the page it serves — and then
+// lacks routes this page relies on. Shown where the profile's kind would be, and in the empty
+// profile's note, since both would otherwise be wrong rather than just missing.
+function staleServer() {
+  const msg = 'start.sh is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
+  document.getElementById('profileSource').textContent = '· ' + msg;
+  document.getElementById('emptyProfileHow').textContent = msg;
 }
 
 // The Config tab's first row: renames the current profile's label (profile.json) — the folder,
@@ -3413,8 +3447,9 @@ async function createProfile(label) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   if (!name) { err.textContent = `"${label}" has no letters or digits to name a directory after.`; return; }
   try {
+    const source = document.getElementById('newProfileSource').value;
     const r = await fetch('profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ name, label }) });
+                                        body: JSON.stringify({ name, label, source }) });
     // statusText, not the body: send_error's body is an HTML page, its status line the message
     if (!r.ok) throw new Error(r.statusText || `HTTP ${r.status}`);
     gotoProfile(name);
@@ -3433,9 +3468,11 @@ document.getElementById('newProfileForm').addEventListener('submit', e => {
 // way out short of editing the URL.
 function showEmptyProfile() {
   document.getElementById('emptyProfileName').textContent = PROFILE;
+  if (!PROFILE_SOURCE) document.getElementById('emptyProfileHow').textContent = 'Fill it, then reload.';
   const slot = document.getElementById('emptyProfileSlot');
   slot.appendChild(document.getElementById('profileSel'));
-  slot.appendChild(document.getElementById('trImport'));
+  slot.appendChild(document.getElementById('manualTools'));
+  refreshManualTools();
   document.getElementById('emptyProfile').hidden = false;
 }
 
@@ -3458,14 +3495,125 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
     const text = (await r.text()).trim();
     // a route-level refusal (send_error) comes back as an HTML page — its status line says it
     log.textContent = r.ok || !text.startsWith('<') ? text : `${r.status} ${r.statusText}`;
-    if (r.ok) document.getElementById('trImportReload').hidden = false;
+    if (r.ok) document.getElementById('manualReload').hidden = false;
   } catch (err) {
     log.textContent = `Import failed: ${err.message}`;
   } finally {
     btn.disabled = false;
   }
 });
-document.getElementById('trImportReload').addEventListener('click', () => location.reload());
+document.getElementById('manualReload').addEventListener('click', () => location.reload());
+
+// "Add transaction": buys and sells entered by hand, for a virtual demo portfolio. start.sh's
+// /manual-tx route runs manual_tx.py, which validates (instrument in the registry, no sale beyond
+// what is held, no future date), writes the profile's manual_ledger.csv and rebuilds its CSVs.
+// The instruments offered are the registry's priced ones — a virtual position is tracked by its
+// price series, so one without a series would have nothing to show — and the price is prefilled
+// with that series' close on the date picked, editable after.
+//
+// Two things must be in hand before this can draw: the profile's kind (from /profiles, see
+// applyProfileSource) and the registry (from ingest). Either can land first, so both call this and
+// it simply waits for the other.
+function refreshManualTools() {
+  if (PROFILE_SOURCE !== 'manual' || !INSTRUMENTS.size) return;
+  const sel = document.getElementById('txIsin');
+  if (!sel.options.length) {
+    const priced = [...new Set(INSTRUMENTS.values())]
+      .filter(inst => (SOURCES.get(inst.id) || {}).symbol)
+      .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
+    sel.replaceChildren(...priced.map(inst => {
+      const o = document.createElement('option');
+      o.value = inst.id;
+      o.textContent = inst.display || inst.name;
+      return o;
+    }));
+    const day = document.getElementById('txDate');
+    day.max = TODAY;
+    if (!day.value) day.value = TODAY;
+    prefillTxPrice();
+  }
+  renderManualTx();
+}
+
+let PREFILL_TOKEN = 0;
+async function prefillTxPrice() {
+  const isin = document.getElementById('txIsin').value, day = document.getElementById('txDate').value;
+  const hint = document.getElementById('txHint');
+  if (!isin || !day) return;
+  const token = ++PREFILL_TOKEN;
+  const series = await loadSeries(seriesSlug({ identifier: isin }));
+  if (token !== PREFILL_TOKEN) return;                 // a newer pick is on its way
+  const i = series ? lastIndexAtOrBefore(series.rows, day) : -1;
+  if (i < 0) { hint.textContent = 'no price on file for that date'; return; }
+  const row = series.rows[i];
+  document.getElementById('txPrice').value = +row.close.toFixed(4);
+  hint.textContent = `close on ${row.date}`;
+}
+['txIsin', 'txDate'].forEach(id => document.getElementById(id).addEventListener('change', prefillTxPrice));
+
+// The hand-entered rows, newest first, each with a delete. Read straight off manual_ledger.csv —
+// a static file like the rest — so it shows what is actually stored, not what this page sent.
+async function renderManualTx() {
+  const table = document.getElementById('tblManualTx');
+  let rows = [];
+  try {
+    const r = await fetch(profilePath('manual_ledger.csv'), { cache: 'no-store' });
+    if (r.ok) rows = parseCSV(await r.text());
+  } catch { /* none yet */ }
+  table.hidden = !rows.length;
+  rows.sort((a, b) => a.datetime < b.datetime ? 1 : -1);
+  document.querySelector('#tblManualTx tbody').replaceChildren(...rows.map(t => {
+    const tr = document.createElement('tr');
+    const inst = INSTRUMENTS.get(t.symbol);
+    tr.innerHTML =
+      `<td>${t.date}</td><td>${t.type === 'BUY' ? 'Buy' : 'Sell'}</td>` +
+      `<td>${inst ? inst.display || inst.name : t.symbol}</td>` +
+      `<td>${Math.abs(num(t.shares))}</td><td>${fmtMoney2(num(t.price))}</td>` +
+      `<td>${num(t.fee) ? fmtMoney2(-num(t.fee)) : '–'}</td>`;
+    const td = document.createElement('td');
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '✕';
+    del.title = 'Delete this transaction';
+    del.addEventListener('click', () => {
+      if (confirm(`Delete ${t.date} ${t.type.toLowerCase()} of ${tr.children[2].textContent}?`)) {
+        postManualTx(`&delete=${encodeURIComponent(t.transaction_id)}`, null);
+      }
+    });
+    td.appendChild(del);
+    tr.appendChild(td);
+    return tr;
+  }));
+}
+
+// Both the add and the delete: manual_tx.py's own report (or refusal — "cannot sell 50, only 6
+// held") goes in the log as-is, and a success redraws the list and offers the reload that brings
+// the rebuilt CSVs into the charts.
+async function postManualTx(query, tx) {
+  const log = document.getElementById('trImportLog');
+  log.hidden = false;
+  try {
+    const r = await fetch(`manual-tx?profile=${encodeURIComponent(PROFILE)}${query}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tx || {}) });
+    const text = (await r.text()).trim();
+    log.textContent = r.ok || !text.startsWith('<') ? text : `${r.status} ${r.statusText}`;
+    if (r.ok) {
+      document.getElementById('manualReload').hidden = false;
+      renderManualTx();
+    }
+    return r.ok;
+  } catch (err) {
+    log.textContent = `Failed: ${err.message}`;
+    return false;
+  }
+}
+document.getElementById('txForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const val = id => document.getElementById(id).value;
+  const ok = await postManualTx('', { date: val('txDate'), isin: val('txIsin'), type: val('txType'),
+                                      shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
+  if (ok) document.getElementById('txShares').value = '';
+});
 
 // Runs update_prices.py on whatever's serving this page — see start.sh's own update-prices
 // route, the only thing here that isn't a plain static file. A reload afterwards is simpler and
