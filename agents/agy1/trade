@@ -1,0 +1,5 @@
+#!/bin/sh
+# agy1's trading tool: scripts/trade.py, bound to the account agy1 — trade.py refuses any other
+# while TRADE_ACCOUNT is set. For an agent whose host enforces no permissions of its own (Antigravity
+# here), this binding holds only as long as the agent calls this wrapper rather than trade.py itself.
+TRADE_ACCOUNT=agy1 exec python3 "$(dirname "$0")/../../scripts/trade.py" "$@"

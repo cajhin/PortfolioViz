@@ -56,3 +56,6 @@ US30231G1022,US30231G1022,exxonmobil,Exxon Mobil,Exxon Mobil,security,EUR,Other,
 IE00B53SZB19,IE00B53SZB19,isharesnasdaq100ucit,iShares NASDAQ-100 UCITS ETF USD Acc.,iShares NASDAQ-100 UCITS ETF USD Acc.,security,EUR,Other,registered by trade.py on a first buy
 IE00BMC38736,IE00BMC38736,vanecksemiconductoru,VanEck Semiconductor UCITS ETF USD Acc.,VanEck Semiconductor UCITS ETF USD Acc.,security,EUR,Other,registered by trade.py on a first buy
 IE00B42NKQ00,IE00B42NKQ00,isharessp500energyse,iShares S&P 500 Energy Sector UCITS ETF USD Acc.,iShares S&P 500 Energy Sector UCITS ETF USD Acc.,security,EUR,Other,registered by trade.py on a first buy
+IE00B4L5YX21,IE00B4L5YX21,isharescoremscijapan,iShares Core MSCI Japan IMI UCITS ETF USD Acc.,iShares Core MSCI Japan IMI UCITS ETF USD Acc.,security,EUR,Other,registered by trade.py on a first buy
+IE00B43HR379,IE00B43HR379,isharessp500healthca,iShares S&P 500 Health Care Sector UCITS ETF USD Acc.,iShares S&P 500 Health Care Sector UCITS ETF USD Acc.,security,EUR,Other,registered by trade.py on a first buy
+US69608A1088,US69608A1088,palantir,Palantir,Palantir,security,EUR,Other,registered by trade.py on a first buy
