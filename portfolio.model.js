@@ -26,16 +26,20 @@
      dividends            attributing income to the lots that earned it
      display names        trimming legal boilerplate off a position's full name
      build                CSV rows → the position objects every renderer consumes
-     ingest               config + registry + the Parqet export in, the whole model out
+     ingest               config + profile + registry + the Parqet export in, the whole model out
 
    Two rules the code holds to, worth keeping: a position is identified by portfolio *and*
    identifier (the same ISIN can live in two portfolios with separate histories), and money
    figures are always pre-tax unless the name says otherwise.
 
    Three input directories, by lifecycle — the distinction is worth preserving:
-     private-parqet/ IMPORTED  regenerated wholesale by the refresh task; never hand-edited
-     registry/       CURATED   what exists and where its prices come from; never overwritten
-     gen_prices/     DERIVED   reproducible from registry/price_sources.csv alone
+     private-profiles/<p>/ IMPORTED  one profile's holdings, regenerated wholesale by the refresh
+                                     task; never hand-edited (bar its own profile.json)
+     registry/             CURATED   what exists and where its prices come from; never overwritten
+     gen_prices/           DERIVED   reproducible from registry/price_sources.csv alone
+   Only the first is per profile. The registry and the price series are shared by every profile —
+   an instrument is the same thing whoever holds it — so a profile sees just the slice of the
+   registry it holds or watches (see watchedInstruments).
    Every close in gen_prices/ is already in the portfolio currency — update_prices.py
    converts on write and keeps the untouched quote alongside — so nothing here does FX.
    gen_prices/ also outranks the export on price: anywhere _latest.csv is fresher than Parqet's own
@@ -44,8 +48,13 @@
 
 /* ---------- files ---------- */
 const CONFIG_PATH = 'config.json';   // tunable settings an agent maintains — see its own comments
-const CSV_PATH = 'private-parqet/positions.csv';
-const TRADES_PATH = 'private-parqet/activities.csv';
+// One directory per profile: its Parqet export plus a profile.json whose keys override config.json's
+// (see mergeConfig). Which one is read is PROFILE below — the ?profile= URL parameter, else
+// config.json's defaultProfile — so these are functions of it rather than fixed strings.
+const profilePath = file => `private-profiles/${PROFILE}/${file}`;
+const PROFILE_CONFIG_PATH = () => profilePath('profile.json');
+const CSV_PATH = () => profilePath('positions.csv');
+const TRADES_PATH = () => profilePath('activities.csv');
 // registry/ is curated: what exists, and what each instrument is called. It is keyed by ISIN and
 // is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
@@ -73,6 +82,8 @@ const LATEST_PATH = 'gen_prices/_latest.csv';
    AS_FROM is the other end of the same pick: with it set the map answers "what happened between
    these two dates" rather than "what has happened up to this date", and every basis figure is
    re-based onto that start date (see rebaseLots).
+   PROFILE is settled once at startup (see resolveProfile) and never changes without a reload;
+   WATCHLIST is that profile's own list of instruments it tracks without holding.
    TIMELINE_START / BENCH_LABEL start at sensible defaults and are overwritten by ingest() from
    config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
@@ -86,7 +97,9 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     AS_FROM = null,                                    // an ISO date, or null for "beginning of time"
     PF = [],                                           // [{ name }] — portfolios in draw order
     TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
-    TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World';
+    TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World',
+    PROFILE = new URLSearchParams(location.search).get('profile') || '',
+    WATCHLIST = new Set();                             // ids from the profile's "watchlist" key
 
 /* ---------- CSV ---------- */
 function parseCSV(text) {
@@ -224,6 +237,38 @@ function xirr(flows) {
     if (flo * fm <= 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
   }
   return ((lo + hi) / 2) * 100;
+}
+
+// The profile named in the URL wins; failing that, config.json's defaultProfile, then "main".
+// Called by the view once config.json is in hand, before any profile file is asked for.
+function resolveProfile(configText) {
+  if (PROFILE) return PROFILE;
+  let cfg = {};
+  try { cfg = configText ? JSON.parse(configText) : {}; } catch { /* keep the fallback */ }
+  return (PROFILE = cfg.defaultProfile || 'main');
+}
+
+// config.json with the profile's own keys laid over it, back as text so ingest() and
+// benchSeriesPath() read one settings file exactly as before. Flat keys, so a shallow merge is the
+// whole job. `currency` is the one key a profile cannot override: update_prices.py converts every
+// series into it on write, and those series are shared by all profiles.
+function mergeConfig(configText, profileText) {
+  const parse = t => { try { return t ? JSON.parse(t) : {}; } catch { return {}; } };
+  const base = parse(configText), own = parse(profileText);
+  delete own.currency;
+  return JSON.stringify({ ...base, ...own });
+}
+
+// Registry instruments this profile tracks without holding them, open or closed: the ones its
+// watchlist names. The registry itself is shared, so "listed but not held" would be every other
+// profile's holdings too — the explicit list is what keeps one profile's names out of another's.
+// INSTRUMENTS carries each row under both its id and its ISIN (equal, for a security), so de-dupe
+// by object identity rather than trusting the map's own size.
+function watchedInstruments() {
+  const held = new Set([...ITEMS, ...CLOSED].map(d => d.identifier));
+  return [...new Set(INSTRUMENTS.values())]
+    .filter(inst => WATCHLIST.has(inst.id) || WATCHLIST.has(inst.isin))
+    .filter(inst => !held.has(inst.id) && !held.has(inst.isin));
 }
 
 // The benchmark is an instrument like any other now, so its series has no dedicated path — it is
@@ -1170,8 +1215,13 @@ function totals(rows) {
   return { cur, pur, gain: cur - pur, rel: rows.reduce((s, d) => s + (d.relPre ?? d.rel), 0) };
 }
 
+// What ingest() throws for a positions file with no open position in it — a freshly created
+// profile, before its first refresh. The view tells this apart from a real failure by it.
+const EMPTY_PROFILE_MSG = 'no rows with a positive value';
+
 /* ---------- ingest ----------
-   config.json plus the six CSVs in, the whole model out. Called by load() in portfolio.view.js,
+   config.json (already merged with the profile's own, see mergeConfig) plus the six CSVs in, the
+   whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
 function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText) {
   // malformed or missing config.json keeps the built-in defaults rather than failing the page —
@@ -1182,6 +1232,7 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
     if (cfg.timelineStart) TIMELINE_START = cfg.timelineStart;
     if (cfg.benchmarkLabel) BENCH_LABEL = cfg.benchmarkLabel;
     if (cfg.benchmarkIsin) benchIsin = cfg.benchmarkIsin;
+    WATCHLIST = new Set(Array.isArray(cfg.watchlist) ? cfg.watchlist : []);
   } catch { /* keep defaults */ }
 
   // one registry row per instrument, indexed by ISIN. NAMES/SECTORS stay as they were so every
@@ -1218,5 +1269,5 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
   const all = build(parseCSV(text));
   ITEMS = all.filter(d => !d.sold);
   CLOSED = all.filter(d => d.sold).sort((a, b) => b.rel - a.rel);
-  if (!ITEMS.length) throw new Error('no rows with a positive value');
+  if (!ITEMS.length) throw new Error(EMPTY_PROFILE_MSG);
 }

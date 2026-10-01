@@ -6,8 +6,14 @@ the single place that maps an instrument to a source, a symbol and a quote curre
 answer "what am I tracking, and from where?" by reading one table instead of opening every series.
 
     python3 update_prices.py                       # update every instrument in the registry
+    python3 update_prices.py --profile main        # just what that profile holds/watches/benchmarks
     python3 update_prices.py roche                 # just this one (slug or id)
     python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
+
+The registry and gen_prices/ are shared by every profile, so --profile narrows the run rather
+than redirecting it: the instruments in private-profiles/<name>/'s positions and activities (open
+and closed alike — a closed position's series keeps extending), its profile.json watchlist, and
+its benchmark. _latest.csv is then merged into, not rewritten, so other profiles' rows survive.
 
 One row per instrument, keyed by its registry `id` — not by ISIN, since a synthetic instrument
 (a benchmark, a second listing kept as its own row for a thin ISIN) may not have one. If a listing
@@ -28,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+PROFILES = os.path.join(ROOT, "private-profiles")
 DIR = os.path.join(ROOT, "gen_prices")
 FX_DIR = os.path.join(ROOT, "gen_fx")
 REGISTRY = os.path.join(ROOT, "registry")
@@ -53,6 +60,29 @@ def timeline_start():
 
 def portfolio_currency():
     return config().get("currency") or "EUR"
+
+
+def profile_instruments(name):
+    """Every id a profile has any use for a series of: held ever, watched, or benchmarked."""
+    d = os.path.join(PROFILES, name)
+    if not os.path.isfile(os.path.join(d, "positions.csv")):
+        sys.exit(f"no profile {name!r} — expected {d}/positions.csv")
+    ids = set()
+    for f in ("positions.csv", "activities.csv"):
+        path = os.path.join(d, f)
+        if os.path.exists(path):
+            with open(path) as fh:
+                ids |= {r["identifier"] for r in csv.DictReader(fh) if r.get("identifier")}
+    try:
+        with open(os.path.join(d, "profile.json")) as fh:
+            own = json.load(fh)
+    except (OSError, ValueError):
+        own = {}
+    ids |= set(own.get("watchlist") or [])
+    bench = own.get("benchmarkIsin") or config().get("benchmarkIsin")
+    if bench:
+        ids.add(bench)
+    return ids
 
 
 def read_registry(name):
@@ -215,9 +245,17 @@ def update_one(inst, src, backfill=None):
     return {"id": iid, "date": last["date"], "close": last["close"], "source": last["source"]}
 
 
-def write_latest(latest):
-    """The freshest close per instrument — what the page reads instead of a hand-kept price file."""
+def write_latest(latest, merge=False):
+    """The freshest close per instrument — what the page reads instead of a hand-kept price file.
+
+    merge keeps the rows of instruments this run did not touch — a --profile run covers only a
+    slice of the registry, and the other profiles still read this same file."""
     path = os.path.join(DIR, "_latest.csv")
+    if merge and os.path.exists(path):
+        with open(path) as fh:
+            kept = {r["id"]: r for r in csv.DictReader(fh) if r.get("id")}
+        kept.update({r["id"]: r for r in latest})
+        latest = list(kept.values())
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=["id", "date", "close", "source"])
         w.writeheader()
@@ -232,8 +270,13 @@ def main():
         i = args.index("--from")
         backfill = args[i + 1]
         del args[i:i + 2]
-    if len(args) > 1:
-        sys.exit(f"usage: {sys.argv[0]} [<slug|id>] [--from YYYY-MM-DD]")
+    profile = None
+    if "--profile" in args:
+        i = args.index("--profile")
+        profile = args[i + 1]
+        del args[i:i + 2]
+    if len(args) > 1 or (args and profile):
+        sys.exit(f"usage: {sys.argv[0]} [<slug|id> | --profile NAME] [--from YYYY-MM-DD]")
 
     instruments = {r["id"]: r for r in read_registry("instruments.csv")}
     sources = {}
@@ -249,6 +292,10 @@ def main():
         wanted = [i for i in instruments.values() if key in (i["id"], i["slug"])]
         if not wanted:
             sys.exit(f"no instrument matching {key!r} in registry/instruments.csv")
+    if profile:
+        relevant = profile_instruments(profile)
+        wanted = [i for i in instruments.values() if i["id"] in relevant or i["isin"] in relevant]
+        print(f"profile {profile}: {len(wanted)} of {len(instruments)} instruments")
 
     # "manual" with no symbol is the registry's way of marking an instrument dead — an expired
     # warrant, mainly — nothing to fetch, so it never earns a place in the pool or the log
@@ -275,7 +322,7 @@ def main():
             if row:
                 latest.append(row)
     if not args and latest:
-        write_latest(latest)
+        write_latest(latest, merge=bool(profile))
 
 
 if __name__ == "__main__":

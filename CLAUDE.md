@@ -8,19 +8,23 @@ portfolio.html          markup only; loads the css and the two scripts, in that 
 portfolio.css
 portfolio.model.js      data and arithmetic — never touches the DOM
 portfolio.view.js       everything that reads or writes the page
-config.json             settings — timeline start, portfolio currency, which ISIN is the benchmark
+config.json             settings — timeline start, portfolio currency, benchmark ISIN, default profile
 check_portfolio.js      regression check for both scripts (see below)
 start.sh                serves the directory on localhost and opens the page
 update_prices.py   fetches price history per registry/price_sources.csv
+import_tr.py            imports a Trade Republic transaction export into a profile (instead of Parqet)
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
 registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
-private-parqet/*.csv    IMPORTED — positions and trades; gitignored, regenerate them
+private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.csv, plus its own
+                          profile.json; gitignored, regenerate the CSVs. A TR-fed profile also
+                          has tr_ledger.csv (every TR row imported, by transaction_id — its
+                          real source; the two CSVs are rebuilt from it) and exports/ (uploads)
 gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
 gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
 ```
 
 The three data directories differ by **lifecycle**, and that is the distinction to preserve:
-`private-parqet/` is overwritten wholesale by the refresh task, `registry/` is hand- or agent-maintained
+`private-profiles/<p>/` is overwritten wholesale by the refresh task (all but its `profile.json`), `registry/` is hand- or agent-maintained
 and must never be clobbered by an import, and `gen_prices/` + `gen_fx/` are reproducible from
 `registry/price_sources.csv` alone.
 
@@ -35,6 +39,23 @@ FX. An instrument may be listed with no matching Parqet holding — that is how 
 watchlist name gets charted. Cash accounts are not tracked at all: `build()` drops the export's
 cash rows, so nothing downstream has ever seen one. They have no price series and no dated balance
 history, so no past date could be reconstructed for them.
+
+**Profiles.** The page can show several portfolios (profiles of the same person — no access
+control). Only `private-profiles/<p>/` is per profile; `registry/`, `gen_prices/`, `gen_fx/` and the
+browser's localStorage are shared, since an instrument is the same thing whoever holds it. So the
+registry is the union of every profile's instruments, and a profile sees only its slice: what its
+CSVs hold (open or closed), its `profile.json` `watchlist`, and its benchmark. Being in the
+registry without being held is **not** enough to show up in a profile's watchlist — that would leak
+every other profile's holdings into it. The page picks the profile from `?profile=`, else
+`config.json`'s `defaultProfile`; `profile.json` keys override `config.json`'s (flat, shallow —
+`label`, `watchlist`, `benchmarkIsin`, `benchmarkLabel`, `timelineStart`), except `currency`, which
+stays shared because the price series are converted into it on write. The Update button runs
+`update_prices.py --profile <p>`, fetching only that profile's instruments.
+
+A profile is fed by **either** Parqet (REFRESH_PARQET_DATA.md) **or** Trade Republic exports
+(`import_tr.py`, or the Config tab's import button) — never both: `import_tr.py` refuses a profile
+whose activities.csv it did not write. Its conversion follows Parqet's conventions and was checked
+against Parqet's own import of the same account; its docstring lists them.
 
 `config.json` is committed, not generated — an agent edits it directly to change the as-of
 picker's earliest date, the portfolio currency, or which ISIN is the benchmark. `ingest()` reads it
@@ -67,6 +88,7 @@ figure and every rendered tooltip. Around any edit:
 ```bash
 node check_portfolio.js --save     # before: record what the code does today
 node check_portfolio.js            # after: diff against it
+node check_portfolio.js --profile x [--save]   # another profile, against check_baseline.x.json
 ```
 
 A clean run means the numbers and the rendered text are untouched — worth having after any
@@ -78,7 +100,7 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-`private-parqet/`, `gen_prices/`, `gen_fx/` and `check_baseline.json` hold real position values and are gitignored
+`private-profiles/`, `gen_prices/`, `gen_fx/` and `check_baseline*.json` hold real position values and are gitignored
 — never commit them, and don't paste figures from them into commit messages or issues.
 
 `registry/*.csv` is the exception and **is** committed: two small tables no import can rebuild, and

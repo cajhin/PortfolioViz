@@ -12,13 +12,21 @@
 <link rel="stylesheet" href="portfolio.css">
 </head>
 <body>
-<div class="verttitle" aria-hidden="true">Portfolio Viz</div>
+<div class="verttitle" id="vertTitle" aria-hidden="true">Portfolio Viz</div>
 <div class="wrap">
   <div id="loader" class="loader" hidden>
     <div>Could not read <code>parqet/positions.csv</code> automatically (browsers block local file reads from <code>file://</code>).</div>
     <div>Pick the file, or serve the folder with <code>python3 -m http.server</code>.</div>
     <input type="file" id="file" accept=".csv,text/csv">
     <div class="err" id="err"></div>
+  </div>
+  <!-- in place of #app when the profile has no positions yet (see showEmptyProfile), which moves
+       the profile picker in here — #app, where it normally lives, stays hidden -->
+  <div id="emptyProfile" class="loader" hidden>
+    <div>Profile <b id="emptyProfileName"></b> has no positions yet. Import a Trade Republic
+      transaction export below, or pull its Parqet data (ask Claude to follow
+      <code>REFRESH_PARQET_DATA.md</code> for it) and reload.</div>
+    <div id="emptyProfileSlot"></div>
   </div>
 
   <div id="app" hidden>
@@ -43,9 +51,14 @@
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
         <!-- not a tile: a footnote about the data itself, parked in the space the tiles leave -->
         <span class="datastamp" id="dataStamp"></span>
-        <!-- POSTs to start.sh's own server (see its update-prices route) — nothing to do with
-             ingest()/load(); a plain page served any other way has nowhere to send this. -->
-        <button type="button" id="btnUpdatePrices" class="dt-addsel">Update</button>
+        <!-- the profile picker (filled from start.sh's /profiles route, see renderProfilePicker)
+             stacked over Update, which POSTs to start.sh's own server (see its update-prices
+             route) for that profile — nothing to do with ingest()/load(); a plain page served any
+             other way has nowhere to send either, and the picker stays hidden there. -->
+        <div class="updatecol">
+          <select id="profileSel" class="dt-addsel" aria-label="Profile" hidden></select>
+          <button type="button" id="btnUpdatePrices" class="dt-addsel">Update</button>
+        </div>
       </div>
       <div class="tip" id="curTip"></div>
     </div>
@@ -130,6 +143,7 @@
             <button type="button" id="btnPositions" aria-pressed="false">Positions</button>
             <button type="button" id="btnTrades" aria-pressed="false">Trades</button>
             <button type="button" id="btnWatch" aria-pressed="false">Watch</button>
+            <button type="button" id="btnConfig" aria-pressed="false">Config</button>
           </div>
         </div>
       </div>
@@ -272,6 +286,36 @@
         </tr></thead>
         <tbody></tbody>
       </table>
+    </div>
+
+    <!-- settings that act on the server rather than on the view; each POSTs to start.sh, so a page
+         served any other way gets an error back from it (see createProfile) -->
+    <div class="card" id="configCard" hidden>
+      <!-- renames the label only (profile.json); the folder, shown alongside, keeps its name -->
+      <form id="profileLabelForm" class="configrow">
+        <label for="profileLabel">Current profile</label>
+        <input type="text" id="profileLabel" required>
+        <span class="muted" id="profileFolder"></span>
+        <button type="submit" class="dt-addsel">Rename</button>
+        <span id="profileLabelMsg"></span>
+      </form>
+      <form id="newProfileForm" class="configrow">
+        <label for="newProfileName">Create new profile</label>
+        <input type="text" id="newProfileName" placeholder="Name, e.g. Family Trust" required>
+        <button type="submit" class="dt-addsel">Create</button>
+        <span class="err" id="newProfileErr"></span>
+      </form>
+      <!-- moved into #emptyProfile by showEmptyProfile when the profile has nothing yet — a new
+           profile's first import is exactly when #app, and this tab with it, is hidden -->
+      <div id="trImport">
+        <form id="trImportForm" class="configrow">
+          <label for="trImportFile">Import Trade Republic file</label>
+          <input type="file" id="trImportFile" accept=".csv,text/csv" required>
+          <button type="submit" class="dt-addsel">Import</button>
+          <button type="button" id="trImportReload" class="dt-addsel" hidden>Reload</button>
+        </form>
+        <pre class="importlog" id="trImportLog" hidden></pre>
+      </div>
     </div>
     </div>
     </div>

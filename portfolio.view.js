@@ -909,16 +909,13 @@ function renderTrades() {
   applySort('tblTrades');
 }
 
-// Every registry instrument with no matching holding, open or closed — the point of a row here
-// with nothing to trade against it. INSTRUMENTS carries each row under both its id and its ISIN
-// (equal, for a security), so de-dupe by object identity before filtering, not the map's own size.
+// The profile's watchlist: registry instruments it tracks with no matching holding, open or
+// closed — the point of a row here with nothing to trade against it (see watchedInstruments).
 let WATCH_DRAWN_FOR = null;
 function renderWatch() {
   if (WATCH_DRAWN_FOR === SHOW_MONEY) return;
   WATCH_DRAWN_FOR = SHOW_MONEY;
-  const held = new Set([...ITEMS, ...CLOSED].map(d => d.identifier));
-  const rows = [...new Set(INSTRUMENTS.values())]
-    .filter(inst => !held.has(inst.id) && !held.has(inst.isin))
+  const rows = watchedInstruments()
     .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
   document.getElementById('watchHead').textContent =
     `${rows.length} tracked, never held`;
@@ -1851,9 +1848,9 @@ function benchmarkCandidates() {
   [...ITEMS, ...CLOSED].forEach(d => {
     if (!seen.has(d.identifier)) seen.set(d.identifier, d);
   });
-  // every registry instrument tracked but never held gets a shot too — the same pool renderWatch()
+  // every instrument on the profile's watchlist gets a shot too — the same pool renderWatch()
   // lists under "Watch": comparing against a name you don't own is exactly what that tab is for
-  [...new Set(INSTRUMENTS.values())]
+  watchedInstruments()
     .filter(inst => !seen.has(inst.id) && !seen.has(inst.isin))
     .forEach(inst => seen.set(inst.id, { identifier: inst.id, label: inst.display || inst.name }));
   return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
@@ -2902,7 +2899,7 @@ document.getElementById('detail').addEventListener('click', e => {
 /* ---------- views + controls ---------- */
 let SHOW_TOKEN = 0;
 const SEG_BUTTONS = { map: 'btnMap', pie: 'btnPie', positions: 'btnPositions', trades: 'btnTrades',
-                      watch: 'btnWatch' };
+                      watch: 'btnWatch', config: 'btnConfig' };
 async function show(view) {
   VIEW = view;
   STOPS = null;                          // re-read the theme once, not once per tile
@@ -2924,6 +2921,7 @@ async function show(view) {
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('watchCard').hidden = view !== 'watch';
+  document.getElementById('configCard').hidden = view !== 'config';
   document.getElementById('tip').classList.remove('on');
   // as-of reconstruction exists for the map, the pie, and (partially — see renderMeta) the
   // positions table — disable the actual controls (not just the hidden wrapper) so they can't be
@@ -3002,6 +3000,7 @@ document.getElementById('btnMap').addEventListener('click', () => show('map'));
 document.getElementById('btnPositions').addEventListener('click', () => show('positions'));
 document.getElementById('btnTrades').addEventListener('click', () => show('trades'));
 document.getElementById('btnWatch').addEventListener('click', () => show('watch'));
+document.getElementById('btnConfig').addEventListener('click', () => show('config'));
 const TODAY = new Date().toISOString().slice(0, 10);
 const isWeekend = dateStr => [0, 6].includes(new Date(dateStr + 'T00:00:00Z').getUTCDay());
 
@@ -3291,17 +3290,23 @@ function load(...texts) {
   show(VIEW);
 }
 
-// Two rounds, because the benchmark's own file is not knowable until config.json (which names the
-// benchmark by ISIN) and the registry (which maps that ISIN to a file) are both in hand. Only the
-// positions CSV is required; every other text may come back empty and ingest() copes.
+// Three rounds. The profile's directory is not knowable until config.json (which names the default
+// profile) is in hand, and the benchmark's own file is not knowable until the merged settings
+// (which name the benchmark by ISIN) and the registry (which maps that ISIN to a file) are. Only
+// the positions CSV is required; every other text may come back empty and ingest() copes.
 const get = (path, required) => !path ? Promise.resolve('')
   : fetch(path, { cache: 'no-store' })
       .then(r => r.ok ? r.text() : (required ? Promise.reject(new Error(r.status)) : ''))
       .catch(err => { if (required) throw err; return ''; });
 
 Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), get(SECTOR_COLORS_PATH)])
+  .then(([baseConfigText, ...rest]) => {
+    resolveProfile(baseConfigText);
+    renderProfilePicker();
+    return get(PROFILE_CONFIG_PATH()).then(profileText => [mergeConfig(baseConfigText, profileText), ...rest]);
+  })
   .then(([configText, instrumentsText, sourcesText, sectorColorsText]) => Promise.all([
-    configText, get(CSV_PATH, true), get(TRADES_PATH), instrumentsText, sourcesText,
+    configText, get(CSV_PATH(), true), get(TRADES_PATH()), instrumentsText, sourcesText,
     get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH), sectorColorsText,
   ]))
   // sector colours are a view concern (see SECTOR_COLOR_OVERRIDE) — applied here, not threaded
@@ -3311,6 +3316,7 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
     load(...texts);
   })
   .catch(err => {
+    if (err && err.message === EMPTY_PROFILE_MSG) { showEmptyProfile(); return; }
     document.getElementById('loader').hidden = false;
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
   });
@@ -3325,11 +3331,148 @@ document.getElementById('file').addEventListener('change', e => {
     .catch(err => document.getElementById('err').textContent = String(err));
 });
 
+// The development machine's copy of the page gets a blue "PV dev" down the left edge, so it is
+// never mistaken for the live one. Asked of start.sh's /host route, since the browser reaches
+// either through localhost or a proxy and cannot tell them apart; served any other way, the page
+// keeps its plain title.
+const DEV_HOST = 'maigold';
+fetch('host', { cache: 'no-store' })
+  .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+  .then(({ host }) => {
+    if (String(host).toLowerCase().split('.')[0] !== DEV_HOST) return;
+    const t = document.getElementById('vertTitle');
+    t.textContent = 'PV dev';
+    t.classList.add('dev');
+  })
+  .catch(() => { /* not start.sh — nothing to mark */ });
+
+// The profile picker above the Update button. The list comes from start.sh's own /profiles route
+// (one entry per private-profiles/<name>/), so a page served any other way just hides it. Picking
+// one reloads with ?profile= — PROFILE is fixed for a page's lifetime, the same way the CSVs are,
+// and the URL keeps the choice bookmarkable and lets two profiles sit in two tabs. New profiles
+// are made on the Config tab (see createProfile), not here.
+const gotoProfile = name => {
+  const q = new URLSearchParams(location.search);
+  q.set('profile', name);
+  location.search = q.toString();
+};
+function renderProfilePicker() {
+  const sel = document.getElementById('profileSel');
+  document.getElementById('profileFolder').textContent = `folder: private-profiles/${PROFILE}/`;
+  document.getElementById('profileLabel').value = PROFILE;    // until /profiles brings the label
+  fetch('profiles', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+    .then(list => {
+      if (!list.some(p => p.name === PROFILE)) list.push({ name: PROFILE, label: PROFILE });
+      sel.replaceChildren(...list.map(p => {
+        const o = document.createElement('option');
+        o.value = p.name;
+        o.textContent = p.label || p.name;
+        return o;
+      }));
+      sel.value = PROFILE;
+      sel.hidden = false;
+      document.getElementById('profileLabel').value = list.find(p => p.name === PROFILE).label || PROFILE;
+    })
+    .catch(() => { sel.hidden = true; });
+  sel.addEventListener('change', () => gotoProfile(sel.value));
+}
+
+// The Config tab's first row: renames the current profile's label (profile.json) — the folder,
+// and so the ?profile= in every URL, stays as it is. The picker's own entry follows without a
+// reload; nothing else on the page shows the label.
+document.getElementById('profileLabelForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const msg = document.getElementById('profileLabelMsg');
+  const label = document.getElementById('profileLabel').value.trim();
+  if (!label) return;
+  msg.className = '';
+  msg.textContent = '';
+  try {
+    const r = await fetch(`profile-label?profile=${encodeURIComponent(PROFILE)}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
+    if (!r.ok) throw new Error(r.statusText || `HTTP ${r.status}`);
+    const opt = [...document.getElementById('profileSel').options].find(o => o.value === PROFILE);
+    if (opt) opt.textContent = label;
+    msg.className = 'muted';
+    msg.textContent = 'Saved';
+  } catch (err) {
+    msg.className = 'err';
+    msg.textContent = `Could not rename: ${err.message}`;
+  }
+});
+
+// The Config tab's "Create new profile": derives the directory name from the label typed ("Family
+// Trust" → family-trust), has start.sh create private-profiles/<name>/ with an empty export and a
+// profile.json, and switches to it. Empty until its first refresh — the page shows
+// showEmptyProfile's note there.
+async function createProfile(label) {
+  const err = document.getElementById('newProfileErr');
+  err.textContent = '';
+  const name = label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (!name) { err.textContent = `"${label}" has no letters or digits to name a directory after.`; return; }
+  try {
+    const r = await fetch('profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ name, label }) });
+    // statusText, not the body: send_error's body is an HTML page, its status line the message
+    if (!r.ok) throw new Error(r.statusText || `HTTP ${r.status}`);
+    gotoProfile(name);
+  } catch (e) {
+    err.textContent = `Could not create profile "${label}": ${e.message}`;
+  }
+}
+document.getElementById('newProfileForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const label = document.getElementById('newProfileName').value.trim();
+  if (label) createProfile(label);
+});
+
+// A profile with no open position — new, not yet refreshed — has nothing for #app to draw, so it
+// stays hidden and this note stands in for it. The picker moves in with it, or there would be no
+// way out short of editing the URL.
+function showEmptyProfile() {
+  document.getElementById('emptyProfileName').textContent = PROFILE;
+  const slot = document.getElementById('emptyProfileSlot');
+  slot.appendChild(document.getElementById('profileSel'));
+  slot.appendChild(document.getElementById('trImport'));
+  document.getElementById('emptyProfile').hidden = false;
+}
+
+// The Config tab's "Import Trade Republic file": the export goes to start.sh's /import-tr route,
+// which keeps it under the profile's exports/ and runs import_tr.py on it. That script's own
+// report — how many rows were new, how many already imported, anything it could not place — is
+// shown as-is; a reload then picks up the rebuilt CSVs, the same as after Update.
+document.getElementById('trImportForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const file = document.getElementById('trImportFile').files[0];
+  if (!file) return;
+  const btn = e.submitter || e.target.querySelector('button[type="submit"]');
+  const log = document.getElementById('trImportLog');
+  btn.disabled = true;
+  log.hidden = false;
+  log.textContent = `Importing ${file.name}…`;
+  try {
+    const r = await fetch(`import-tr?profile=${encodeURIComponent(PROFILE)}&name=${encodeURIComponent(file.name)}`,
+                          { method: 'POST', body: file });
+    const text = (await r.text()).trim();
+    // a route-level refusal (send_error) comes back as an HTML page — its status line says it
+    log.textContent = r.ok || !text.startsWith('<') ? text : `${r.status} ${r.statusText}`;
+    if (r.ok) document.getElementById('trImportReload').hidden = false;
+  } catch (err) {
+    log.textContent = `Import failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('trImportReload').addEventListener('click', () => location.reload());
+
 // Runs update_prices.py on whatever's serving this page — see start.sh's own update-prices
 // route, the only thing here that isn't a plain static file. A reload afterwards is simpler and
 // more honest than trying to invalidate every cache (SERIES_CACHE, AS_OF_CACHE, …) this page
 // keeps: a fresh load re-fetches the CSVs the script just rewrote, the same way opening the page
-// after running it by hand always has.
+// after running it by hand always has. Only this profile's instruments are fetched — what it holds,
+// has ever held, watches, or benchmarks against (see update_prices.py --profile).
 //
 // Recorded here, in real wall-clock time, is the only place an actual fetch *time* exists at
 // all — gen_prices only ever carries the trading date. renderHeaderTotals reads this back to put
@@ -3343,7 +3486,7 @@ document.getElementById('btnUpdatePrices').addEventListener('click', async () =>
   btn.disabled = true;
   btn.textContent = 'Updating…';
   try {
-    const r = await fetch('update-prices', { method: 'POST' });
+    const r = await fetch(`update-prices?profile=${encodeURIComponent(PROFILE)}`, { method: 'POST' });
     const text = await r.text();
     if (!r.ok) throw new Error(text.trim().split('\n').pop() || `HTTP ${r.status}`);
     try { localStorage.setItem(LAST_FETCH_KEY, new Date().toISOString()); }

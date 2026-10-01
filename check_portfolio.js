@@ -4,9 +4,10 @@
  *
  *   node check_portfolio.js --save     record the current output as the baseline
  *   node check_portfolio.js            re-run and diff against that baseline
+ *   node check_portfolio.js --profile test [--save]   the same, for another profile
  *
  * How it works: the scripts portfolio.html loads are concatenated in page order and run in a vm
- * context against a mini DOM defined below and the real CSVs in private-parqet/ and gen_prices/. Add a
+ * context against a mini DOM defined below and the real CSVs in private-profiles/<profile>/ and gen_prices/. Add a
  * <script src> to the page and it is picked up here automatically. It then dumps
  *
  *   - every computed field of every open and closed position, in both modes,
@@ -30,8 +31,11 @@ const vm = require('vm');
 
 const ROOT = __dirname;
 const PAGE = path.join(ROOT, 'portfolio.html');
-const BASELINE = path.join(ROOT, 'check_baseline.json');
 const SAVE = process.argv.includes('--save');
+// no --profile means the page's own default (config.json's defaultProfile), against the plain
+// baseline; a named one gets a baseline of its own, since each profile's figures differ
+const PROFILE_ARG = process.argv.includes('--profile') ? process.argv[process.argv.indexOf('--profile') + 1] : '';
+const BASELINE = path.join(ROOT, PROFILE_ARG ? `check_baseline.${PROFILE_ARG}.json` : 'check_baseline.json');
 
 /* ---------- the page's scripts, plus a few hooks into their scope ----------
    Concatenated in the order portfolio.html loads them, which is also the order they depend on.
@@ -112,7 +116,7 @@ const sandbox = {
   innerWidth: 1400, innerHeight: 900,
   // window-level, for the page's uncaught-error reporter
   addEventListener() {}, removeEventListener() {},
-  location: { search: '' },
+  location: { search: PROFILE_ARG ? `?profile=${encodeURIComponent(PROFILE_ARG)}` : '' },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   document: {
     getElementById: byId,
@@ -167,7 +171,7 @@ function hoverAll(nodes, rows, tag, out) {
 (async () => {
   await new Promise(res => setTimeout(res, 600));            // let the fetch chain settle
   const h = sandbox.__hooks;
-  if (!h.items().length) { console.error('no positions loaded — are the CSVs in private-parqet/ ?'); process.exit(2); }
+  if (!h.items().length) { console.error(`no positions loaded — are the CSVs in private-profiles/${PROFILE_ARG || '<default>'}/ ?`); process.exit(2); }
   const out = {};
 
   for (const mode of ['abs', 'rel']) {

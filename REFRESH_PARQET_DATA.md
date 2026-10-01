@@ -4,8 +4,15 @@ Task for an agent with the **Parqet MCP tools** and write access to `/Users/jjj/
 
 Goal: archive the two current CSVs under their download timestamp, then pull fresh data from Parqet
 and write new ones with **exactly the same schema**. `portfolio.html` reads
-`private-parqet/positions.csv` and `private-parqet/activities.csv` — do not edit the HTML, and do not
-rename those two working filenames or move them out of `private-parqet/`.
+`private-profiles/<profile>/positions.csv` and `.../activities.csv` — do not edit the HTML, and do
+not rename those two working filenames or move them out of their profile's directory.
+
+**Which profile.** Refresh one profile at a time — the one the user names, else `main`
+(`config.json`'s `defaultProfile`). Its `profile.json` may carry `"parqetPortfolios": [...]`, the
+Parqet portfolio names that belong to it; pull only those. Without that key, pull every portfolio
+the account has. Never touch `profile.json` itself, nor any other profile's directory. A new
+profile is a new directory with a `profile.json` (at least `{"label": "..."}`) — create it only
+when the user asks for one.
 
 ---
 
@@ -14,7 +21,7 @@ rename those two working filenames or move them out of `private-parqet/`.
 The "dl-timestamp" is the file's own modification time — that is when the data was downloaded.
 
 ```bash
-cd /Users/jjj/git/parqet/private-parqet
+cd /Users/jjj/git/portfolioviz/private-profiles/<profile>
 for f in positions activities; do
   [ -f "$f.csv" ] || continue
   ts=$(date -r "$f.csv" +%Y%m%d-%H%M)      # macOS/BSD date
@@ -29,8 +36,8 @@ it. Archived files stay in this directory; the page ignores anything but the two
 ## 2. Pull fresh data
 
 Portfolio IDs are not hardcoded here — they are per-account and this file is committed. Call
-`parqet_list_portfolios` first to get the three current IDs (Trade Republic, Comdirect, Schwab),
-and re-read them if any later call 404s.
+`parqet_list_portfolios` first to get the current IDs (for `main`: Trade Republic, Comdirect,
+Schwab), keep the ones this profile covers, and re-read them if any later call 404s.
 
 Three calls give everything:
 
@@ -53,7 +60,7 @@ Gotchas that will bite you:
 - Prices move during the day. Pull the positions and the activities in one sitting so the two files
   agree, and note that `currentValue` is a snapshot.
 
-## 3. Write `private-parqet/positions.csv`
+## 3. Write `private-profiles/<profile>/positions.csv`
 
 One row per position, **open and closed**, plus the cash accounts. Header, in order:
 
@@ -76,7 +83,7 @@ lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,a
   `assetType == "cash"` and leaves it out of invested/gain figures.
 - Numbers: plain decimals, `.` separator, no thousands separator, no currency symbol.
 
-## 4. Write `private-parqet/activities.csv`
+## 4. Write `private-profiles/<profile>/activities.csv`
 
 One row per activity, all portfolios, sorted by `portfolio` then `datetime` ascending. Header:
 
@@ -97,7 +104,7 @@ realizedGains,realizedGainsNet,currency
 
 Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 
-## 5. Update `registry/instruments.csv`
+## 5. Update `registry/instruments.csv` and the profile's watchlist
 
 One row per instrument, with an `id` (equal to its ISIN for a security; cash gets a
 `CASH:<portfolio>` id, since it has none). It carries `display` (the short label the page prints),
@@ -106,8 +113,13 @@ wrong file), `sector` (the map's grouping) and `type`. **After a refresh, add a 
 position it does not yet cover** — that is the one hand-maintenance step left, and it replaces the
 old `parqet_names.csv` and `parqet_sectors.csv`.
 
+The registry is shared by every profile, so it is the union of all their instruments — add rows,
+never remove one because *this* profile no longer holds it.
+
 An instrument needs no matching Parqet holding. That is how the benchmark is charted, and how a
-watchlist name gets charted. `config.json` names the benchmark by ISIN (`benchmarkIsin`).
+watchlist name gets charted. `config.json` names the benchmark by ISIN (`benchmarkIsin`; a
+profile's `profile.json` may override it). A watchlist name must also be listed in the profile's
+own `profile.json` `watchlist` — the registry alone would put it in every profile's watchlist.
 
 ## 6. Refresh the price series
 
@@ -116,7 +128,8 @@ Price series are driven by `registry/price_sources.csv` — **one row per instru
 fetched file, and there is no hand-maintained price file left to update.
 
 ```bash
-python3 update_prices.py                  # every instrument in the registry
+python3 update_prices.py --profile <p>    # just what this profile holds, watches, benchmarks
+python3 update_prices.py                  # every instrument in the registry, all profiles
 python3 update_prices.py roche            # just this one (slug or id)
 python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
 ```
@@ -163,11 +176,13 @@ already be small enough that nobody would notice it unlabelled.
 ## 7. Check before you call it done
 
 ```bash
-cd /Users/jjj/git/parqet
-python3 - <<'PY'
-import csv, collections
-pos = list(csv.DictReader(open('private-parqet/positions.csv')))
-tr  = list(csv.DictReader(open('private-parqet/activities.csv')))
+cd /Users/jjj/git/portfolioviz
+P=main   # the profile just refreshed
+P=$P python3 - <<'PY'
+import csv, collections, os
+d = f"private-profiles/{os.environ['P']}/"
+pos = list(csv.DictReader(open(d + 'positions.csv')))
+tr  = list(csv.DictReader(open(d + 'activities.csv')))
 f = lambda r, k: float(r[k] or 0)
 print('positions', len(pos), '| closed', sum(1 for p in pos if p['isSold'] == '1'),
       '| cash', sum(1 for p in pos if p['assetType'] == 'cash'))
@@ -183,7 +198,7 @@ print('total tax', round(sum(f(r,'tax') for r in tr), 2),
       '| current value', round(sum(f(p,'currentValue') for p in pos), 2))
 
 inst = {r['id'] for r in csv.DictReader(open('registry/instruments.csv'))}
-src  = {r['isin'] for r in csv.DictReader(open('registry/price_sources.csv'))}
+src  = {r['id'] for r in csv.DictReader(open('registry/price_sources.csv'))}
 held = {p['identifier'] for p in pos if p['identifier']}
 print('positions missing from registry/instruments.csv:', held - inst or 'none')
 print('instruments with no price source:', (held & inst) - src or 'none')
@@ -192,8 +207,8 @@ PY
 
 All six must hold: no unnamed trades, no trade whose `(portfolio, ISIN)` is missing from the
 positions file, no sell failing the net-amount identity, nothing missing from the registry, every
-held instrument carrying a price source, and totals in the same ballpark as the archived files. Then load `http://localhost:8765/portfolio.html` (serve the folder with
-`python3 -m http.server 8765`) and confirm the map renders and the realised bar under it shows both
+held instrument carrying a price source, and totals in the same ballpark as the archived files. Then load `http://localhost:8765/portfolio.html?profile=<profile>` (serve the folder with
+`./start.sh 8765 -n`) and confirm the map renders and the realised bar under it shows both
 the open and closed groups — the page fetches with `cache: no-store`, so a plain reload is enough.
 
 Report: the archive names you created, the new row counts, and the headline current value.
