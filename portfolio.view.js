@@ -3699,6 +3699,11 @@ function refreshManualTools() {
   add.value = NEW_INSTRUMENT;
   add.textContent = '+ New instrument…';
   sel.replaceChildren(none, add, ...priced.map(txOption));
+  // money is entered in the portfolio currency — the fields say which (see also the price hint)
+  document.getElementById('txPrice').placeholder = `Price (${CCY})`;
+  document.getElementById('txPrice').title = `Price per share in ${CCY}`;
+  document.getElementById('txFee').placeholder = `Fee (${CCY})`;
+  document.getElementById('txCashAmount').placeholder = `Amount (${CCY})`;
   const day = document.getElementById('txDate');
   day.max = TODAY;
   let kept = {};
@@ -3721,7 +3726,12 @@ async function prefillTxPrice() {
   if (i < 0) { hint.textContent = 'no price on file for that date'; return; }
   const row = series.rows[i];
   document.getElementById('txPrice').value = +row.close.toFixed(4);
-  hint.textContent = `close on ${row.date}`;
+  // every stored close is already in the portfolio currency (update_prices.py converts on write);
+  // when the listing quotes in another, say so and show the quote it came from, so nobody types a
+  // dollar price into a euro field
+  const foreign = row.raw > 0 && row.ccy && row.ccy !== CCY;
+  hint.textContent = `close on ${deDate(row.date)}` +
+    (foreign ? `: ${+row.raw.toFixed(4)} ${row.ccy} = ${fmtMoney2(row.close)}` : '');
   txFigures();
 }
 
@@ -3806,14 +3816,14 @@ function openTxEditor(tr, t) {
   form.innerHTML = cashEditable
     ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
       `<select name="type" class="pick" aria-label="Type"><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option></select>` +
-      `<input type="number" name="amount" min="0" step="any" required placeholder="Amount" value="${Math.abs(num(t.amount))}">` +
+      `<input type="number" name="amount" min="0" step="any" required placeholder="Amount (${CCY})" value="${Math.abs(num(t.amount))}">` +
       `<button type="submit" class="dt-addsel">Save</button>`
     : editable
     ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
       `<select name="type" class="pick" aria-label="Type"><option value="buy">Buy</option><option value="sell">Sell</option></select>` +
       `<input type="number" name="shares" min="0" step="any" required placeholder="Shares" value="${num(t.shares)}">` +
-      `<input type="number" name="price" min="0" step="any" required placeholder="Price" value="${num(t.price)}">` +
-      `<input type="number" name="fee" min="0" step="any" placeholder="Fee" aria-label="Fee" value="${num(t.fee) || ''}">` +
+      `<input type="number" name="price" min="0" step="any" required placeholder="Price (${CCY})" title="Price per share in ${CCY}" value="${num(t.price)}">` +
+      `<input type="number" name="fee" min="0" step="any" placeholder="Fee (${CCY})" aria-label="Fee" value="${num(t.fee) || ''}">` +
       `<button type="submit" class="dt-addsel">Save</button>`
     : hand
     ? `<span class="muted">Booked with its trade — edit the trade instead.</span>`

@@ -1244,8 +1244,10 @@ function totals(rows) {
   return { cur, pur, gain: cur - pur, rel: rows.reduce((s, d) => s + (d.relPre ?? d.rel), 0) };
 }
 
-// What ingest() throws for a positions file with no open position in it — a freshly created
-// profile, before its first refresh. The view tells this apart from a real failure by it.
+// What ingest() throws for a profile with nothing in it at all — no position, open or closed, and
+// no cash: a freshly created profile, before its first import or entry. A demo holding only its
+// starting cash, or one that has sold everything, is not empty and renders as usual. The view
+// tells this apart from a real failure by it.
 const EMPTY_PROFILE_MSG = 'no rows with a positive value';
 
 /* ---------- ingest ----------
@@ -1301,5 +1303,5 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
   const all = build(parseCSV(text));
   ITEMS = all.filter(d => !d.sold);
   CLOSED = all.filter(d => d.sold).sort((a, b) => b.rel - a.rel);
-  if (!ITEMS.length) throw new Error(EMPTY_PROFILE_MSG);
+  if (!ITEMS.length && !CLOSED.length && !CASH.length) throw new Error(EMPTY_PROFILE_MSG);
 }

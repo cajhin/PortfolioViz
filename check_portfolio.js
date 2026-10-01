@@ -46,7 +46,7 @@ const SCRIPTS = [...fs.readFileSync(PAGE, 'utf8').matchAll(/<script src="([^"]+)
 if (!SCRIPTS.length) { console.error(`no <script src> tags found in ${PAGE}`); process.exit(2); }
 const src = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n') + `
 ;globalThis.__hooks = {
-  items: () => ITEMS, closed: () => CLOSED, pf: () => PF,
+  items: () => ITEMS, closed: () => CLOSED, pf: () => PF, cash: () => CASH,
   totals, computeAsOf, computeAsOfRealized, openDetail, detail: () => DETAIL,
   renderPie, renderMap, renderClosed, renderMeta, renderTrades, renderWatch, renderHeaderTotals,
   setMode: m => { MODE = m; applyMode(ITEMS); applyMode(CLOSED); },
@@ -171,7 +171,7 @@ function hoverAll(nodes, rows, tag, out) {
 (async () => {
   await new Promise(res => setTimeout(res, 600));            // let the fetch chain settle
   const h = sandbox.__hooks;
-  if (!h.items().length) { console.error(`no positions loaded — are the CSVs in private-profiles/${PROFILE_ARG || '<default>'}/ ?`); process.exit(2); }
+  if (!h.items().length && !h.closed().length && !h.cash().length) { console.error(`no positions loaded — are the CSVs in private-profiles/${PROFILE_ARG || '<default>'}/ ?`); process.exit(2); }
   const out = {};
 
   for (const mode of ['abs', 'rel']) {
@@ -291,8 +291,10 @@ function hoverAll(nodes, rows, tag, out) {
 
     // the detail chart's timeframe buttons, driven through the real click handler — they share
     // RANGE_PRESETS with the map's range picker, so a button added there must land here too
-    {
-      const d0 = h.items()[0];
+    // a demo holding only cash, or one that has sold everything, has no open position to open —
+    // a closed one serves, and with neither the two detail checks below have nothing to drive
+    const d0 = h.items()[0] || h.closed()[0];
+    if (d0) {
       await h.openDetail(d0);
       const spans = {};
       for (const range of ['all', '5y', '3y', '1y', 'ytd', '6m', '3m', '1m', '1w', '1d', 'buy']) {
@@ -307,8 +309,8 @@ function hoverAll(nodes, rows, tag, out) {
     // "[All]" in the + compare picker: driven through the real control, since the whole point of
     // it is the click path — open the picker, find the row, click it, and see what the chart is
     // left holding. The aria-label names every line, so it is the record of what got drawn.
-    {
-      await h.openDetail(h.items()[0]);
+    if (d0) {
+      await h.openDetail(d0);
       byId('dtAddCompare').fire('click');
       const menu = byId('dtBody').children.find(c => c.className === 'dtpick');
       const allRow = menu && menu.children.find(r => r.textContent === '[All]');
