@@ -16,8 +16,8 @@ results can be compared fairly.
      under 30 minutes old (some exchanges reach us about 15 minutes late; that is allowed for).
   3. Otherwise **no trade**: the answer says why, and when the instrument can next be traded. A last
      close is never used — the instrument goes on moving elsewhere while it stands still.
-- **`trade.py quote <instrument>`** shows what a buy and a sale would get right now, where, and the
-  spread — or why no trade is possible.
+- **`trade.py quote <instrument> [<instrument> ...]`** shows what a buy and a sale would get right
+  now, where, and the spread — or why no trade is possible.
 - **Currency.** All prices, fees and taxes are in euros. gettex quotes in euros; a home-exchange
   price in another currency is converted at that day's rate.
 - **Valuation.** Positions are valued at their home exchange's daily close, so right after a trade

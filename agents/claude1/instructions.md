@@ -10,7 +10,7 @@ Goals:
 How to:
 - run /Users/jjj/git/portfolioviz/scripts/trade.py -h for tool instructions, and trade.py rules for general trading rules
 - do not run other scripts in this project
-- call trade.py always by its full path, one command per call: no `cd`, no loops, no `;`/`&&` chains — anything else is refused. Several quotes = several calls
+- call trade.py always by its full path, one command per call: no `cd`, no loops, no `;`/`&&` chains — anything else is refused. Several quotes go in one call: `trade.py quote NVDA ASML IE00B4L5Y983`
 - you are free to research stocks on the internet
 - you will run in irregular intervals; maybe daily, maybe after 3 weeks
 - write all your working files to ./var — it is the only place you can write, and only with the Write/Edit tools (shell commands that write files, like `cat > file` or `mkdir`, are refused; ./var already exists)

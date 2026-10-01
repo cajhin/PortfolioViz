@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Trade a demo account from the command line — live only, JSON in every answer.
 
-    trade.py quote    <instrument>
+    trade.py quote    <instrument> [<instrument> ...]
     trade.py buy      <account> <instrument> (--eur EUR | --shares N) [--reason TEXT] [--id ID]
     trade.py sell     <account> <instrument> (--shares N | --all)      [--reason TEXT] [--id ID]
     trade.py status   <account>
@@ -12,6 +12,8 @@ Accounts themselves — creating one, putting cash in or taking it out — are t
 manage, not this script's.
 
 <instrument> is an ISIN, a ticker or a name; anything ambiguous answers with the candidates.
+Quoting several at once answers {"quotes": [...]}, one entry each — an instrument that cannot be
+quoted gets its own {"ok": false, "error": ...} entry there, and the rest are still answered.
 Every answer is one JSON object; on error {"ok": false, "error": ..., "hint": ...}, exit code 1.
 
 Live only. There is no date to give: a buy or sell executes now, at a live price — on gettex
@@ -540,7 +542,7 @@ def run(doc, prog, configure, dispatch):
 
 
 def configure(sub):
-    sub.add_parser("quote").add_argument("instrument")
+    sub.add_parser("quote").add_argument("instrument", nargs="+")
     for side in ("buy", "sell"):
         s = sub.add_parser(side); s.add_argument("account"); s.add_argument("instrument")
         s.add_argument("--shares", type=float)
@@ -556,7 +558,15 @@ def configure(sub):
 
 def dispatch(a):
     if a.cmd == "quote":
-        return quote(a.instrument)
+        if len(a.instrument) == 1:
+            return quote(a.instrument[0])
+        out = []
+        for text in a.instrument:
+            try:
+                out.append({"ok": True, "query": text, **quote(text)})
+            except Refusal as r:
+                out.append({"ok": False, "query": text, "error": r.error, **({"hint": r.hint} if r.hint else {})})
+        return {"quotes": out}
     if a.cmd == "buy":
         return execute(a.account, "buy", a.instrument, shares=a.shares, eur=a.eur, reason=a.reason, oid=a.id)
     if a.cmd == "sell":
