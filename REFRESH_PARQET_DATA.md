@@ -10,7 +10,7 @@ not rename those two working filenames or move them out of their profile's direc
 **Which profile.** Refresh one profile at a time — the one the user names, else `main`
 (`config.json`'s `defaultProfile`). Only a profile whose `profile.json` says `"source": "parqet"`
 (or has no `source` at all) is yours to refresh; a `"manual"` one is filled by Trade Republic
-imports (`import_tr.py`), and overwriting its CSVs would lose them — stop and say so instead. Its `profile.json` may carry `"parqetPortfolios": [...]`, the
+imports (`scripts/import_tr.py`), and overwriting its CSVs would lose them — stop and say so instead. Its `profile.json` may carry `"parqetPortfolios": [...]`, the
 Parqet portfolio names that belong to it; pull only those. Without that key, pull every portfolio
 the account has. Never touch `profile.json` itself, nor any other profile's directory. A new
 profile is a new directory with a `profile.json` (at least `{"label": "..."}`) — create it only
@@ -130,10 +130,10 @@ Price series are driven by `registry/price_sources.csv` — **one row per instru
 fetched file, and there is no hand-maintained price file left to update.
 
 ```bash
-python3 update_prices.py --profile <p>    # just what this profile holds, watches, benchmarks
-python3 update_prices.py                  # every instrument in the registry, all profiles
-python3 update_prices.py roche            # just this one (slug or id)
-python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
+python3 scripts/update_prices.py --profile <p>    # just what this profile holds, watches, benchmarks
+python3 scripts/update_prices.py                  # every instrument in the registry, all profiles
+python3 scripts/update_prices.py roche            # just this one (slug or id)
+python3 scripts/update_prices.py roche --from 2019-01-01   # also backfill, from that date
 ```
 
 **Run the bare form on every refresh**, closed positions included. The script has no idea which

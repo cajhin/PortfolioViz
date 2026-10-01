@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Register a new instrument and fetch its prices — so a hand-entered transaction can use it.
 
-    python3 add_instrument.py <ISIN> <yahoo symbol> <name> [<sector>]
-    python3 add_instrument.py --find <name or ISIN>       # instruments by name, with ISIN (JSON)
-    python3 add_instrument.py --symbols <ISIN>            # Yahoo listings of an ISIN, best first (JSON)
+    python3 scripts/add_instrument.py <ISIN> <yahoo symbol> <name> [<sector>]
+    python3 scripts/add_instrument.py --find <name or ISIN>       # instruments by name, with ISIN (JSON)
+    python3 scripts/add_instrument.py --symbols <ISIN>            # Yahoo listings of an ISIN, best first (JSON)
 
 The page's "New instrument" dialog runs the two look-ups in turn: --find turns a name ("Porsche")
 into candidates with their ISINs — onvista's search, since Yahoo's carries no ISIN — and, once
@@ -21,7 +21,8 @@ S&P SmallCap 600 for the MSCI Japan Small Cap ISIN (see REFRESH_PARQET_DATA.md).
 """
 import csv, io, json, os, re, subprocess, sys, urllib.parse, urllib.request
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
 INSTRUMENTS = os.path.join(ROOT, "registry", "instruments.csv")
 SOURCES = os.path.join(ROOT, "registry", "price_sources.csv")
 ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
@@ -133,7 +134,7 @@ def add(isin, symbol, name, sector=""):
     append(SOURCES, {"id": isin, "source": "yahoo", "symbol": symbol, "quote_currency": ccy or home,
                      "fx_symbol": fx, "note": ""})
     start = config().get("timelineStart") or "2019-01-01"
-    proc = subprocess.run([sys.executable, os.path.join(ROOT, "update_prices.py"), isin, "--from", start],
+    proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "update_prices.py"), isin, "--from", start],
                           capture_output=True, text=True, timeout=180)
     print((proc.stdout + proc.stderr).strip())
     if not os.path.exists(os.path.join(ROOT, "gen_prices", f"{isin}-{slug}.csv")):

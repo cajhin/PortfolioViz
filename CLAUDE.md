@@ -11,14 +11,16 @@ portfolio.view.js       everything that reads or writes the page
 config.json             settings — timeline start, portfolio currency, benchmark ISIN, default profile
 check_portfolio.js      regression check for both scripts (see below)
 start.sh                serves the directory on localhost and opens the page
-update_prices.py   fetches price history per registry/price_sources.csv
-import_tr.py            imports a Trade Republic transaction export into a manual profile, and
-                          rebuilds a manual profile's CSVs from its ledgers
-manual_tx.py            adds/edits/deletes a transaction in a manual profile (demo portfolios)
-trade.py                demo accounts for agents (or anyone) from the command line — live only,
-                          JSON out; works only on profiles with "allow-cli": true (see below)
-add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
-                          "+ New instrument…"; also looks up Yahoo symbols for an ISIN
+scripts/                every Python script; each finds the repo as its own folder's parent, so it
+                          runs from any working directory, and the others import from one another
+  update_prices.py        fetches price history per registry/price_sources.csv
+  import_tr.py            imports a Trade Republic transaction export into a manual profile, and
+                            rebuilds a manual profile's CSVs from its ledgers
+  manual_tx.py            adds/edits/deletes a transaction in a manual profile (the page's backend)
+  trade.py                trades a demo account from the command line — live only, JSON out
+  manage-accounts.py      creates demo accounts, moves their cash, lists them — same style
+  add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
+                            "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
 registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
 private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.csv, plus its own
@@ -64,7 +66,7 @@ every other profile's holdings into it. The page picks the profile from `?profil
 `config.json`'s `defaultProfile`; `profile.json` keys override `config.json`'s (flat, shallow —
 `label`, `watchlist`, `benchmarkIsin`, `benchmarkLabel`, `timelineStart`), except `currency`, which
 stays shared because the price series are converted into it on write. The Update button runs
-`update_prices.py --profile <p>`, fetching only that profile's instruments.
+`scripts/update_prices.py --profile <p>`, fetching only that profile's instruments.
 
 A profile is controlled **either** by Parqet **or** manually, and `profile.json`'s `source` says
 which: `"parqet"` — refreshed by REFRESH_PARQET_DATA.md, never imported into — or `"manual"` — fed
@@ -76,15 +78,18 @@ can leave a git change there, which is meant: the registry is the shared catalog
 `import_tr.py` and the page all hold to it, so `main` cannot be overwritten by a stray import. Its conversion follows Parqet's conventions and was checked
 against Parqet's own import of the same account; its docstring lists them.
 
-**Agent accounts.** `trade.py` creates and trades demo accounts — `trade.py --help` is the whole
-interface, every answer is one JSON object. It touches only profiles whose `profile.json` has
-`"allow-cli": true` (which `trade.py create` sets); the script cannot tell an agent from a human,
-so that flag is the boundary. It is **live only**: no date can be given, cash moves today, and an
-order fills at the first close dated *after* the day it was placed — never at a price already known
-when it was placed. Orders wait in the profile's `orders.csv` until then; any later call settles
-them, fetching the closes it needs. Filled trades land in `manual_ledger.csv` like hand-entered
-ones (their `--reason` in its description), so the page shows and can edit them — which, on an
-agent's account, is the one way round live-only; leave them alone if accounts are to be compared.
+**Agent accounts.** `scripts/manage-accounts.py` creates demo accounts, moves their cash and lists
+them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every answer
+is one JSON object. Both touch only profiles whose `profile.json` has `"allow-cli": true` (which
+`manage-accounts.py create` sets); the scripts cannot tell an agent from a human, so that flag is
+the boundary — and splitting the two lets an agent be handed trading alone. It is **live only**: no date can be given. A trade executes at once at the latest close, fetched
+fresh first (so during trading hours that is Yahoo's current price), and costs €10 + 1% of its
+value — to make in-and-out trading a losing game; a sale also pays 20% tax on its gain. Cash can
+never go below zero: buys (fee included) and withdrawals are refused past it. The rules, with
+examples, are `trading-rules.md` — keep it in step with `trade.py`'s FEE_*/TAX_RATE. `buy --eur` is the total that leaves the account,
+fee included. Trades land in `manual_ledger.csv` like hand-entered ones (their `--reason` in its
+description), so the page shows and can edit them — the one way round these rules; leave them
+alone if accounts are to be compared.
 
 `config.json` is committed, not generated — an agent edits it directly to change the as-of
 picker's earliest date, the portfolio currency, or which ISIN is the benchmark. `ingest()` reads it

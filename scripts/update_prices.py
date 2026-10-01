@@ -5,10 +5,10 @@ Nothing about *how* to fetch an instrument lives in the fetched file any more â€
 the single place that maps an instrument to a source, a symbol and a quote currency, so you can
 answer "what am I tracking, and from where?" by reading one table instead of opening every series.
 
-    python3 update_prices.py                       # update every instrument in the registry
-    python3 update_prices.py --profile main        # just what that profile holds/watches/benchmarks
-    python3 update_prices.py roche                 # just this one (slug or id)
-    python3 update_prices.py roche --from 2019-01-01   # also backfill, from that date
+    python3 scripts/update_prices.py                       # update every instrument in the registry
+    python3 scripts/update_prices.py --profile main        # just what that profile holds/watches/benchmarks
+    python3 scripts/update_prices.py roche                 # just this one (slug or id)
+    python3 scripts/update_prices.py roche --from 2019-01-01   # also backfill, from that date
 
 The registry and gen_prices/ are shared by every profile, so --profile narrows the run rather
 than redirecting it: the instruments in private-profiles/<name>/'s positions and activities (open
@@ -33,7 +33,8 @@ import csv, io, json, os, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPTS)                  # the repo â€” this file lives in scripts/
 PROFILES = os.path.join(ROOT, "private-profiles")
 DIR = os.path.join(ROOT, "gen_prices")
 FX_DIR = os.path.join(ROOT, "gen_fx")

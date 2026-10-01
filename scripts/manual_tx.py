@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Enter buys and sells by hand into a manual profile — a virtual demo portfolio, say.
 
-    python3 manual_tx.py <profile> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>]
-    python3 manual_tx.py <profile> edit <transaction_id> <YYYY-MM-DD> buy|sell <shares> <price> [<fee>]
-    python3 manual_tx.py <profile> delete <transaction_id>
-    python3 manual_tx.py <profile> cash <YYYY-MM-DD> deposit|withdrawal <amount>
-    python3 manual_tx.py <profile> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
+    python3 scripts/manual_tx.py <profile> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>]
+    python3 scripts/manual_tx.py <profile> edit <transaction_id> <YYYY-MM-DD> buy|sell <shares> <price> [<fee>]
+    python3 scripts/manual_tx.py <profile> delete <transaction_id>
+    python3 scripts/manual_tx.py <profile> cash <YYYY-MM-DD> deposit|withdrawal <amount>
+    python3 scripts/manual_tx.py <profile> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
 
 Rows go to private-profiles/<profile>/manual_ledger.csv in the same format as a Trade Republic
 export row, so import_tr.py's one conversion turns both ledgers into the profile's positions.csv

@@ -224,7 +224,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         try:
             proc = subprocess.run(
-                [sys.executable, os.path.join(os.getcwd(), "update_prices.py")]
+                [sys.executable, os.path.join(os.getcwd(), "scripts", "update_prices.py")]
                 + (["--profile", profile] if profile else []),
                 capture_output=True, text=True, timeout=300)
             body = (proc.stdout + proc.stderr).encode("utf-8")
@@ -254,7 +254,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             self.send_error(400, "body must be JSON")
             return
-        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "add_instrument.py")] + args,
+        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "scripts", "add_instrument.py")] + args,
                               capture_output=True, text=True, timeout=240)
         out = (proc.stdout + proc.stderr).strip()
         if proc.returncode != 0:
@@ -293,7 +293,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                          + [str(tx.get("fee") or 0)]
                 # an edit keeps its instrument: the id names the row, the rest is what it becomes
                 args = ["edit", edit] + fields[:1] + fields[2:] if edit else ["add"] + fields
-        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "manual_tx.py"), profile] + args,
+        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "scripts", "manual_tx.py"), profile] + args,
                               capture_output=True, text=True, timeout=60)
         self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
 
@@ -324,7 +324,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         path = os.path.join(exports, name)
         with open(path, "wb") as fh:
             fh.write(data)
-        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "import_tr.py"), profile, path],
+        proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "scripts", "import_tr.py"), profile, path],
                               capture_output=True, text=True, timeout=120)
         if proc.returncode != 0:
             # refused (not a TR export, or a Parqet-fed profile): keep no record of it
@@ -351,7 +351,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             kind = "find" if "find" in query else "symbols"
             q = (query.get(kind) or [""])[0]
-            proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "add_instrument.py"),
+            proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "scripts", "add_instrument.py"),
                                    "--" + kind, q], capture_output=True, text=True, timeout=30)
             if proc.returncode != 0:
                 self.send_text(502, (proc.stdout + proc.stderr).strip())

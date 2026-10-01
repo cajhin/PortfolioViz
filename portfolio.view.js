@@ -2645,7 +2645,7 @@ function renderDetail() {
   if (!drawn) {
     const slug = seriesSlug(d);
     body.innerHTML = `<div class="empty">no data — add <code>gen_prices/${slug || '…'}.csv</code>` +
-      ` and run <code>python3 update_prices.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
+      ` and run <code>python3 scripts/update_prices.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }
   const title = document.getElementById('dtTitle');

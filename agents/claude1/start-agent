@@ -1,0 +1,23 @@
+#!/bin/sh
+# Starts the claude1 trading agent in this folder, from wherever this script is run.
+#
+#   CLAUDE_CONFIG_DIR             its own login, settings and memory, not ~/.claude — so none of
+#                                 your global instructions, plugins or memories reach it. Shared by
+#                                 all agents; the first start asks for a login (/login) once.
+#   CLAUDE_CODE_DISABLE_CLAUDE_MDS  no CLAUDE.md files at all — this folder sits inside the repo,
+#                                 whose own CLAUDE.md would otherwise be read from the parent folders
+#
+#   settings.json                 what it may do: anything not allowed there is refused, unasked
+#                                 (dontAsk). Reading and read-only commands (ls, grep, cat…) work in
+#                                 this folder only; it writes only under ./var; of the project it may
+#                                 run trade.py and nothing else; web search and fetch are allowed.
+#   --setting-sources             leaves user-level settings out, so no allow rule from a
+#                                 ~/.claude-agents/settings.json can widen that
+#
+# instructions.md is the agent's whole briefing. Extra arguments go on to claude (e.g. -p "…").
+cd "$(dirname "$0")" || exit 1
+export CLAUDE_CONFIG_DIR="$HOME/.claude-agents"
+export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
+mkdir -p var
+exec claude --append-system-prompt-file instructions.md --settings settings.json \
+  --setting-sources project,local "$@"

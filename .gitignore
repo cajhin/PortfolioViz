@@ -22,3 +22,6 @@ check_baseline*.json
 
 .DS_Store
 __pycache__/
+
+# a trading agent's own working files (memory, strategy, notes) — agents/<name>/var/
+agents/*/var/

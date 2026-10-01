@@ -9,7 +9,7 @@ To init:
 5. run start.sh for local webserver
 6. click [Update]; this pulls all missing daily EOB ticks for 1.1.2019..today for the current profile's stocks from Yahoo (thank you Y).
 
-Demo accounts for AI agents (or for you, from a terminal): `./trade.py --help`. Accounts it creates are live-only — orders fill at the next close — so agents can be compared fairly.
+Demo accounts for AI agents (or for you, from a terminal): `scripts/manage-accounts.py --help` to create and fund them, `scripts/trade.py --help` to trade. Accounts are live-only — trades execute at the latest price, €10 + 1% fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
 
 Notes:
 - you can tell Claude directly to analyze the known data (like 'calc the max downdraw for all my stocks' or 'how many successful trades did i do in 2025?')

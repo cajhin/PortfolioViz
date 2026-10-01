@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Bash(/Users/jjj/git/portfolioviz/scripts/trade.py:*)",
+      "Edit(./var/**)",
+      "WebSearch",
+      "WebFetch"
+    ],
+    "deny": [
+      "Edit(./instructions.md)",
+      "Edit(./settings.json)",
+      "Edit(./start-agent)"
+    ]
+  }
+}

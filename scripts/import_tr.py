@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Import a Trade Republic transaction export into a profile, in place of a Parqet refresh.
 
-    python3 import_tr.py <profile> <transactions*.csv> [...]
-    python3 import_tr.py <profile>                  # just rebuild from what is already in
+    python3 scripts/import_tr.py <profile> <transactions*.csv> [...]
+    python3 scripts/import_tr.py <profile>                  # just rebuild from what is already in
 
 Manual profiles only — profile.json's "source": "manual". A Parqet profile (the default when the
 key is missing) is refused, since its CSVs belong to the Parqet refresh.
@@ -42,7 +42,8 @@ proceeds − cost − tax − fees) or drops a warrant's few-cent payout.
 import csv, json, os, sys
 from collections import defaultdict
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
 PORTFOLIO = "Trade Republic"
 MANUAL_PORTFOLIO = "Manual"              # where hand-entered rows (account_type MANUAL) book
 LEDGER = "tr_ledger.csv"
