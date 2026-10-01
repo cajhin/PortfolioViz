@@ -3417,6 +3417,7 @@ function applyProfileSource(source, label) {
   const manual = PROFILE_SOURCE === 'manual';
   document.getElementById('txImport').hidden = !manual;
   document.getElementById('txAdd').hidden = !manual;
+  document.getElementById('txAddRow').hidden = !manual;
   const note = document.getElementById('txSourceNote');
   note.hidden = manual;
   note.textContent = `All ${label || PROFILE} transactions are imported from Parqet. Create a ` +
@@ -3505,6 +3506,8 @@ function showEmptyProfile() {
   const slot = document.getElementById('emptyProfileSlot');
   slot.appendChild(document.getElementById('profileSel'));
   slot.appendChild(document.getElementById('txImport'));
+  // the list itself, empty: its header and add row are how the first transaction gets in
+  slot.appendChild(document.getElementById('tblTrades'));
   slot.appendChild(document.getElementById('txAdd'));
   refreshManualTools();
   document.getElementById('emptyProfile').hidden = false;
@@ -3605,7 +3608,20 @@ async function prefillTxPrice() {
   const row = series.rows[i];
   document.getElementById('txPrice').value = +row.close.toFixed(4);
   hint.textContent = `close on ${row.date}`;
+  txFigures();
 }
+
+// Amount and Net in the add row, as the list would show them once added: gross, then with the
+// fee on top of a buy or off a sale
+function txFigures() {
+  const v = id => num(document.getElementById(id).value);
+  const gross = v('txShares') * v('txPrice');
+  const net = document.getElementById('txType').value === 'sell' ? gross - v('txFee') : gross + v('txFee');
+  document.getElementById('txAmount').textContent = gross ? fmtMoney2(gross) : '';
+  document.getElementById('txNet').textContent = gross ? fmtMoney2(net) : '';
+}
+['txShares', 'txPrice', 'txFee', 'txType'].forEach(id =>
+  document.getElementById(id).addEventListener('input', txFigures));
 document.getElementById('txDate').addEventListener('change', prefillTxPrice);
 document.getElementById('txIsin').addEventListener('change', e => {
   if (e.target.value === NEW_INSTRUMENT) { openInstrumentDialog(); return; }

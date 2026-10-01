@@ -266,8 +266,9 @@
     <div class="card tablescroll" id="tradesCard" hidden>
       <!-- which of the two kinds of profile this is decides what else this tab offers (see
            applyProfileSource): a Parqet one only says where its transactions come from; a manual
-           one gets the import above the list, a delete per row, and "add" below it. #txImport and
-           #txAdd move into #emptyProfile while the profile has nothing yet (showEmptyProfile) —
+           one gets the import above the list, an Edit per row, and the add row at its foot.
+           #txImport, the table and #txAdd move into #emptyProfile while the profile has nothing
+           yet (showEmptyProfile) —
            a new profile's first entry is exactly when #app, and this tab with it, is hidden -->
       <div class="txnote" id="txSourceNote" hidden></div>
       <div id="txImport" class="txtools" hidden>
@@ -288,22 +289,29 @@
           <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th><th id="txDelHead" class="txdel" hidden></th>
         </tr></thead>
         <tbody></tbody>
+        <!-- the add row (manual profiles only), each field under the column it fills. The fields
+             belong to #txForm below by their form attribute — a form cannot wrap a table row.
+             Instrument: "Choose…", "+ New instrument…" (opens #instDialog), then the registry's
+             priced instruments. Now % carries the price hint; Amount and Net follow the input. -->
+        <tfoot id="txAddRow" hidden><tr>
+          <td><input type="date" id="txDate" form="txForm" required aria-label="Date"></td>
+          <td class="muted">Manual</td>
+          <td><select id="txIsin" class="pick" form="txForm" required aria-label="Instrument"></select></td>
+          <td><select id="txType" class="pick" form="txForm" aria-label="Type">
+            <option value="buy">Buy</option><option value="sell">Sell</option>
+          </select></td>
+          <td><input type="number" id="txShares" form="txForm" min="0" step="any" placeholder="Shares" required></td>
+          <td><input type="number" id="txPrice" form="txForm" min="0" step="any" placeholder="Price" required></td>
+          <td class="muted" id="txHint"></td>
+          <td id="txAmount"></td>
+          <td id="txNet"></td>
+          <td><input type="number" id="txFee" form="txForm" min="0" step="any" placeholder="Fee" aria-label="Fee"></td>
+          <td></td>
+          <td class="txdel"><button type="submit" form="txForm" class="dt-addsel">Add</button></td>
+        </tr></tfoot>
       </table>
       <div id="txAdd" class="txtools" hidden>
-        <form id="txForm" class="configrow">
-          <label for="txDate">Add transaction</label>
-          <input type="date" id="txDate" required>
-          <select id="txType" class="pick" aria-label="Type">
-            <option value="buy">Buy</option><option value="sell">Sell</option>
-          </select>
-          <!-- the registry's priced instruments, then "+ New instrument…" (opens #instDialog) -->
-          <select id="txIsin" class="pick" aria-label="Instrument" required></select>
-          <input type="number" id="txShares" min="0" step="any" placeholder="Shares" required>
-          <input type="number" id="txPrice" min="0" step="any" placeholder="Price" required>
-          <input type="number" id="txFee" min="0" step="any" placeholder="Fee" aria-label="Fee">
-          <button type="submit" class="dt-addsel">Add</button>
-          <span class="muted" id="txHint"></span>
-        </form>
+        <form id="txForm"></form>
         <div class="err" id="txMsg"></div>
       </div>
     </div>

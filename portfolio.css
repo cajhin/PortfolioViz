@@ -524,6 +524,14 @@
   .txtools .importlog { align-self: stretch; }
   .txnote { margin: 6px 0 2px; font-size: 0.85rem; color: var(--text-secondary); }
   .txdel .dt-addsel { padding: 1px 10px; font-size: 0.75rem; }
+  /* the add row at the list's foot: compact fields, sized to sit in the columns above */
+  #txAddRow td { border-top: 2px solid var(--border); border-bottom: none; padding: 7px 4px; }
+  #txAddRow input { font: inherit; font-size: 0.82rem; color: var(--text-primary); background: transparent;
+                    border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+  #txAddRow input[type="number"] { width: 6.5em; text-align: right; }
+  #txAddRow .pick { padding-top: 3px; padding-bottom: 3px; }
+  #txIsin { max-width: 15em; }
+  #txHint { font-size: 0.75rem; white-space: normal; }
   /* the editor row under a transaction: one cell across the table, the form left-aligned in it */
   tr.txedit td { text-align: left; white-space: normal; padding: 8px 10px;
                  background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
