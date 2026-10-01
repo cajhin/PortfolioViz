@@ -22,8 +22,9 @@ results can be compared fairly.
   now, where, and the spread — or why no trade is possible.
 - **Currency.** All prices, fees and taxes are in euros. gettex quotes in euros; a home-exchange
   price in another currency is converted at that day's rate.
-- **Valuation.** Positions are valued at their home exchange's daily close, so right after a trade
-  on gettex an account's value can differ slightly from what was paid; it evens out at the next close.
+- **Valuation.** Positions are valued at their home exchange's latest price. While that exchange is
+  closed and gettex is open with a fresh quote, at gettex's **bid** instead — what the position could
+  be sold for right now. `trade.py status` says which, per position (`price_source`).
 
 ## Costs
 

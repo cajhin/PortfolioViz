@@ -464,9 +464,38 @@ def trade_view(r):
             **({"reason": r["description"]} if r["description"] not in ("", "trade.py") else {})}
 
 
+# A position is valued at its home exchange's latest price — except while that exchange is closed
+# and gettex is open with a fresh quote: then at gettex's bid, what it could be sold for right now.
+# Without that, a buy on gettex in the evening (at a price that has moved on since the home close)
+# shows a loss that is only the gap between two clocks. Looked up once per instrument per call:
+# list-accounts asks for the same instruments across several accounts.
+LIVE_MARKS = {}
+
+
+def live_mark(isin):
+    """(bid, "gettex bid") when the home market is closed and gettex has a fresh quote, else None."""
+    if isin in LIVE_MARKS:
+        return LIVE_MARKS[isin]
+    mark = None
+    if gettex_open():
+        rows, sources = registry()
+        row = next((r for r in rows if isin in (r["id"], r["isin"])), None)
+        try:
+            inst = instrument(row, sources) if row else None
+            if inst and not market(inst)["open"]:
+                g = gettex_quote(isin)
+                if g and g["age_min"] <= GETTEX_MAX_AGE_MIN:
+                    mark = (g["bid"], "gettex bid")
+        except Refusal:
+            mark = None                       # no live mark to be had: the close it is
+    LIVE_MARKS[isin] = mark
+    return mark
+
+
 def summary(name, d):
-    """The account as it stands: cash, positions at their latest close, and the result against
-    the money put in — cash included, the one fair way to set two accounts side by side."""
+    """The account as it stands: cash, positions at their current value (see live_mark), and the
+    result against the money put in — cash included, the one fair way to set two accounts side by
+    side."""
     positions = [p for p in read_csv(os.path.join(d, "positions.csv")) if p["isSold"] == "0"]
     cash_rows = read_csv(os.path.join(d, "cash.csv")) if os.path.exists(os.path.join(d, "cash.csv")) else []
     cash = sum(num(c["amount"]) for c in cash_rows)
@@ -478,9 +507,14 @@ def summary(name, d):
         q = latest.get(p["identifier"])
         price, day = (num(q["close"]), q["date"]) if q and q["date"] > p["lastPriceDate"] \
             else (num(p["lastPrice"]), p["lastPriceDate"])
+        source = "latest price"
+        mark = live_mark(p["identifier"])
+        if mark:
+            price, source = mark[0], mark[1]
+            day = today()
         value = num(p["shares"]) * price
         holdings.append({"isin": p["identifier"], "name": p["name"], "shares": num(p["shares"]),
-                         "price": price, "price_date": day, "value": round(value, 2),
+                         "price": price, "price_date": day, "price_source": source, "value": round(value, 2),
                          "cost": round(num(p["purchaseValue"]), 2), "gain": round(value - num(p["purchaseValue"]), 2)})
     invested = sum(h["value"] for h in holdings)
     total = invested + cash

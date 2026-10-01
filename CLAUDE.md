@@ -88,7 +88,9 @@ bound to its own account: its `start-agent` sets `TRADE_ACCOUNT`, and `trade.py`
 agent folder under `agents/` has its own config dir, so agents share no memory. It is **live only**: no date can be given. A trade executes at once at a live price: gettex's ask
 (buy) or bid (sell) while gettex is open (weekdays 08:00–22:00 German time) and its quote is under
 15 minutes old — read from onvista's unofficial API — else the home exchange via Yahoo while that is
-open and its price under 30 minutes old, else not at all. Valuation stays on Yahoo's closes. A trade
+open and its price under 30 minutes old, else not at all. `status`/`list-accounts` value a position
+at gettex's bid while its home market is closed and gettex is open; otherwise at Yahoo's latest
+price. Charts, history and the page stay on Yahoo's closes. A trade
 costs a €10 fee, on top of the spread — gettex's own, or 1% each way at the home exchange, which has
 no bid/ask; a sale also pays 20% tax on its gain. Cash can
 never go below zero: buys (fee included) and withdrawals are refused past it. The rules, with
