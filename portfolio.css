@@ -128,6 +128,8 @@
   .tile .v { font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
   #totalsCard { position: relative; }
   .curtile { cursor: help; }
+  /* under a "Value on" figure: the same, cash included — no label, its title says what it is */
+  .tile .vsub { font-size: 0.75rem; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
   .curtile .k { text-decoration: underline dotted; text-underline-offset: 3px; }
 
   /* width comes from .pagegrid's own first column, not from here — a column of stacked
@@ -531,6 +533,7 @@
   #txAddRow input[type="number"] { width: 6.5em; text-align: right; }
   #txAddRow .pick { padding-top: 3px; padding-bottom: 3px; }
   #txIsin { max-width: 15em; }
+  #txAddRow :disabled { opacity: 0.35; }
   #txHint { font-size: 0.75rem; white-space: normal; }
   /* the editor row under a transaction: one cell across the table, the form left-aligned in it */
   tr.txedit td { text-align: left; white-space: normal; padding: 8px 10px;

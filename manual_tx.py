@@ -4,6 +4,8 @@
     python3 manual_tx.py <profile> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>]
     python3 manual_tx.py <profile> edit <transaction_id> <YYYY-MM-DD> buy|sell <shares> <price> [<fee>]
     python3 manual_tx.py <profile> delete <transaction_id>
+    python3 manual_tx.py <profile> cash <YYYY-MM-DD> deposit|withdrawal <amount>
+    python3 manual_tx.py <profile> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
 
 Rows go to private-profiles/<profile>/manual_ledger.csv in the same format as a Trade Republic
 export row, so import_tr.py's one conversion turns both ledgers into the profile's positions.csv
@@ -12,7 +14,8 @@ currency, the fee is on top (a buy costs shares × price + fee, a sale brings sh
 
 The instrument must be in registry/instruments.csv: a virtual position is only worth tracking if
 it has a price series to track it by. No change — add, edit or delete — may leave the holding
-short at any point in its history.
+short at any point in its history. Cash, on the other hand, may go negative: a buy is never
+refused for want of a deposit, the balance just shows what was overspent.
 """
 import csv, os, sys, uuid
 from datetime import date, datetime, timedelta
@@ -70,6 +73,51 @@ def make_row(rows, day, isin, kind, shares, price, fee, tid=None, keep_at=None):
         "transaction_id": tid or f"manual-{uuid.uuid4()}"}, inst
 
 
+CASH_TYPES = {"deposit": "CUSTOMER_INBOUND", "withdrawal": "CUSTOMER_OUTBOUND_REQUEST"}
+
+
+def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
+    """A deposit to, or withdrawal from, the "Manual" portfolio's cash — the TR export's own types
+    for the same thing, so the one conversion books it (into cash.csv, see import_tr.cash_rows)."""
+    try:
+        when = datetime.strptime(day, "%Y-%m-%d").date()
+    except ValueError:
+        sys.exit(f"date {day!r} is not YYYY-MM-DD")
+    if when > date.today():
+        sys.exit(f"{day} is in the future")
+    if kind not in CASH_TYPES:
+        sys.exit(f"cash type must be deposit or withdrawal, not {kind!r}")
+    amount = num(amount)
+    if amount <= 0:
+        sys.exit("the amount must be positive")
+    at = keep_at or (datetime(when.year, when.month, when.day, 12) + timedelta(
+        seconds=sum(1 for r in rows if r["date"] == day))).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return {"datetime": at, "date": day, "account_type": "MANUAL", "category": "CASH",
+            "type": CASH_TYPES[kind], "asset_class": "", "name": "", "symbol": "", "shares": "",
+            "price": "", "amount": f"{amount if kind == 'deposit' else -amount:.2f}", "fee": "",
+            "tax": "", "currency": "EUR", "description": "entered by hand",
+            "transaction_id": tid or f"manual-{uuid.uuid4()}"}
+
+
+def cash(d, day, kind, amount):
+    path, rows = manual_rows(d)
+    rows.append(make_cash_row(rows, day, kind, amount))
+    write_csv(path, FIELDS, sorted(rows, key=lambda r: r["datetime"]))
+    print(f"added: {day} {kind} {num(amount):g}")
+
+
+def edit_cash(d, tid, day, kind, amount):
+    path, rows = manual_rows(d)
+    old = next((r for r in rows if r["transaction_id"] == tid and r["category"] == "CASH"), None)
+    if not old:
+        sys.exit("only deposits and withdrawals entered by hand can be edited this way")
+    rest = [r for r in rows if r is not old]
+    rest.append(make_cash_row(rest, day, kind, amount, tid=tid,
+                              keep_at=old["datetime"] if old["date"] == day else None))
+    write_csv(path, FIELDS, sorted(rest, key=lambda r: r["datetime"]))
+    print(f"edited: {day} {kind} {num(amount):g}")
+
+
 def manual_rows(d):
     path = os.path.join(d, MANUAL_LEDGER)
     return path, (read_csv(path) if os.path.exists(path) else [])
@@ -89,9 +137,9 @@ def edit(d, tid, day, kind, shares, price, fee):
     """A hand-entered row rewritten in place — same id, same instrument. An imported row is a copy
     of what the broker booked, so it is not edited: delete it instead."""
     path, rows = manual_rows(d)
-    old = next((r for r in rows if r["transaction_id"] == tid), None)
+    old = next((r for r in rows if r["transaction_id"] == tid and r["category"] != "CASH"), None)
     if not old:
-        sys.exit("only transactions entered by hand can be edited — an imported one can be deleted")
+        sys.exit("only buys and sells entered by hand can be edited — an imported one can be deleted")
     rest = [r for r in rows if r is not old]
     row, inst = make_row(rest, day, old["symbol"], kind, shares, price, fee, tid=tid,
                          keep_at=old["datetime"] if old["date"] == day else None)
@@ -135,6 +183,14 @@ def main():
         profile = args[0]
         d = manual_profile_dir(profile)
         edit(d, args[2], *args[3:7], args[7] if len(args) == 8 else "0")
+    elif len(args) == 5 and args[1] == "cash":
+        profile = args[0]
+        d = manual_profile_dir(profile)
+        cash(d, *args[2:5])
+    elif len(args) == 6 and args[1] == "edit-cash":
+        profile = args[0]
+        d = manual_profile_dir(profile)
+        edit_cash(d, *args[2:6])
     elif len(args) == 3 and args[1] == "delete":
         profile = args[0]
         d = manual_profile_dir(profile)

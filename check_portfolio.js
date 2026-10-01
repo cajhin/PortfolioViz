@@ -253,7 +253,9 @@ function hoverAll(nodes, rows, tag, out) {
       const s = await h.computeAsOf(day, from), q = await h.computeAsOfRealized(day, from);
       const tips = {};
       hoverAll(h.renderMap(s.items, { ...s, date: day }), s.items, 'map', tips);
-      h.renderHeaderTotals(s.items, [], { realizedTotal: q.realizedTotal });
+      // as refreshHeader does: the start date's own snapshot is what the "Value on <start>" tile shows
+      const start = await h.computeAsOf(from);
+      h.renderHeaderTotals(s.items, [], { realizedTotal: q.realizedTotal, startValue: start.asOfTotal });
       h.renderClosed({ open: q.open, closed: q.closed, divTotal: q.divTotal,
                        divRows: q.divRows, taxTotal: q.taxTotal, taxSplit: q.taxSplit });
       const rTip = byId('curTip'); rTip.innerHTML = '';

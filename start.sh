@@ -82,7 +82,8 @@ import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.
 #
 # POST /manual-tx?profile=NAME {date, isin, type, shares, price, fee} — the Config tab'"'"'s "Add
 # transaction", for building a virtual demo portfolio by hand; with &edit=ID, rewrites that
-# hand-entered row (same body, instrument ignored); with &delete=ID, removes one. Both run manual_tx.py, which validates, writes manual_ledger.csv and rebuilds the profile.
+# hand-entered row (same body, instrument ignored); with &delete=ID, removes one. A body of
+# {date, type: deposit|withdrawal, amount} books cash instead. Both run manual_tx.py, which validates, writes manual_ledger.csv and rebuilds the profile.
 # Manual profiles only, like the import.
 #
 # GET /instrument-search?find=NAME | ?symbols=ISIN and POST /instrument {isin, symbol, name,
@@ -284,10 +285,14 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 self.send_error(400, "body must be JSON")
                 return
-            fields = [str(tx.get(k, "")) for k in ("date", "isin", "type", "shares", "price")] \
-                     + [str(tx.get("fee") or 0)]
-            # an edit keeps its instrument: the id names the row, the rest is what it becomes
-            args = ["edit", edit] + fields[:1] + fields[2:] if edit else ["add"] + fields
+            if tx.get("type") in ("deposit", "withdrawal"):
+                cash = [str(tx.get("date", "")), str(tx["type"]), str(tx.get("amount", ""))]
+                args = ["edit-cash", edit] + cash if edit else ["cash"] + cash
+            else:
+                fields = [str(tx.get(k, "")) for k in ("date", "isin", "type", "shares", "price")] \
+                         + [str(tx.get("fee") or 0)]
+                # an edit keeps its instrument: the id names the row, the rest is what it becomes
+                args = ["edit", edit] + fields[:1] + fields[2:] if edit else ["add"] + fields
         proc = subprocess.run([sys.executable, os.path.join(os.getcwd(), "manual_tx.py"), profile] + args,
                               capture_output=True, text=True, timeout=60)
         self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)

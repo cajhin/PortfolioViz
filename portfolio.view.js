@@ -865,7 +865,11 @@ function renderClosedPositions() {
   applySort('tblClosedPositions');
 }
 
-const TYPE_LABEL = { buy: 'Buy', sell: 'Sell', dividend: 'Dividend', fees_taxes: 'Fees/Taxes' };
+const TYPE_LABEL = { buy: 'Buy', sell: 'Sell', dividend: 'Dividend', fees_taxes: 'Fees/Taxes',
+                     deposit: 'Deposit', withdrawal: 'Withdrawal', interest: 'Interest' };
+// the cash bookings that are transactions in their own right — a trade's or a dividend's cash
+// effect is already its own row in the list, and a tax refund is one as Fees/Taxes
+const CASH_LISTED = new Set(['deposit', 'withdrawal', 'interest']);
 
 // The "Now %" cell. The figure is what the price has done since the trade and reads the same way
 // for every row; the colour is the verdict on the trade, which is the opposite reading for a sale.
@@ -888,20 +892,25 @@ let TRADES_DRAWN_FOR = null;
 function renderTrades() {
   if (TRADES_DRAWN_FOR === SHOW_MONEY) return;
   TRADES_DRAWN_FOR = SHOW_MONEY;
-  const rows = [...TRADES].sort((a, b) => a.datetime < b.datetime ? 1 : -1);   // newest first
+  // money in, out and interest are listed among the trades, shaped like an activity row
+  const cashRows = CASH.filter(c => CASH_LISTED.has(c.kind)).map(c => ({
+    portfolio: c.portfolio, name: '', type: c.kind, datetime: c.datetime, shares: '', price: '',
+    amount: c.amount, amountNet: c.amount, fee: 0, tax: 0, transactionId: c.transactionId, cash: true }));
+  const rows = [...TRADES, ...cashRows].sort((a, b) => a.datetime < b.datetime ? 1 : -1);   // newest first
   const feesTotal = TRADES.reduce((t, r) => t + num(r.fee), 0);
   document.getElementById('tradesHead').textContent =
-    `${rows.length} Trades (${fmtMoney(feesTotal)} Fees)`;
+    `${TRADES.length} Trades (${fmtMoney(feesTotal)} Fees)` +
+    (cashRows.length ? ` · ${cashRows.length} cash bookings` : '');
   // a manual profile's rows each name the ledger row they came from, and can be edited by it
   const deletable = PROFILE_SOURCE === 'manual';
   document.getElementById('txDelHead').hidden = !deletable;
   const tb = document.querySelector('#tblTrades tbody');
   tb.replaceChildren(...rows.map(t => {
     const tr = document.createElement('tr');
-    const cls = t.type === 'sell' ? 'pos' : t.type === 'dividend' ? 'income' : '';
+    const cls = t.type === 'sell' ? 'pos' : t.type === 'dividend' || t.type === 'interest' ? 'income' : '';
     tr.innerHTML =
       `<td>${t.datetime.slice(0, 10)}</td><td>${t.portfolio}</td>` +
-      `<td>${NAMES.get(t.name) || tidyName(t.name)}</td>` +
+      `<td>${t.cash ? '<span class="muted">cash</span>' : NAMES.get(t.name) || tidyName(t.name)}</td>` +
       `<td>${TYPE_LABEL[t.type] || t.type}</td>` +
       `<td>${num(t.shares) ? num(t.shares).toLocaleString('de-DE') : '–'}</td>` +
       `<td>${num(t.price) ? fmtMoney2(num(t.price)) : '–'}</td>` +
@@ -966,12 +975,45 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
   document.getElementById('kCur').textContent = curLabel();
   document.getElementById('kPur').textContent = purLabel(false);
   document.getElementById('kGain').textContent = gainLabel();
-  // a range counts only the sales booked inside it, so the tile is no longer a lifetime total
-  document.getElementById('kRel').textContent =
-    rangeFrom() ? 'Realised pre-tax (in range)' : 'Realised pre-tax (incl. closed)';
+  // the label stays short; what it covers — pre-tax, closed positions too, and on a range only the
+  // sales booked inside it — is the tile's hover popup (attachRelTip)
+  document.getElementById('kRel').textContent = 'Realized';
+  attachRelTip(rangeFrom()
+    ? 'pre-tax, including closed positions — only sales booked within the range'
+    : 'pre-tax, including closed positions');
   const all = totals(items);
+  // cash is its own tile, counted into no other figure — this one included (see cashBalance)
+  const cash = cashBalance(rangeAt());
   document.getElementById('tCur').textContent = fmtMoney2(all.cur);
-  document.getElementById('tPur').textContent = fmtMoney2(all.pur);
+  // On a range the left tile reads "Value on <start>", and that is what it shows: the investments
+  // actually held that day, at that day's prices (refreshHeader's own start-date snapshot). The
+  // range's gain is still measured from its baseline — that value plus the cost of everything
+  // bought since, all.pur here — which the Unrealised gain tile's popup states.
+  const startValue = MODE !== 'rel' && rangeFrom() && Number.isFinite(opts.startValue) ? opts.startValue : null;
+  // under each "Value on" figure, small: the same value with that day's cash added. Invested only
+  // carries one when a range has made it a value on the start date — added to a cost it would
+  // mean nothing. The line has no label; its title (the browser's own tooltip) says what it is.
+  const withCash = (id, show, value, date) => {
+    const el = document.getElementById(id);
+    el.hidden = !show;
+    if (!show) return;
+    el.textContent = fmtMoney2(value);
+    el.title = date ? `Value on ${deDate(date)} incl. cash` : 'Current value incl. cash';
+  };
+  withCash('tCurCash', CASH.length > 0, all.cur + cash, rangeAt());
+  withCash('tPurCash', CASH.length > 0 && startValue != null,
+           (startValue ?? 0) + cashBalance(rangeFrom()), rangeFrom());
+  const cashTile = document.getElementById('tileCash');
+  cashTile.hidden = !CASH.length;
+  if (CASH.length) {
+    document.getElementById('kCash').textContent = rangeAt() ? `Cash on ${deDate(rangeAt())}` : 'Cash';
+    const cEl = document.getElementById('tCash');
+    cEl.textContent = fmtMoney2(cash);
+    cEl.className = 'v' + (cash < 0 ? ' neg' : '');
+    attachCashTip();
+  }
+  document.getElementById('tPur').textContent = fmtMoney2(startValue ?? all.pur);
+  attachGainTip(all, startValue != null);
   const gEl = document.getElementById('tGain');
   gEl.textContent = fmtMoney2(all.gain) + (all.pur > 0 ? ' (' + fmtPct(all.gain / all.pur * 100) + ')' : '');
   gEl.className = 'v ' + (all.gain >= 0 ? 'pos' : 'neg');
@@ -1077,6 +1119,7 @@ function attachCurTip(items) {
   // land wherever chartwrap happens to sit on the page, not near the cursor
   const tip = document.getElementById('curTip');
   const wrapEl = document.getElementById('totalsCard');
+  // each portfolio's investments, with their own gain — cash is the Cash tile's, not this one's
   const rows = PF.map(p => totals(items.filter(d => d.portfolio === p.name)))
     .map((s, i) => ({ name: PF[i].name, cur: s.cur, gain: s.gain, pur: s.pur }));
   tile.onpointerenter = e => {
@@ -1084,6 +1127,62 @@ function attachCurTip(items) {
       rows.map(r => `<div class="r"><span>${r.name}</span>` +
         `<b class="${r.gain >= 0 ? 'pos' : 'neg'}">${fmtMoney(r.cur)}` +
         `${r.pur > 0 ? ' · ' + fmtPct(r.gain / r.pur * 100) : ''}</b></div>`).join('');
+    tip.classList.add('on');
+    placeTip(tip, wrapEl, e);
+  };
+  tile.onpointermove = e => placeTip(tip, wrapEl, e);
+  tile.onpointerleave = () => tip.classList.remove('on');
+}
+
+// The Unrealised gain tile says what it is measured against. On a range that is the baseline —
+// the start date's holdings at their value then, plus the cost of everything bought since — which
+// is neither tile beside it, so the popup names the figure.
+function attachGainTip(all, range) {
+  const tile = document.getElementById('tileGain');
+  const tip = document.getElementById('curTip');
+  const wrapEl = document.getElementById('totalsCard');
+  tile.onpointerenter = e => {
+    tip.innerHTML = `<div class="t">${gainLabel()}</div>` +
+      tipRow('Measured against', fmtMoney2(all.pur)) +
+      `<div class="full">${range
+        ? `The holdings of ${deDate(rangeFrom())} at that day's value, plus what everything bought ` +
+          `since cost — so a purchase in the range is not counted as gain.`
+        : MODE === 'rel' ? `The same money put into ${BENCH_LABEL} instead.`
+        : 'What the positions held now cost.'}</div>`;
+    tip.classList.add('on');
+    placeTip(tip, wrapEl, e);
+  };
+  tile.onpointermove = e => placeTip(tip, wrapEl, e);
+  tile.onpointerleave = () => tip.classList.remove('on');
+}
+
+// The Realized tile says what it counts on hover, rather than in a label too long for the tile.
+function attachRelTip(text) {
+  const tile = document.getElementById('tileRel');
+  const tip = document.getElementById('curTip');
+  const wrapEl = document.getElementById('totalsCard');
+  tile.onpointerenter = e => {
+    tip.innerHTML = `<div class="t">Realized</div><div class="r"><span>${text}</span></div>`;
+    tip.classList.add('on');
+    placeTip(tip, wrapEl, e);
+  };
+  tile.onpointermove = e => placeTip(tip, wrapEl, e);
+  tile.onpointerleave = () => tip.classList.remove('on');
+}
+
+// The Cash tile's breakdown, per account: the balance, and what moved it from outside — money in,
+// money out, interest. Up to the date the tiles show, the same as the balance itself.
+function attachCashTip() {
+  const tile = document.getElementById('tileCash');
+  const tip = document.getElementById('curTip');
+  const wrapEl = document.getElementById('totalsCard');
+  const rows = cashSummary(rangeAt());
+  tile.onpointerenter = e => {
+    tip.innerHTML = `<div class="t">Cash${rangeAt() ? ' on ' + deDate(rangeAt()) : ''} — not counted as invested, nor in any gain</div>` +
+      rows.map(r => `<div class="r"><span><b>${r.portfolio}</b></span><b class="${r.balance < 0 ? 'neg' : ''}">${fmtMoney(r.balance)}</b></div>` +
+        `<div class="r"><span>in</span><b>${fmtMoney(r.in)}</b></div>` +
+        `<div class="r"><span>out</span><b>${fmtMoney(r.out)}</b></div>` +
+        (r.interest ? `<div class="r"><span>interest</span><b class="income">${fmtMoney(r.interest)}</b></div>` : '')).join('');
     tip.classList.add('on');
     placeTip(tip, wrapEl, e);
   };
@@ -1112,8 +1211,12 @@ function redrawEverything() {
 async function refreshHeader() {
   if ((AS_OF || AS_FROM) && (VIEW === 'map' || VIEW === 'pie')) {
     const to = AS_OF || TODAY;
-    const [snap, real] = await Promise.all([computeAsOf(to, AS_FROM), computeAsOfRealized(to, AS_FROM)]);
-    renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal });
+    // the start date on its own as well: the range's own snapshot re-bases every position onto
+    // its start (what the gain is measured from), which is not what was actually held that day
+    const [snap, real, start] = await Promise.all([computeAsOf(to, AS_FROM), computeAsOfRealized(to, AS_FROM),
+                                                   AS_FROM ? computeAsOf(AS_FROM) : null]);
+    renderHeaderTotals(snap.items, [], { realizedTotal: real.realizedTotal,
+                                         startValue: start ? start.asOfTotal : NaN });
     renderClosed({ open: real.open, closed: real.closed, divTotal: real.divTotal,
                    divRows: real.divRows, taxTotal: real.taxTotal, taxSplit: real.taxSplit });
   } else {
@@ -3292,6 +3395,16 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if
 MODE = document.getElementById('relMode').checked ? 'rel' : 'abs';
 restoreRangeState();
 loadLabelOverrides();
+// ?view= opens that view once (the model has already read it into VIEW) — the Transactions tab
+// reloads onto itself this way after a change. Taken back out of the address bar straight away,
+// so a later reload, or the page opened from history, starts on the map as usual.
+try {
+  const q = new URLSearchParams(location.search);
+  if (q.has('view')) {
+    q.delete('view');
+    history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash);
+  }
+} catch { /* no history API (the headless check) — nothing to tidy */ }
 
 // ingest() builds the model; this draws it. Split so the model can be exercised without a DOM.
 function load(...texts) {
@@ -3328,10 +3441,10 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
   })
   .then(([configText, instrumentsText, sourcesText, sectorColorsText]) => Promise.all([
     configText, get(CSV_PATH(), true), get(TRADES_PATH()), instrumentsText, sourcesText,
-    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH), sectorColorsText,
+    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH), get(CASH_PATH()), sectorColorsText,
   ]))
   // sector colours are a view concern (see SECTOR_COLOR_OVERRIDE) — applied here, not threaded
-  // through ingest()'s own argument list, which stays exactly the seven the model expects
+  // through ingest()'s own argument list, which stays exactly the eight the model expects
   .then(texts => {
     loadSectorColors(texts.pop());
     load(...texts);
@@ -3593,6 +3706,7 @@ function refreshManualTools() {
   day.value = kept.date || TODAY;
   if (kept.type) document.getElementById('txType').value = kept.type;
   TX_ISIN_PREV = '';
+  txCashMode();
 }
 
 let PREFILL_TOKEN = 0;
@@ -3622,6 +3736,21 @@ function txFigures() {
 }
 ['txShares', 'txPrice', 'txFee', 'txType'].forEach(id =>
   document.getElementById(id).addEventListener('input', txFigures));
+
+// Deposit / Withdrawal in the add row: no instrument, shares, price or fee — just an amount, typed
+// into the Amount column. The other fields are disabled (and so neither required nor submitted).
+const isCashType = () => ['deposit', 'withdrawal'].includes(document.getElementById('txType').value);
+function txCashMode() {
+  const cash = isCashType();
+  ['txIsin', 'txShares', 'txPrice', 'txFee'].forEach(id => { document.getElementById(id).disabled = cash; });
+  document.getElementById('txCashAmount').hidden = !cash;
+  document.getElementById('txCashAmount').required = cash;
+  document.getElementById('txAmount').hidden = cash;
+  document.getElementById('txNet').textContent = '';
+  document.getElementById('txHint').textContent = '';
+  if (!cash) { txFigures(); prefillTxPrice(); }
+}
+document.getElementById('txType').addEventListener('change', txCashMode);
 document.getElementById('txDate').addEventListener('change', prefillTxPrice);
 document.getElementById('txIsin').addEventListener('change', e => {
   if (e.target.value === NEW_INSTRUMENT) { openInstrumentDialog(); return; }
@@ -3647,12 +3776,14 @@ async function postManualTx(query, tx, msg = document.getElementById('txMsg')) {
 document.getElementById('txForm').addEventListener('submit', e => {
   e.preventDefault();
   const val = id => document.getElementById(id).value;
-  if (val('txIsin') === NEW_INSTRUMENT) return;
+  if (!isCashType() && val('txIsin') === NEW_INSTRUMENT) return;
   try {
     sessionStorage.setItem(TX_FORM_KEY, JSON.stringify({ date: val('txDate'), type: val('txType') }));
   } catch { /* the form just starts fresh after the reload */ }
-  postManualTx('', { date: val('txDate'), isin: val('txIsin'), type: val('txType'),
-                     shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
+  postManualTx('', isCashType()
+    ? { date: val('txDate'), type: val('txType'), amount: val('txCashAmount') }
+    : { date: val('txDate'), isin: val('txIsin'), type: val('txType'),
+        shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
 });
 
 // A row's Edit, in a manual profile's list (see renderTrades): an editor row opens under it, one
@@ -3661,33 +3792,45 @@ document.getElementById('txForm').addEventListener('submit', e => {
 // so it can only be deleted — set aside, so re-importing the same export does not revive it.
 function openTxEditor(tr, t) {
   document.querySelectorAll('#tblTrades tr.txedit').forEach(r => r.remove());
-  const what = `${t.datetime.slice(0, 10)} ${TYPE_LABEL[t.type] || t.type} of ${NAMES.get(t.name) || tidyName(t.name)}`;
-  const editable = t.transactionId.startsWith('manual-') && (t.type === 'buy' || t.type === 'sell');
+  const what = `${t.datetime.slice(0, 10)} ${TYPE_LABEL[t.type] || t.type}` +
+    (t.cash ? ` of ${fmtMoney2(Math.abs(num(t.amount)))}` : ` of ${NAMES.get(t.name) || tidyName(t.name)}`);
+  const hand = t.transactionId.startsWith('manual-');
+  const editable = hand && (t.type === 'buy' || t.type === 'sell');
+  const cashEditable = hand && (t.type === 'deposit' || t.type === 'withdrawal');
   const row = document.createElement('tr');
   row.className = 'txedit';
   const td = document.createElement('td');
   td.colSpan = tr.children.length;
   const form = document.createElement('form');
   form.className = 'configrow';
-  form.innerHTML = editable
+  form.innerHTML = cashEditable
+    ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
+      `<select name="type" class="pick" aria-label="Type"><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option></select>` +
+      `<input type="number" name="amount" min="0" step="any" required placeholder="Amount" value="${Math.abs(num(t.amount))}">` +
+      `<button type="submit" class="dt-addsel">Save</button>`
+    : editable
     ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
       `<select name="type" class="pick" aria-label="Type"><option value="buy">Buy</option><option value="sell">Sell</option></select>` +
       `<input type="number" name="shares" min="0" step="any" required placeholder="Shares" value="${num(t.shares)}">` +
       `<input type="number" name="price" min="0" step="any" required placeholder="Price" value="${num(t.price)}">` +
       `<input type="number" name="fee" min="0" step="any" placeholder="Fee" aria-label="Fee" value="${num(t.fee) || ''}">` +
       `<button type="submit" class="dt-addsel">Save</button>`
+    : hand
+    ? `<span class="muted">Booked with its trade — edit the trade instead.</span>`
     : `<span class="muted">Imported from Trade Republic — it can be deleted, not edited.</span>`;
   form.insertAdjacentHTML('beforeend',
     `<button type="button" class="dt-addsel txdanger" data-act="delete">Delete</button>` +
     `<button type="button" class="dt-addsel" data-act="cancel">Cancel</button><span class="err"></span>`);
-  if (editable) form.elements.type.value = t.type;
+  if (editable || cashEditable) form.elements.type.value = t.type;
   const msg = form.querySelector('.err');
   const id = encodeURIComponent(t.transactionId);
   form.addEventListener('submit', e => {
     e.preventDefault();
     const f = form.elements;
-    postManualTx(`&edit=${id}`, { date: f.date.value, type: f.type.value, shares: f.shares.value,
-                                  price: f.price.value, fee: f.fee.value || 0 }, msg);
+    postManualTx(`&edit=${id}`, cashEditable
+      ? { date: f.date.value, type: f.type.value, amount: f.amount.value }
+      : { date: f.date.value, type: f.type.value, shares: f.shares.value,
+          price: f.price.value, fee: f.fee.value || 0 }, msg);
   });
   form.querySelector('[data-act="delete"]').addEventListener('click', () => {
     if (confirm(`Delete ${what}?`)) postManualTx(`&delete=${id}`, null, msg);

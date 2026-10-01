@@ -55,6 +55,9 @@ const profilePath = file => `private-profiles/${PROFILE}/${file}`;
 const PROFILE_CONFIG_PATH = () => profilePath('profile.json');
 const CSV_PATH = () => profilePath('positions.csv');
 const TRADES_PATH = () => profilePath('activities.csv');
+// A TR-imported or manual profile's cash, booking by booking (written by import_tr.py's rebuild).
+// A Parqet profile has none — its export carries no cash history — and the page then shows none.
+const CASH_PATH = () => profilePath('cash.csv');
 // registry/ is curated: what exists, and what each instrument is called. It is keyed by ISIN and
 // is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
@@ -101,7 +104,8 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
     TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World',
     PROFILE = new URLSearchParams(location.search).get('profile') || '',
-    WATCHLIST = new Set();                             // ids from the profile's "watchlist" key
+    WATCHLIST = new Set(),                             // ids from the profile's "watchlist" key
+    CASH = [];                                         // cash.csv rows, oldest first — see cashBalance
 
 /* ---------- CSV ---------- */
 function parseCSV(text) {
@@ -239,6 +243,29 @@ function xirr(flows) {
     if (flo * fm <= 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
   }
   return ((lo + hi) / 2) * 100;
+}
+
+// Cash: what the account holds besides its positions, on `date` (an ISO date; null for now), for
+// one portfolio or all. Shown in the header's own Cash tile and counted into no other figure:
+// moving money to the broker is not an investment, so cash stays out of the value, Invested, every
+// gain, return and IRR, the benchmark comparisons and the map's areas. It may be negative.
+function cashBalance(date = null, portfolio = null) {
+  return CASH.reduce((t, c) => (!date || c.date <= date) && (!portfolio || c.portfolio === portfolio)
+    ? t + c.amount : t, 0);
+}
+// money in and out, and interest earned, up to `date` — the Cash tile's breakdown
+function cashSummary(date = null) {
+  const by = new Map();
+  CASH.forEach(c => {
+    if (date && c.date > date) return;
+    const s = by.get(c.portfolio) || { portfolio: c.portfolio, balance: 0, in: 0, out: 0, interest: 0 };
+    s.balance += c.amount;
+    if (c.kind === 'deposit') s.in += c.amount;
+    if (c.kind === 'withdrawal') s.out -= c.amount;
+    if (c.kind === 'interest') s.interest += c.amount;
+    by.set(c.portfolio, s);
+  });
+  return [...by.values()];
 }
 
 // The profile named in the URL wins; failing that, config.json's defaultProfile, then "main".
@@ -1222,10 +1249,10 @@ function totals(rows) {
 const EMPTY_PROFILE_MSG = 'no rows with a positive value';
 
 /* ---------- ingest ----------
-   config.json (already merged with the profile's own, see mergeConfig) plus the six CSVs in, the
-   whole model out. Called by load() in portfolio.view.js,
+   config.json (already merged with the profile's own, see mergeConfig) plus the seven CSVs in —
+   cash.csv the seventh, absent for a Parqet profile — the whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
-function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText) {
+function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText, cashText) {
   // malformed or missing config.json keeps the built-in defaults rather than failing the page —
   // same "absent input degrades gracefully" rule every other file here follows
   let benchIsin = '';
@@ -1267,6 +1294,9 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
     .filter(r => r.date && r.close > 0)
     .sort((a, b) => a.date < b.date ? -1 : 1);
   TRADES = tradesText ? parseCSV(tradesText) : [];
+  CASH = (cashText ? parseCSV(cashText) : [])
+    .map(c => ({ ...c, amount: num(c.amount) }))
+    .sort((a, b) => a.datetime < b.datetime ? -1 : 1);
   indexTrades();
   const all = build(parseCSV(text));
   ITEMS = all.filter(d => !d.sold);

@@ -61,6 +61,33 @@ ACTIVITIES_FIELDS = ["portfolio", "name", "identifier", "type", "datetime", "sha
                      "amount", "amountNet", "fee", "tax", "realizedGains", "realizedGainsNet",
                      "currency", "transactionId"]
 DIVIDEND_TYPES = {"DIVIDEND", "DISTRIBUTION", "EARNINGS"}
+
+# cash.csv: every booking's effect on its account's cash, tagged by what moved it. The page sums it
+# into a balance on any date; only "deposit"/"withdrawal"/"interest" are listed as transactions of
+# their own — the rest already are, as the trade, dividend or tax row they came with.
+CASH_FIELDS = ["portfolio", "datetime", "date", "kind", "amount", "transactionId"]
+CASH_KIND = {"CUSTOMER_INBOUND": "deposit", "TRANSFER_INBOUND": "deposit",
+             "TRANSFER_INSTANT_INBOUND": "deposit", "CUSTOMER_OUTBOUND_REQUEST": "withdrawal",
+             "TRANSFER_OUTBOUND": "withdrawal", "TRANSFER_INSTANT_OUTBOUND": "withdrawal",
+             "INTEREST_PAYMENT": "interest", "TAX_OPTIMIZATION": "tax",
+             "BUY": "trade", "SELL": "trade", "TILG": "trade"}
+
+
+def cash_rows(ledger):
+    """What each booking did to its account's cash: amount + fee + tax, signed as TR signs them
+    (a buy's amount and fee are negative, a refund's tax positive). Checked against Parqet's own
+    record of the same account's balance: equal to the cent, but for the TAX_OPTIMIZATION
+    refunds Parqet leaves out."""
+    out = []
+    for t in ledger:
+        delta = num(t["amount"]) + num(t["fee"]) + num(t["tax"])
+        if abs(delta) < 0.005:
+            continue
+        kind = "income" if t["type"] in DIVIDEND_TYPES else CASH_KIND.get(t["type"], "other")
+        out.append({"portfolio": MANUAL_PORTFOLIO if t.get("account_type") == "MANUAL" else PORTFOLIO,
+                    "datetime": t["datetime"], "date": t["date"], "kind": kind,
+                    "amount": fmt(delta, 2), "transactionId": t["transaction_id"]})
+    return out
 EPS = 1e-9
 
 
@@ -231,7 +258,7 @@ def convert(ledger):
             names[""] = "Tax optimisation"      # the one row with no ISIN, so this is its name
             row(t, k, "fees_taxes", 0.0, 0.0, tax=-refund, net=-refund)
         elif t["category"] == "CASH":
-            notes["cash bookings ignored (deposits, transfers, interest)"] += 1
+            notes["cash bookings — deposits, transfers, interest — go to cash.csv only"] += 1
         else:
             notes[f"unknown type {kind} ({t['category']}) ignored"] += 1
 
@@ -300,12 +327,16 @@ def rebuild(profile, d, tr_rows=None):
     activities, positions, notes = convert(ledger)
     write_csv(os.path.join(d, "activities.csv"), ACTIVITIES_FIELDS, activities)
     write_csv(os.path.join(d, "positions.csv"), POSITIONS_FIELDS, positions)
+    cash = cash_rows(ledger)
+    write_csv(os.path.join(d, "cash.csv"), CASH_FIELDS, cash)
 
     open_n = sum(1 for p in positions if p["isSold"] == "0")
     print(f"{profile}: {len(tr_rows)} imported + {len(manual)} hand-entered rows → "
           f"{len(activities)} activities, {open_n} open and {len(positions) - open_n} closed positions")
     for note, n in sorted(notes.items()):
         print(f"  {note}" + (f" (×{n})" if n > 1 else ""))
+    for pf in sorted({c["portfolio"] for c in cash}):
+        print(f"  cash, {pf}: {sum(num(c['amount']) for c in cash if c['portfolio'] == pf):.2f}")
 
     registry = registry_names()
     unknown = sorted({p["identifier"] for p in positions} - set(registry))

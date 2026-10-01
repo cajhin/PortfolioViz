@@ -42,10 +42,14 @@
     <div class="livecell-empty"></div>
     <div class="card" id="totalsCard">
       <div class="totals">
-        <div class="tile curtile" id="tileCur"><div class="k" id="kCur">Current value</div><div class="v" id="tCur">–</div></div>
-        <div class="tile curtile" id="tilePur"><div class="k" id="kPur">Invested</div><div class="v" id="tPur">–</div></div>
-        <div class="tile"><div class="k" id="kGain">Unrealised gain</div><div class="v" id="tGain">–</div></div>
-        <div class="tile"><div class="k" id="kRel">Realised pre-tax (incl. closed)</div><div class="v" id="tRel">–</div></div>
+        <div class="tile curtile" id="tilePur"><div class="k" id="kPur">Invested</div><div class="v" id="tPur">–</div><div class="vsub" id="tPurCash" hidden></div></div>
+        <div class="tile curtile" id="tileCur"><div class="k" id="kCur">Current value</div><div class="v" id="tCur">–</div><div class="vsub" id="tCurCash" hidden></div></div>
+        <!-- shown only for a profile with cash (TR-imported or manual); see renderHeaderTotals. After
+             Invested and Current value, which a range labels "Value on <start>" and "Value on <end>"
+             — kept side by side, start first -->
+        <div class="tile curtile" id="tileCash" hidden><div class="k" id="kCash">Cash</div><div class="v" id="tCash">–</div></div>
+        <div class="tile curtile" id="tileGain"><div class="k" id="kGain">Unrealised gain</div><div class="v" id="tGain">–</div></div>
+        <div class="tile curtile" id="tileRel"><div class="k" id="kRel">Realized</div><div class="v" id="tRel">–</div></div>
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
         <!-- not a tile: a footnote about the data itself, parked in the space the tiles leave -->
         <span class="datastamp" id="dataStamp"></span>
@@ -299,11 +303,14 @@
           <td><select id="txIsin" class="pick" form="txForm" required aria-label="Instrument"></select></td>
           <td><select id="txType" class="pick" form="txForm" aria-label="Type">
             <option value="buy">Buy</option><option value="sell">Sell</option>
+            <option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option>
           </select></td>
           <td><input type="number" id="txShares" form="txForm" min="0" step="any" placeholder="Shares" required></td>
           <td><input type="number" id="txPrice" form="txForm" min="0" step="any" placeholder="Price" required></td>
           <td class="muted" id="txHint"></td>
-          <td id="txAmount"></td>
+          <!-- computed for a buy or sell; typed in for a deposit or withdrawal (see txCashMode) -->
+          <td><span id="txAmount"></span><input type="number" id="txCashAmount" form="txForm" min="0"
+            step="any" placeholder="Amount" aria-label="Amount" hidden></td>
           <td id="txNet"></td>
           <td><input type="number" id="txFee" form="txForm" min="0" step="any" placeholder="Fee" aria-label="Fee"></td>
           <td></td>

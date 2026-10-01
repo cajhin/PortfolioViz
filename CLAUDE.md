@@ -23,8 +23,8 @@ private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.cs
                           profile.json; gitignored, regenerate the CSVs. A TR-fed profile also
                           has tr_ledger.csv (every TR row imported, by transaction_id),
                           manual_ledger.csv (hand-entered rows, same format), tr_deleted.csv
-                          (imported rows deleted on the page) — its real source; the two CSVs
-                          are rebuilt from these — and exports/ (uploads)
+                          (imported rows deleted on the page) — its real source; positions.csv,
+                          activities.csv and cash.csv are rebuilt from these — and exports/
 gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
 gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
 ```
@@ -42,9 +42,15 @@ gets its own row, its own `id`, its own slug — e.g. a `hynix-frankfurt` alongs
 `price_sources.csv` never has to choose between two rows for one thing. Prices are converted to the
 portfolio currency **on write**, with the original kept in `close_raw`; nothing in the browser does
 FX. An instrument may be listed with no matching Parqet holding — that is how a benchmark or a
-watchlist name gets charted. Cash accounts are not tracked at all: `build()` drops the export's
-cash rows, so nothing downstream has ever seen one. They have no price series and no dated balance
-history, so no past date could be reconstructed for them.
+watchlist name gets charted. Parqet's cash accounts are not tracked: `build()` drops the export's
+cash rows, since they carry no dated balance history and no past date could be reconstructed for
+them. A TR-imported or manual profile *does* have that history — every booking — so its rebuild
+writes `cash.csv` (each booking's cash effect, by account), and the page shows the balance on a
+date in a Cash tile of its own and counts it into **nothing else**: not the Current value /
+"Value on" tile, not Invested, no gain, return or IRR, no benchmark, no map area. Moving
+money to the broker is not an investment. Cash may go negative (a demo buy is never refused for
+want of a deposit). Reconstructed TR cash matches Parqet's balance for the same account to the
+cent, apart from TR's tax refunds, which Parqet leaves out.
 
 **Profiles.** The page can show several portfolios (profiles of the same person — no access
 control). Only `private-profiles/<p>/` is per profile; `registry/`, `gen_prices/`, `gen_fx/` and the
