@@ -54,8 +54,7 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # POST /profile-label?profile=NAME {label} — the Config tab's rename: only the label changes. The
 # name never does — it is what URLs, baselines and the refresh task refer to the profile by.
 # POST /profile-delete?profile=NAME — the Config tab's Delete, for a profile the user may change:
-# manage-accounts.py purge, after a backup of the whole database to data/purged/. The default
-# profile is refused there.
+# manage-accounts.py purge, with no backup. The default profile is refused there.
 #
 # POST /import-tr?profile=NAME&name=FILE.csv — the Config tab's "Import Trade Republic file":
 # the body is the export itself. Kept in private-profiles/<name>/exports/ (the record of what
@@ -327,7 +326,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_text(404 if not self.may_open(profile) else 403, f"you may not delete {profile}")
             return
         proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manage-accounts.py"), "purge", profile,
-                               "--yes", "--backup-dir", os.path.join(ROOT, "data", "purged")],
+                               "--yes", "--no-backup"],
                               capture_output=True, text=True, timeout=120)
         try:
             out = json.loads(proc.stdout)

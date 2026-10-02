@@ -3583,8 +3583,8 @@ function applyProfileSource(source, label) {
 }
 
 // The Config tab's "Other profiles": every profile the user may open but this one, each a link to
-// it and — where they may change it — a Delete. That purges it on the server (all its data, after
-// a backup there), so it asks first; the current profile is not offered, so the page never
+// it and — where they may change it — a Delete. That purges it on the server (all its data, for
+// good), so it asks first; the current profile is not offered, so the page never
 // deletes what it is showing.
 function renderOtherProfiles(list) {
   const others = list.filter(p => p.name !== PROFILE);
@@ -3601,7 +3601,7 @@ function renderOtherProfiles(list) {
     const msg = Object.assign(document.createElement('span'), { className: 'err' });
     btn.addEventListener('click', async () => {
       if (!confirm(`Delete profile "${p.label || p.name}" (${p.name}) and all its data — positions, ` +
-                   'transactions, settings? A backup of the database is kept on the server.')) return;
+                   'transactions, settings? This cannot be undone.')) return;
       btn.disabled = true;
       msg.textContent = '';
       try {

@@ -117,7 +117,7 @@ until it creates a profile (granted to its creator) or is granted one —
 `scripts/manage-users.py grant`, which is also how every profile made by a script gets an
 owner. Update fetches one granted profile's instruments, never the whole registry; registering an
 instrument takes write access to some profile. The Config tab lists the user's other profiles and deletes one
-they may change — `manage-accounts.py purge`, after a backup to `data/purged/`. These tables (`user`, `user_profile`,
+they may change — `manage-accounts.py purge`, with no backup. These tables (`user`, `user_profile`,
 `session`) are a fourth lifecycle — people, neither a profile's own nor the registry — and
 `db.migrate()` adds them to an older database (server.py runs it at start). It is for
 convenience and keeping people apart, not hardened: the registry, prices and every script stay
