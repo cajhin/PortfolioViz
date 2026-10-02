@@ -3461,12 +3461,24 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
   })
   .catch(err => {
     if (err && err.message === EMPTY_PROFILE_MSG) { showEmptyProfile(); return; }
-    document.getElementById('loader').hidden = false;
-    document.getElementById('csvPath').textContent = CSV_PATH();
-    // the server said why (an unknown profile, an empty database): that, rather than the guesses
-    if (err && err.detail) document.getElementById('loaderWhy').textContent = err.detail;
-    if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
+    // a 404 for a profile the server does not list is no failure: there is none of that name yet
+    // (or none at all) — offer to pick or create one. Anything else gets the loader and its reason.
+    if (err && err.message === '404') {
+      PROFILES.then(list => list && !list.some(p => p.name === PROFILE) ? showNoProfile(list) : showLoader(err));
+      return;
+    }
+    showLoader(err);
   });
+
+// The data could not be loaded, and it is not just a missing profile: say what failed, and offer
+// the file picker.
+function showLoader(err) {
+  document.getElementById('loader').hidden = false;
+  document.getElementById('csvPath').textContent = CSV_PATH();
+  // the server said why: that, rather than the guesses
+  if (err && err.detail) document.getElementById('loaderWhy').textContent = err.detail;
+  if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
+}
 
 // The fallback when the positions can't be fetched: pick a positions CSV by hand. The settings
 // and the other texts are simply absent — ingest() treats each missing text as empty (an
@@ -3503,30 +3515,37 @@ const gotoProfile = name => {
   q.set('profile', name);
   location.search = q.toString();
 };
+// PROFILES is that list once it is in — or null, served without /profiles — for whoever else
+// needs to know which profiles exist (see showNoProfile).
+let PROFILES = Promise.resolve(null);
 function renderProfilePicker() {
   const sel = document.getElementById('profileSel');
   document.getElementById('profileFolder').textContent = `name: ${PROFILE}`;
   document.getElementById('profileLabel').value = PROFILE;    // until /profiles brings the label
-  fetch('profiles', { cache: 'no-store' })
+  PROFILES = fetch('profiles', { cache: 'no-store' })
     .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
     .then(list => {
-      if (!list.some(p => p.name === PROFILE)) list.push({ name: PROFILE, label: PROFILE });
-      sel.replaceChildren(...list.map(p => {
+      const me = list.find(p => p.name === PROFILE);
+      // a profile that does not exist gets no entry of its own — a blank one stands in, so the
+      // first real pick is still a change
+      const blank = me ? [] : [Object.assign(document.createElement('option'), { value: '', textContent: '—' })];
+      sel.replaceChildren(...blank, ...list.map(p => {
         const o = document.createElement('option');
         o.value = p.name;
         o.textContent = p.label || p.name;
         return o;
       }));
-      sel.value = PROFILE;
-      sel.hidden = false;
-      const me = list.find(p => p.name === PROFILE);
+      sel.value = me ? PROFILE : '';
+      sel.hidden = !list.length;
+      if (!me) return list;
       document.getElementById('profileLabel').value = me.label || PROFILE;
       // every server.py that knows about profile kinds says one; none at all means the running
       // server predates this page — say so, rather than let "no source" read as Parqet
       if (!('source' in me)) staleServer();
       else applyProfileSource(me.source, me.label);
+      return list;
     })
-    .catch(() => { sel.hidden = true; });
+    .catch(() => { sel.hidden = true; return null; });
   sel.addEventListener('change', () => gotoProfile(sel.value));
 }
 
@@ -3617,6 +3636,22 @@ document.getElementById('newProfileForm').addEventListener('submit', e => {
   const label = document.getElementById('newProfileName').value.trim();
   if (label) createProfile(label);
 });
+
+// The step before showEmptyProfile, in the same panel: the profile asked for does not exist —
+// none does yet, on a new database, or just not this name. The picker (when there is anything to
+// pick) and the Config tab's "Create new profile" form move in; creating one switches to it, and
+// being new it is empty, so showEmptyProfile takes over from there.
+function showNoProfile(list) {
+  document.getElementById('emptyProfileMsg').hidden = true;
+  const msg = document.getElementById('noProfileMsg');
+  msg.textContent = list.length ? `There is no profile "${PROFILE}". Pick one, or create a new one.`
+                                : 'There are no profiles yet. Create the first one:';
+  msg.hidden = false;
+  const slot = document.getElementById('emptyProfileSlot');
+  if (list.length) slot.appendChild(document.getElementById('profileSel'));
+  slot.appendChild(document.getElementById('newProfileForm'));
+  document.getElementById('emptyProfile').hidden = false;
+}
 
 // A profile with no open position — new, not yet refreshed — has nothing for #app to draw, so it
 // stays hidden and this note stands in for it. The picker moves in with it, or there would be no

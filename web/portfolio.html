@@ -24,7 +24,9 @@
   <!-- in place of #app when the profile has no positions yet (see showEmptyProfile), which moves
        the profile picker in here — #app, where it normally lives, stays hidden -->
   <div id="emptyProfile" class="loader" hidden>
-    <div>Profile <b id="emptyProfileName"></b> has no positions yet. <span id="emptyProfileHow"></span></div>
+    <div id="emptyProfileMsg">Profile <b id="emptyProfileName"></b> has no positions yet. <span id="emptyProfileHow"></span></div>
+    <!-- the step before: no such profile at all, or none yet (see showNoProfile) -->
+    <div id="noProfileMsg" hidden></div>
     <div id="emptyProfileSlot"></div>
   </div>
 
