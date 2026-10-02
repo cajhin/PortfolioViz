@@ -114,6 +114,13 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def finish(self):
+        # every request is a thread of its own, and its database connection must not outlive it
+        try:
+            super().finish()
+        finally:
+            db.close()
+
     def handle_error(self, request, client_address):
         # A client that vanished mid-response (tab closed, laptop slept/resumed) shows up here
         # as a broken pipe or reset connection — cosmetic, not a bug in this server. Anything

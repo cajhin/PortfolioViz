@@ -145,6 +145,16 @@ def migrate(c):
         c.executescript(fh.read())            # every statement there is IF NOT EXISTS
 
 
+def close():
+    """Close this thread's connection, if it has one. A thread that ends does not: its connection
+    lingers until a garbage collection happens to run, and a server answering each request in a
+    thread of its own runs out of file handles first."""
+    c = getattr(_local, "conn", None)
+    if c is not None:
+        _local.conn = None
+        c.close()
+
+
 @contextlib.contextmanager
 def tx():
     """One write transaction, taken up front (BEGIN IMMEDIATE) so a read-then-write inside cannot
