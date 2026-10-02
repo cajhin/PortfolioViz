@@ -6,7 +6,7 @@ trading agent is given trade.py and nothing else.
     manage-accounts.py deposit       <account> --eur EUR [--reason TEXT] [--id ID]
     manage-accounts.py withdraw      <account> --eur EUR [--reason TEXT] [--id ID]
     manage-accounts.py list-accounts
-    manage-accounts.py purge         <profile> --yes [--backup-dir DIR]
+    manage-accounts.py purge         <profile> --yes (--backup-dir DIR | --no-backup)
 
 Trading in an account is trade.py's; the rules both enforce are trading-rules.md. Every answer is one JSON object; on error
 {"ok": false, "error": ..., "hint": ...}, exit code 1.
@@ -23,12 +23,13 @@ accounts by.
 
 `purge` removes any obsolete profile, account or not, for good: every row it has in the database
 (ledgers, positions, activities, cash, settings). The registry and the prices stay — they are
-shared. The database is backed up first (scripts/db.py backup: the NAS, or --backup-dir), and the
-profile's leftover folder, if any (private-profiles/<profile>/, its imported export files), is moved
+shared. Where the backup goes is not guessed: --backup-dir DIR backs the database up there first
+(scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The profile's
+leftover folder, if any (private-profiles/<profile>/, its imported export files), is moved
 to backup/purged/. The default profile cannot be purged; an agent's own folder under agents/ is
 not touched.
 """
-import contextlib, os, shutil
+import contextlib, os, shutil, sqlite3
 from datetime import datetime
 
 import db
@@ -85,6 +86,7 @@ def list_accounts():
 
 
 def purge(name, yes=False, backup_dir=None):
+    """backup_dir None means no backup — the command line insists on one or the other."""
     if not db.profile(name):
         raise Refusal(f"no profile {name!r}")
     if name == db.config().get("defaultProfile"):
@@ -92,11 +94,13 @@ def purge(name, yes=False, backup_dir=None):
                       "scripts/db.py config set defaultProfile '\"<name>\"'")
     if not yes:
         raise Refusal(f"purging {name!r} deletes all its data for good", "add --yes to go ahead")
-    try:
-        saved = quiet(db.backup, backup_dir, f"before-purge-{name}")
-    except Refusal as err:
-        raise Refusal(f"no backup could be made, so nothing was purged: {err.error}",
-                      "mount the NAS, or give --backup-dir DIR")
+    saved = None
+    if backup_dir:
+        try:
+            saved = quiet(db.backup, backup_dir, f"before-purge-{name}")
+        except (Refusal, OSError, sqlite3.Error) as err:
+            raise Refusal(f"no backup could be made, so nothing was purged: {getattr(err, 'error', err)}",
+                          "give another --backup-dir, or --no-backup")
     with locked(name):
         label = profile(name).get("label") or name
         db.purge_profile(name)
@@ -120,7 +124,9 @@ def configure(sub):
         m.add_argument("--reason", default=""); m.add_argument("--id")
     sub.add_parser("list-accounts")
     p = sub.add_parser("purge"); p.add_argument("account")
-    p.add_argument("--yes", action="store_true"); p.add_argument("--backup-dir")
+    p.add_argument("--yes", action="store_true")
+    where = p.add_mutually_exclusive_group(required=True)
+    where.add_argument("--backup-dir"); where.add_argument("--no-backup", action="store_true")
 
 
 def dispatch(a):

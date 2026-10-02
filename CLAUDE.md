@@ -110,7 +110,8 @@ them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface
 is one JSON object. Both touch only profiles with `allow_cli` set (which `manage-accounts.py
 create` sets); the scripts cannot tell an agent from a human, so that flag is the boundary — and
 splitting the two lets an agent be handed trading alone: `manage-accounts.py` is admin only. Its
-`purge` removes any obsolete profile (not the default one) after backing the database up. An agent's session is also
+`purge` removes any obsolete profile (not the default one), after backing the database up to
+`--backup-dir` — or, said explicitly, `--no-backup`. An agent's session is also
 bound to its own account: its `start-agent` sets `TRADE_ACCOUNT`, and `trade.py` refuses any other
 (the agent cannot override it — a command not starting with trade.py's path is not allowed). Each
 agent folder under `agents/` has its own config dir, so agents share no memory. It is **live only**: no date can be given. A trade executes at once at a live price: gettex's ask

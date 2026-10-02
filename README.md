@@ -9,7 +9,7 @@ To init:
 5. run start.sh for local webserver
 6. click [Update]; this pulls all missing daily EOB ticks for 1.1.2019..today for the current profile's stocks from Yahoo (thank you Y).
 
-Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete profile goes with `scripts/manage-accounts.py purge <profile> --yes` (backs up first).
+Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete profile goes with `scripts/manage-accounts.py purge <profile> --yes --backup-dir <dir>` (backs up there first; `--no-backup` instead to skip that).
 
 Demo accounts for AI agents (or for you, from a terminal): `scripts/manage-accounts.py --help` to create and fund them (admin only), `scripts/trade.py --help` to trade (all an agent gets). Accounts are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
 
