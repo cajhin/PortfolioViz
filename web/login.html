@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio Viz</title>
+<link rel="stylesheet" href="portfolio.css">
+<style>
+  .login { max-width: 22em; margin: 12vh auto 0; display: flex; flex-direction: column; gap: 12px; }
+  .login h1 { margin: 0 0 4px; font-size: 1.2rem; font-weight: 600; }
+  .login input { font: inherit; color: var(--text-primary); background: transparent;
+                 border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; }
+  .login .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .login a { color: var(--text-secondary); font-size: 0.82rem; }
+  .login [hidden] { display: none; }
+  .warn { max-width: 22em; margin: 0 auto; color: var(--text-secondary); font-size: 0.82rem; }
+  .warn p { margin: 0 0 2px; }
+  .warn[hidden] { display: none; }
+</style>
+</head>
+<body>
+<!-- server.py's login: POST /login or /register, either of which sets the session cookie, then
+     back to the page that sent us here (?next=, always one of web/'s own pages). -->
+<form class="card login" id="loginForm">
+  <h1 id="title">Log in</h1>
+  <input id="user" autocomplete="username" placeholder="User name" required autofocus>
+  <input id="pw" type="password" autocomplete="current-password" placeholder="Password" required>
+  <input id="pw2" type="password" autocomplete="new-password" placeholder="Password again" hidden>
+  <div class="row">
+    <button type="submit" class="dt-addsel" id="submit">Log in</button>
+    <a href="#" id="switch">Create account</a>
+  </div>
+  <div class="err" id="msg"></div>
+</form>
+<!-- shown with "Create account" only -->
+<div class="card warn" id="warn" hidden>
+  <p>I (admin) can see everything</p>
+  <p>This page is not high-security</p>
+  <p>Don't use this if you are afraid of anyone seeing your stocks</p>
+</div>
+<script>
+  // only a page of our own, never another site
+  const next = (new URLSearchParams(location.search).get('next') || '').match(/^[a-z]+\.html(\?.*)?$/)
+    ? new URLSearchParams(location.search).get('next') : 'portfolio.html';
+  const $ = id => document.getElementById(id);
+  let register = false;
+  $('switch').addEventListener('click', e => {
+    e.preventDefault();
+    register = !register;
+    $('title').textContent = $('submit').textContent = register ? 'Create account' : 'Log in';
+    $('switch').textContent = register ? 'Log in instead' : 'Create account';
+    $('pw2').hidden = !register;
+    $('warn').hidden = !register;
+    $('pw2').required = register;
+    $('pw').autocomplete = register ? 'new-password' : 'current-password';
+    $('msg').textContent = '';
+  });
+  $('loginForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    $('msg').textContent = '';
+    if (register && $('pw').value !== $('pw2').value) { $('msg').textContent = 'The two passwords differ.'; return; }
+    try {
+      const r = await fetch(register ? 'register' : 'login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: $('user').value.trim(), password: $('pw').value }) });
+      if (!r.ok) throw new Error((await r.text()).trim() || `${r.status} ${r.statusText}`);
+      location.href = next;
+    } catch (err) {
+      $('msg').textContent = err.message;
+    }
+  });
+</script>
+</body>
+</html>

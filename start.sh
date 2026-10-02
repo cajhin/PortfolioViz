@@ -7,7 +7,7 @@
 #
 # The server itself, and every route the page uses, is scripts/server.py — this only checks the
 # port and opens the browser. Bound to 127.0.0.1 on purpose: the database behind its api/ routes
-# holds real position values, and the server has no access control at all. Ctrl-C to stop.
+# holds real position values, and its logins are for convenience, not hardened. Ctrl-C to stop.
 #
 # Needs data/portfolio.db — scripts/sqlite-install.sh creates it on a new host.
 

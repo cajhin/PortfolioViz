@@ -7,6 +7,7 @@ lives in one SQLite database, `data/portfolio.db`.
 ```
 web/                    the page — all the server serves besides its routes
   portfolio.html          markup only; loads the css and the two scripts, in that order
+  login.html              log in or create an account — server.py's login, see **Users**
   portfolio.css
   portfolio.model.js      data and arithmetic — never touches the DOM
   portfolio.view.js       everything that reads or writes the page
@@ -29,6 +30,8 @@ scripts/                every Python script; each finds the repo as its own fold
   trade.py                trades a demo account from the command line — live only, JSON out
   manage-accounts.py      creates demo accounts, moves their cash, lists them, purges an obsolete
                             profile — same style; admin only, never given to an agent
+  manage-users.py         the page's users: add, passwd, grant/revoke profiles, delete, list-users,
+                            list-profiles — same style, admin only
   add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
                             "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 REFRESH_PARQET_DATA.md  how to pull fresh data from Parqet — a task for an agent with the MCP tools
@@ -104,6 +107,20 @@ instrument…" writes to the registry (via `add_instrument.py`), the shared cata
 `import_tr.py`, `manual_tx.py`, `import_parqet.py` and the page all check the source, so `main`
 cannot be overwritten by a stray import. The TR conversion follows Parqet's conventions and was
 checked against Parqet's own import of the same account; its docstring lists them.
+
+**Users.** server.py wants a login for every route but the page's own files (no data in them)
+and login.html's: an HttpOnly session cookie, its token's hash in the `session` table. A user
+sees and changes only the profiles granted to them (`user_profile`, `can_write`); any other is a
+404 on every route, the same as one that does not exist, and api/config's `defaultProfile` is
+rewritten to one they have. Anyone who reaches the page can create an account; it sees nothing
+until it creates a profile (granted to its creator) or is granted one —
+`scripts/manage-users.py grant`, which is also how every profile made by a script gets an
+owner. Update fetches one granted profile's instruments, never the whole registry; registering an
+instrument takes write access to some profile. These tables (`user`, `user_profile`,
+`session`) are a fourth lifecycle — people, neither a profile's own nor the registry — and
+`db.migrate()` adds them to an older database (server.py runs it at start). It is for
+convenience and keeping people apart, not hardened: the registry, prices and every script stay
+shared and unchecked, and an agent's boundary is still `allow_cli`/`TRADE_ACCOUNT` below.
 
 **Agent accounts.** `scripts/manage-accounts.py` creates demo accounts, moves their cash and lists
 them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every answer

@@ -3434,10 +3434,16 @@ function load(...texts) {
 // (which name the benchmark by ISIN) and the registry (which maps that ISIN to a file) are. Only
 // the positions CSV is required; every other text may come back empty and ingest() copes.
 // A required text that fails rejects with the status as its message and the server's own reason —
-// the response body, e.g. "the database has no profiles yet" — as its `detail`.
+// the response body, e.g. "the database has no profiles yet" — as its `detail`. A 401 is no
+// failure: nobody is logged in, and the login page takes over.
+const toLogin = () => {
+  location.href = 'login.html?next=' + encodeURIComponent(location.pathname.split('/').pop() + location.search);
+  return new Promise(() => {});                   // never settles: the page is going away
+};
 const get = (path, required) => !path ? Promise.resolve('')
   : fetch(path, { cache: 'no-store' })
-      .then(r => r.ok ? r.text() : (!required ? '' : r.text().catch(() => '')
+      .then(r => r.status === 401 ? toLogin()
+        : r.ok ? r.text() : (!required ? '' : r.text().catch(() => '')
         .then(detail => Promise.reject(Object.assign(new Error(r.status), { detail: detail.trim() })))))
       .catch(err => { if (required) throw err; return ''; });
 
@@ -3585,7 +3591,23 @@ function staleServer() {
   document.getElementById('emptyProfileHow').textContent = STALE_MSG;
   reportError('server', STALE_MSG);
 }
-const routeFailure = r => r.status === 404 ? STALE_MSG : `${r.status} ${r.statusText}`;
+const routeFailure = r => r.status === 404 ? STALE_MSG : r.status === 401 ? 'Logged out — reload to log in again.'
+  : `${r.status} ${r.statusText}`;
+
+// The Config tab's last row: who is logged in (server.py's /me), and the way out. Served without
+// logins (the regression check) there is nobody, and the row stays hidden.
+fetch('me', { cache: 'no-store' })
+  .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+  .then(({ user }) => {
+    document.getElementById('userName').textContent = user;
+    document.getElementById('logoutForm').hidden = false;
+  })
+  .catch(() => { /* not logged in, or not server.py */ });
+document.getElementById('logoutForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  await fetch('logout', { method: 'POST' }).catch(() => {});
+  location.href = 'login.html';
+});
 
 // The Config tab's first row: renames the current profile's label — its name,
 // and so the ?profile= in every URL, stays as it is. The picker's own entry follows without a

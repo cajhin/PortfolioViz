@@ -16,12 +16,12 @@ scripts/seed.sql, which `seed` regenerates (`db.py seed > scripts/seed.sql`) —
 starts from. The DB itself is not in git: `backup` is how it is kept, by hand, on the NAS
 (/Volumes/nas/bkp/portfolioviz on macOS, /mnt/nas/bkp/portfolioviz on Linux, or $PORTFOLIO_BACKUP_DIR).
 It copies through SQLite's backup API, so a copy taken while the server or a fetch is writing is
-still consistent — which copying the file is not.
+still consistent — which copying the file is not. Users and their access are scripts/manage-users.py's.
 
 $PORTFOLIO_DB points everything at another database file (a test copy, say).
 """
-import contextlib, json, os, sqlite3, sys, threading
-from datetime import datetime
+import contextlib, hashlib, hmac, json, os, secrets, sqlite3, sys, threading
+from datetime import datetime, timedelta
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
@@ -321,6 +321,122 @@ def mark_deleted(name, tid):
     with tx() as c:
         return c.execute("UPDATE ledger SET deleted = 1 WHERE profile = ? AND transaction_id = ? AND origin = 'tr'",
                          (name, tid)).rowcount
+
+
+# ---------- access ----------
+# Users, which profiles each may open (and change), and their logged-in sessions — server.py's
+# login. The scripts themselves never ask: a command line is the admin's.
+
+SESSION_DAYS = 30
+
+
+def migrate():
+    """Bring an older database up to schema.sql — every statement there is IF NOT EXISTS."""
+    with open(os.path.join(SCRIPTS, "schema.sql"), encoding="utf-8") as fh:
+        conn().executescript(fh.read())
+
+
+def hash_password(pw):
+    salt = os.urandom(16)
+    h = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
+    return f"scrypt$16384$8$1${salt.hex()}${h.hex()}"
+
+
+def check_password(pw, stored):
+    try:
+        _, n, r, p, salt, h = stored.split("$")
+        got = hashlib.scrypt(pw.encode("utf-8"), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p))
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(got.hex(), h)
+
+
+def user(name):
+    r = conn().execute("SELECT * FROM user WHERE name = ?", (name,)).fetchone()
+    return dict(r) if r else None
+
+
+def users():
+    """Every user with the profiles they may open: {name, created, profiles: {profile: can_write}}."""
+    out = {u["name"]: {"name": u["name"], "created": u["created"], "profiles": {}}
+           for u in rows("SELECT name, created FROM user ORDER BY name")}
+    for g in rows("SELECT * FROM user_profile ORDER BY profile"):
+        out[g["user"]]["profiles"][g["profile"]] = bool(g["can_write"])
+    return list(out.values())
+
+
+def create_user(name, pw):
+    """sqlite3.IntegrityError if the name is taken."""
+    with tx() as c:
+        c.execute("INSERT INTO user (name, pw_hash, created) VALUES (?, ?, ?)",
+                  (name, hash_password(pw), datetime.now().isoformat(timespec="seconds")))
+
+
+def set_password(name, pw):
+    """Also ends every session the user has."""
+    with tx() as c:
+        c.execute("DELETE FROM session WHERE user = ?", (name,))
+        return c.execute("UPDATE user SET pw_hash = ? WHERE name = ?", (hash_password(pw), name)).rowcount
+
+
+def delete_user(name):
+    with tx() as c:
+        return c.execute("DELETE FROM user WHERE name = ?", (name,)).rowcount   # cascades
+
+
+def grant(name, profile_name, can_write=True):
+    with tx() as c:
+        c.execute("INSERT INTO user_profile (user, profile, can_write) VALUES (?, ?, ?) "
+                  "ON CONFLICT (user, profile) DO UPDATE SET can_write = excluded.can_write",
+                  (name, profile_name, 1 if can_write else 0))
+
+
+def revoke(name, profile_name):
+    with tx() as c:
+        return c.execute("DELETE FROM user_profile WHERE user = ? AND profile = ?",
+                         (name, profile_name)).rowcount
+
+
+def access(name, profile_name):
+    """None if the user may not open the profile, else whether they may change it."""
+    r = conn().execute("SELECT can_write FROM user_profile WHERE user = ? AND profile = ?",
+                       (name, profile_name)).fetchone()
+    return None if r is None else bool(r[0])
+
+
+def user_profiles(name):
+    """The profile rows the user may open, each with its `can_write`."""
+    return rows("SELECT p.*, g.can_write FROM profile p JOIN user_profile g ON g.profile = p.name "
+                "WHERE g.user = ? ORDER BY p.name", (name,))
+
+
+def _token_hash(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def new_session(name):
+    """A fresh session token for the user — the cookie's value; only its hash is stored."""
+    token = secrets.token_urlsafe(32)
+    now = datetime.now()
+    with tx() as c:
+        c.execute("DELETE FROM session WHERE expires < ?", (now.isoformat(timespec="seconds"),))
+        c.execute("INSERT INTO session (token_hash, user, expires) VALUES (?, ?, ?)",
+                  (_token_hash(token), name, (now + timedelta(days=SESSION_DAYS)).isoformat(timespec="seconds")))
+    return token
+
+
+def session_user(token):
+    """The user a session token belongs to, or None (unknown or expired)."""
+    if not token:
+        return None
+    r = conn().execute("SELECT user FROM session WHERE token_hash = ? AND expires > ?",
+                       (_token_hash(token), datetime.now().isoformat(timespec="seconds"))).fetchone()
+    return r[0] if r else None
+
+
+def end_session(token):
+    with tx() as c:
+        c.execute("DELETE FROM session WHERE token_hash = ?", (_token_hash(token),))
 
 
 # ---------- backup ----------

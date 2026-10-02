@@ -132,3 +132,27 @@ CREATE TABLE IF NOT EXISTS cash (
   portfolio TEXT, datetime TEXT, date TEXT, kind TEXT, amount TEXT, transactionId TEXT
 );
 CREATE INDEX IF NOT EXISTS cash_profile ON cash (profile);
+
+-- ---------- access: who may see and change which profile (server.py's login) ----------
+-- Not a profile's own and not the registry: people, managed by scripts/manage-users.py and the
+-- login page's "Create account". pw_hash is scrypt (see db.hash_password).
+CREATE TABLE IF NOT EXISTS user (
+  name    TEXT PRIMARY KEY,
+  pw_hash TEXT NOT NULL,
+  created TEXT NOT NULL
+);
+
+-- what a user may open; can_write for its changes (rename, import, transactions)
+CREATE TABLE IF NOT EXISTS user_profile (
+  user      TEXT NOT NULL REFERENCES user (name) ON DELETE CASCADE,
+  profile   TEXT NOT NULL REFERENCES profile (name) ON DELETE CASCADE,
+  can_write INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (user, profile)
+);
+
+-- one row per logged-in browser; the cookie holds the token, this only its sha256
+CREATE TABLE IF NOT EXISTS session (
+  token_hash TEXT PRIMARY KEY,
+  user       TEXT NOT NULL REFERENCES user (name) ON DELETE CASCADE,
+  expires    TEXT NOT NULL
+);

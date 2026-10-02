@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Manage the page's users from the command line — JSON in every answer. Admin only, like
+manage-accounts.py.
+
+    manage-users.py add     <user>                          # asks for the password
+    manage-users.py passwd  <user>                          # asks for the new one; logs them out
+    manage-users.py grant   <user> <profile>... [--read-only]
+    manage-users.py revoke  <user> <profile>...
+    manage-users.py delete  <user>
+    manage-users.py list-users
+    manage-users.py list-profiles                           # every profile, and who may open it
+
+server.py lets nobody in without a login, and shows a user only the profiles granted to them —
+scripts/db.py's `user_profile`. Anyone who can reach the page can also create a user there
+("Create account"), who then sees only the profiles they create. Every profile that existed
+before, or that a script made (an agent's account, a Parqet refresh), is granted here. A grant
+lets the user change the profile too (rename, import, transactions), unless --read-only.
+
+A password is read from the terminal, never the command line (it would land in the shell's
+history); piped in, its first line is the password. Every answer is one JSON object; on error
+{"ok": false, "error": ..., "hint": ...}, exit code 1.
+"""
+import getpass, sqlite3, sys
+
+import db
+import server
+import trade
+from trade import Refusal
+
+
+def password(prompt):
+    if not sys.stdin.isatty():
+        pw = sys.stdin.readline().rstrip("\n")
+    else:
+        pw = getpass.getpass(prompt, stream=sys.stderr)
+        if getpass.getpass("again: ", stream=sys.stderr) != pw:
+            raise Refusal("the two passwords differ")
+    return pw
+
+
+def existing(name):
+    if not db.user(name):
+        raise Refusal(f"no user {name!r}", "manage-users.py list-users shows them")
+    return name
+
+
+def add(name):
+    if not server.USER_NAME.match(name):
+        raise Refusal(f"{name!r} is not a user name", "letters, digits, '.', '-' and '_', at most 40")
+    if db.user(name):
+        raise Refusal(f"user {name!r} exists")
+    try:
+        db.create_user(name, password(f"password for {name}: "))
+    except sqlite3.IntegrityError:
+        raise Refusal(f"user {name!r} exists")
+    return {"user": name}
+
+
+def passwd(name):
+    db.set_password(existing(name), password(f"new password for {name}: "))
+    return {"user": name}
+
+
+def grant(name, profiles, read_only=False):
+    existing(name)
+    missing = [p for p in profiles if not db.profile(p)]
+    if missing:
+        raise Refusal(f"no profile {', '.join(map(repr, missing))}",
+                      "manage-users.py list-profiles lists them")
+    with db.tx():
+        for p in profiles:
+            db.grant(name, p, not read_only)
+    return {"user": name, "profiles": {p: db.access(name, p) for p in profiles}}
+
+
+def revoke(name, profiles):
+    existing(name)
+    with db.tx():
+        gone = [p for p in profiles if db.revoke(name, p)]
+    return {"user": name, "revoked": gone}
+
+
+def list_profiles():
+    users = db.users()
+    return {"profiles": [{"name": p["name"], "label": p["label"], "source": p["source"],
+                          "allow_cli": bool(p["allow_cli"]),
+                          "users": {u["name"]: u["profiles"][p["name"]] for u in users if p["name"] in u["profiles"]}}
+                         for p in db.profiles()]}
+
+
+def delete(name):
+    db.delete_user(existing(name))
+    return {"deleted": name}
+
+
+def configure(sub):
+    for cmd in ("add", "passwd", "delete"):
+        sub.add_parser(cmd).add_argument("user")
+    g = sub.add_parser("grant"); g.add_argument("user"); g.add_argument("profile", nargs="+")
+    g.add_argument("--read-only", action="store_true")
+    r = sub.add_parser("revoke"); r.add_argument("user"); r.add_argument("profile", nargs="+")
+    sub.add_parser("list-users")
+    sub.add_parser("list-profiles")
+
+
+def dispatch(a):
+    db.migrate()
+    if a.cmd == "add":
+        return add(a.user)
+    if a.cmd == "passwd":
+        return passwd(a.user)
+    if a.cmd == "grant":
+        return grant(a.user, a.profile, a.read_only)
+    if a.cmd == "revoke":
+        return revoke(a.user, a.profile)
+    if a.cmd == "delete":
+        return delete(a.user)
+    if a.cmd == "list-profiles":
+        return list_profiles()
+    return {"users": db.users()}
+
+
+if __name__ == "__main__":
+    trade.run(__doc__, "manage-users.py", configure, dispatch)

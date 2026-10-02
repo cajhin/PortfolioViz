@@ -384,6 +384,12 @@
         <button type="submit" class="dt-addsel">Create</button>
         <span class="err" id="newProfileErr"></span>
       </form>
+      <!-- who is logged in (see server.py's /me), hidden until that is known -->
+      <form id="logoutForm" class="configrow" hidden>
+        <label>Logged in as</label>
+        <b id="userName"></b>
+        <button type="submit" class="dt-addsel">Log out</button>
+      </form>
     </div>
     </div>
     </div>
