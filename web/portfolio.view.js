@@ -3433,9 +3433,12 @@ function load(...texts) {
 // profile) is in hand, and the benchmark's own file is not knowable until the merged settings
 // (which name the benchmark by ISIN) and the registry (which maps that ISIN to a file) are. Only
 // the positions CSV is required; every other text may come back empty and ingest() copes.
+// A required text that fails rejects with the status as its message and the server's own reason —
+// the response body, e.g. "the database has no profiles yet" — as its `detail`.
 const get = (path, required) => !path ? Promise.resolve('')
   : fetch(path, { cache: 'no-store' })
-      .then(r => r.ok ? r.text() : (required ? Promise.reject(new Error(r.status)) : ''))
+      .then(r => r.ok ? r.text() : (!required ? '' : r.text().catch(() => '')
+        .then(detail => Promise.reject(Object.assign(new Error(r.status), { detail: detail.trim() })))))
       .catch(err => { if (required) throw err; return ''; });
 
 Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), get(SECTOR_COLORS_PATH)])
@@ -3460,6 +3463,8 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
     if (err && err.message === EMPTY_PROFILE_MSG) { showEmptyProfile(); return; }
     document.getElementById('loader').hidden = false;
     document.getElementById('csvPath').textContent = CSV_PATH();
+    // the server said why (an unknown profile, an empty database): that, rather than the guesses
+    if (err && err.detail) document.getElementById('loaderWhy').textContent = err.detail;
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
   });
 

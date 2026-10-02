@@ -15,7 +15,8 @@
 <div class="verttitle" id="vertTitle" aria-hidden="true">Portfolio Viz</div>
 <div class="wrap">
   <div id="loader" class="loader" hidden>
-    <div>Could not read <code id="csvPath">api/positions</code> — no such profile, or the page is not served by <code>./start.sh</code> (opened from <code>file://</code>, say).</div>
+    <div>Could not read <code id="csvPath">api/positions</code>.</div>
+    <div id="loaderWhy">No such profile, or the page is not served by <code>./start.sh</code> (opened from <code>file://</code>, say).</div>
     <div>Serve it with <code>./start.sh</code>, or pick a positions CSV by hand.</div>
     <input type="file" id="file" accept=".csv,text/csv">
     <div class="err" id="err"></div>

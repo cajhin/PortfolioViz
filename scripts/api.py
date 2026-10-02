@@ -18,7 +18,8 @@ check_portfolio.js reads the same routes without a server, through this same cod
     api/positions?profile=P         its positions (positions.csv), open and closed
     api/activities?profile=P        its activities (activities.csv)
     api/cash?profile=P              its cash bookings (cash.csv) — none for a Parqet profile
-An unknown profile is a 404 on each of the four.
+An unknown profile is a 404 on each of the four, its body (plain text) saying why — the page
+shows it in place of the data it could not load.
 """
 import csv, io, json, sys, urllib.parse
 
@@ -31,6 +32,17 @@ def to_csv(fields, rows):
     w.writerow(fields)
     w.writerows([db.text(r.get(f)) for f in fields] for r in rows)
     return out.getvalue()
+
+
+def no_profile(name):
+    """Why a profile cannot be shown, in words for the page's error box."""
+    names = [p["name"] for p in db.profiles()]
+    if not names:
+        return ("The database has no profiles yet — it was created empty (scripts/sqlite-install.sh). "
+                "Copy a backup over data/portfolio.db (made with scripts/db.py backup), or fill a profile: "
+                "REFRESH_PARQET_DATA.md for Parqet, scripts/manage-accounts.py create for a demo account.")
+    return (f"No profile {name!r} in the database — it has {', '.join(names)}. Pick one with "
+            f"?profile=<name>, or change the default: scripts/db.py config set defaultProfile '\"<name>\"'.")
 
 
 def get(path):
@@ -58,7 +70,7 @@ def get(path):
         name = q.get("profile", "")
         cfg = db.profile_config(name)
         if cfg is None:
-            return 404, CSV, ""
+            return 404, "text/plain; charset=utf-8", no_profile(name)
         if route == "api/profile":
             return 200, JSON, json.dumps(cfg, indent=2, ensure_ascii=False)
         table = {"api/positions": "position", "api/activities": "activity", "api/cash": "cash"}[route]
