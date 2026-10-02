@@ -36,8 +36,6 @@ scripts/                every Python script; each finds the repo as its own fold
                             "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 REFRESH_PARQET_DATA.md  how to pull fresh data from Parqet — a task for an agent with the MCP tools
 data/portfolio.db       ALL the data — gitignored; backed up by hand (`scripts/db.py backup`)
-private-portfolios/<p>/exports/ import files only: the Trade Republic exports and staged Parqet
-                          refreshes that were imported, kept as the record; gitignored
 backup/                 the files the data came from before the database (config.json, registry/,
                           gen_prices/, gen_fx/, private-profiles/) — read by nothing; only
                           config.json and registry/ are committed
@@ -212,7 +210,7 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-`data/`, `private-portfolios/`, `backup/`'s old data files and `check_baseline*.json` hold real
+`data/`, `backup/`'s old data files and `check_baseline*.json` hold real
 position values and are gitignored — never commit them, and don't paste figures from them into
 commit messages or issues. Nothing in the database is committed, the registry included:
 `scripts/seed.sql` (no amounts — only what each instrument is and where its prices come from,

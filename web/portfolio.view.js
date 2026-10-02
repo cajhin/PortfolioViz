@@ -3742,7 +3742,7 @@ function showEmptyPortfolio() {
 }
 
 // The Transactions tab's "Import Trade Republic file": the export goes to server.py's /import-tr route,
-// which keeps it under the portfolio's exports/ and runs import_tr.py on it. That script's own
+// which runs import_tr.py on it and keeps no copy. That script's own
 // report — how many rows were new, how many already imported, anything it could not place — is
 // shown as-is; a reload then picks up the rebuilt CSVs, the same as after Update.
 document.getElementById('trImportForm').addEventListener('submit', async e => {

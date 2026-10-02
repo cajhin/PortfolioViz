@@ -4,17 +4,17 @@ Task for an agent with the **Parqet MCP tools** and write access to `/Users/jjj/
 
 Goal: pull fresh data from Parqet, write it as two CSVs with **exactly the schema below**, and
 import them into the portfolio with `scripts/import_parqet.py`. All data lives in the database
-(`data/portfolio.db`); the page reads it from there. The two CSVs are only the import's input —
-kept, timestamped, as the record of what was imported. Never write to the database any other way
-than through the scripts named here.
+(`data/portfolio.db`); the page reads it from there. The two CSVs are only the import's input,
+staged in a temporary folder and deleted after the import. Never write to the database any other
+way than through the scripts named here.
 
 **Which portfolio.** Refresh one portfolio at a time — the one the user names, else the
 `defaultPortfolio` setting (`python3 scripts/db.py config`). Only a Parqet portfolio is yours to
-refresh; a manual one is filled by Trade Republic imports and hand entries, and import_parqet.py
-refuses it — stop and say so instead. List them with
+refresh; a manual one is filled by Trade Republic imports and hand entries, a game by trade.py,
+and import_parqet.py refuses both — stop and say so instead. List them with
 
 ```bash
-python3 scripts/db.py query "SELECT name, label, source FROM portfolio"
+python3 scripts/db.py query "SELECT name, label, type FROM portfolio"
 python3 scripts/db.py config --portfolio <portfolio>     # its own settings
 ```
 
@@ -26,17 +26,14 @@ portfolio. A new portfolio is made on the page's Config tab — create one only 
 
 ## 1. Where the files go
 
-Both files go into the portfolio's exports folder, named by the time of the pull — so earlier
-imports are never overwritten:
+Both files go into a fresh temporary folder, outside the repo — nothing of a refresh is kept but
+what the import writes to the database:
 
 ```bash
 cd /Users/jjj/git/portfolioviz
-P=<portfolio>; TS=$(date +%Y%m%d-%H%M)
-mkdir -p private-portfolios/$P/exports
-# write private-portfolios/$P/exports/positions_$TS.csv and .../activities_$TS.csv (sections 3, 4)
+P=<portfolio>; STAGE=$(mktemp -d -t portfolioviz-parqet)
+# write $STAGE/positions.csv and $STAGE/activities.csv (sections 3, 4)
 ```
-
-If either name already exists, stop and report rather than clobbering it.
 
 ## 2. Pull fresh data
 
@@ -67,7 +64,7 @@ Gotchas that will bite you:
 - Prices move during the day. Pull the positions and the activities in one sitting so the two files
   agree, and note that `currentValue` is a snapshot.
 
-## 3. Write `positions_<TS>.csv`
+## 3. Write `positions.csv`
 
 One row per position, **open and closed**, plus the cash accounts. Header, in order:
 
@@ -91,7 +88,7 @@ lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,a
   `assetType == "cash"` and leaves it out of invested/gain figures.
 - Numbers: plain decimals, `.` separator, no thousands separator, no currency symbol.
 
-## 4. Write `activities_<TS>.csv`
+## 4. Write `activities.csv`
 
 One row per activity, all depots, sorted by `depot` then `datetime` ascending. Header:
 
@@ -115,14 +112,14 @@ Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 ## 5. Import
 
 ```bash
-python3 scripts/import_parqet.py $P private-portfolios/$P/exports/positions_$TS.csv private-portfolios/$P/exports/activities_$TS.csv
+python3 scripts/import_parqet.py $P $STAGE/positions.csv $STAGE/activities.csv
 ```
 
 It checks before it writes anything — every activity named, every traded `(depot, ISIN)` also a
 position, every sale's net = gross − tax − fee — and refuses the import if one fails: fix the
 files and run it again. On success it replaces the portfolio's positions and activities in one go,
 prints the counts and headline figures, and lists any held instrument the registry lacks or that
-has no price source (section 6).
+has no price source (section 6). Then remove the staging folder: `rm -r "$STAGE"`.
 
 ## 6. Update the registry and the portfolio's watchlist
 

@@ -24,13 +24,10 @@ portfolios by.
 `purge` removes any obsolete portfolio, of any type, for good: every row it has in the database
 (ledgers, positions, activities, cash, settings). The registry and the prices stay — they are
 shared. Where the backup goes is not guessed: --backup-dir DIR backs the database up there first
-(scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The portfolio's
-leftover folder, if any (private-portfolios/<portfolio>/, its imported export files), is moved
-to backup/purged/. The default portfolio cannot be purged; an agent's own folder under agents/ is
-not touched.
+(scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The default
+portfolio cannot be purged; an agent's own folder under agents/ is not touched.
 """
-import contextlib, os, shutil, sqlite3
-from datetime import datetime
+import contextlib, os, sqlite3
 
 import db
 import import_tr
@@ -106,14 +103,7 @@ def purge(name, yes=False, backup_dir=None):
         db.purge_portfolio(name)
     with contextlib.suppress(OSError):
         os.remove(os.path.join(os.path.dirname(db.DB_PATH), "locks", f"{name}.lock"))
-    folder = os.path.join(db.ROOT, "private-portfolios", name)
-    moved = None
-    if os.path.isdir(folder):
-        moved = os.path.join(db.ROOT, "backup", "purged", f"{name}-{datetime.now():%Y%m%d-%H%M%S}")
-        os.makedirs(os.path.dirname(moved), exist_ok=True)
-        shutil.move(folder, moved)
-    return {"purged": name, "label": label, "backup": saved,
-            **({"folder_moved_to": os.path.relpath(moved, db.ROOT)} if moved else {})}
+    return {"purged": name, "label": label, "backup": saved}
 
 
 def configure(sub):

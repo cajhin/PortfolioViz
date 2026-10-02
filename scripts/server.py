@@ -12,7 +12,7 @@ session cookie, see USERS below — and a user sees and changes only the portfol
 That is for convenience and to keep people apart, not hardened security: a script run on this
 machine needs no login at all.
 """
-import functools, http.cookies, http.server, json, os, re, socket, sqlite3, subprocess, sys
+import functools, http.cookies, http.server, json, os, re, socket, sqlite3, subprocess, sys, tempfile
 import urllib.parse, urllib.request
 
 import api
@@ -57,10 +57,11 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # manage-portfolios.py purge, with no backup. The default portfolio is refused there.
 #
 # POST /import-tr?portfolio=NAME&name=FILE.csv — the Config tab's "Import Trade Republic file":
-# the body is the export itself. Kept in private-portfolios/<name>/exports/ (the record of what
-# was imported — the only files a portfolio still has), then import_tr.py merges it into that portfolio — rows already imported are
-# skipped by their transaction_id, so uploading an overlapping or repeated export is harmless.
-# Manual portfolios only — a Parqet one gets a 403 before anything is written.
+# the body is the export itself. import_tr.py merges it into that portfolio's ledger — rows already
+# imported are skipped by their transaction_id, so uploading an overlapping or repeated export is
+# harmless. The file itself is not kept: it waits in a temporary folder for the import and is gone
+# after it — the export stays on the user's disk, its rows in the database.
+# Manual portfolios only — any other gets a 403 before anything is written.
 #
 # POST /manual-tx?portfolio=NAME {date, isin, type, shares, price, fee} — the Config tab's "Add
 # transaction", for building a virtual demo portfolio by hand; with &edit=ID, rewrites that
@@ -420,25 +421,18 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         if not is_manual(portfolio):
             # ASCII only: the reason goes into the status line, which is latin-1
-            self.send_error(403, f"{portfolio} is controlled by Parqet - no manual imports")
+            self.send_error(403, f"{portfolio} is not a manual portfolio - no imports")
             return
         # the uploaded name, reduced to something safe to put in a path
         name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename((query.get("name") or [""])[0])).lstrip(".")
         if not name.lower().endswith(".csv"):
             name = (name or "transactions") + ".csv"
-        exports = os.path.join(ROOT, "private-portfolios", portfolio, "exports")
-        existed = os.path.isdir(exports)
-        os.makedirs(exports, exist_ok=True)
-        path = os.path.join(exports, name)
-        with open(path, "wb") as fh:
-            fh.write(data)
-        proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "import_tr.py"), portfolio, path],
-                              capture_output=True, text=True, timeout=120)
-        if proc.returncode != 0:
-            # refused (not a TR export, or a Parqet-fed portfolio): keep no record of it
-            os.remove(path)
-            if not existed:
-                os.rmdir(exports)
+        with tempfile.TemporaryDirectory(prefix="portfolioviz-import-") as tmp:
+            path = os.path.join(tmp, name)      # its own name, so import_tr.py's report shows it
+            with open(path, "wb") as fh:
+                fh.write(data)
+            proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "import_tr.py"), portfolio, path],
+                                  capture_output=True, text=True, timeout=120)
         body = (proc.stdout + proc.stderr).encode("utf-8")
         self.send_response(200 if proc.returncode == 0 else 500)
         self.send_header("Content-Type", "text/plain; charset=utf-8")

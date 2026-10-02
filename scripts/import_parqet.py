@@ -6,8 +6,8 @@
 Parqet portfolios only: a manual one is rebuilt from its own ledger (import_tr.py), and this would
 throw that away. The two files are what the refresh task writes, in Parqet's schema bar one name —
 a portfolio in Parqet is a `depot` here (see REFRESH_PARQET_DATA.md, sections 3 and 4); they replace
-the portfolio's positions and activities wholesale, in one transaction — the page sees the old data or the new, never a mix. Kept where the
-task wrote them (private-portfolios/<portfolio>/exports/), they are the record of what was imported.
+the portfolio's positions and activities wholesale, in one transaction — the page sees the old
+data or the new, never a mix. The task stages them in a temporary folder; nothing keeps them.
 
 Before it writes anything, checks what REFRESH_PARQET_DATA.md asks to hold: every activity named,
 every (depot, ISIN) traded also a position, every sale's net amount = gross − tax − fee. A
