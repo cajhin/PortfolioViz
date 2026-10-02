@@ -28,11 +28,11 @@
   <input id="pw2" type="password" autocomplete="new-password" placeholder="Password again" hidden>
   <div class="row">
     <button type="submit" class="dt-addsel" id="submit">Log in</button>
-    <a href="#" id="switch">Create account</a>
+    <a href="#" id="switch">Create user</a>
   </div>
   <div class="err" id="msg"></div>
 </form>
-<!-- shown with "Create account" only -->
+<!-- shown with "Create user" only -->
 <div class="card warn" id="warn" hidden>
   <p>I (admin) can see everything</p>
   <p>This page is not high-security</p>
@@ -47,8 +47,8 @@
   $('switch').addEventListener('click', e => {
     e.preventDefault();
     register = !register;
-    $('title').textContent = $('submit').textContent = register ? 'Create account' : 'Log in';
-    $('switch').textContent = register ? 'Log in instead' : 'Create account';
+    $('title').textContent = $('submit').textContent = register ? 'Create user' : 'Log in';
+    $('switch').textContent = register ? 'Log in instead' : 'Create user';
     $('pw2').hidden = !register;
     $('warn').hidden = !register;
     $('pw2').required = register;

@@ -42,7 +42,7 @@ If either name already exists, stop and report rather than clobbering it.
 
 In this section "portfolio" is Parqet's word, as its tools use it: one depot.
 
-Portfolio IDs are not hardcoded here — they are per-account and this file is committed. Call
+Portfolio IDs are not hardcoded here — they are per Parqet login and this file is committed. Call
 `parqet_list_portfolios` first to get the current IDs (for `main`: Trade Republic, Comdirect,
 Schwab), keep the ones this portfolio covers, and re-read them if any later call 404s.
 

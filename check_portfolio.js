@@ -57,7 +57,7 @@ const src = SCRIPTS.map(f => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\
   // the range pick lives in three globals at once — the two dates and the view they only apply
   // to — so it is set and cleared as one thing rather than three
   setRange: (from, to) => { VIEW = to || from ? 'map' : VIEW; AS_FROM = from; AS_OF = to; },
-  account: () => ({ divTotal: DIV_TOTAL, taxTotal: TAX_TOTAL, taxSplit: TAX_SPLIT,
+  books: () => ({ divTotal: DIV_TOTAL, taxTotal: TAX_TOTAL, taxSplit: TAX_SPLIT,
                     trades: TRADES.length, bench: BENCH.length, names: NAMES.size,
                     sectors: SECTORS.size, indexed: TRADE_INDEX.size }),
 };`;
@@ -187,7 +187,7 @@ function hoverAll(nodes, rows, tag, out) {
   for (const mode of ['abs', 'rel']) {
     h.setMode(mode);
     out[`${mode}/model`] = {
-      account: h.account(), depots: h.depots().map(p => p.name),
+      books: h.books(), depots: h.depots().map(p => p.name),
       totals: h.totals(h.items()), closedTotals: h.totals(h.closed()),
       items: h.items().map(snap), closed: h.closed().map(snap),
     };

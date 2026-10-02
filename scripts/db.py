@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def _columns(c, table):
@@ -103,24 +103,44 @@ def _to_3(c):
     c.execute("UPDATE setting SET key = 'defaultPortfolio' WHERE key = 'defaultProfile'")
 
 
-MIGRATIONS = {2: _to_2, 3: _to_3}
+def _to_4(c):
+    """A portfolio's source is its type, and one open to the command line (allow_cli) is a game.
+    A new CHECK means a new table; migrate() has foreign keys off, so dropping the old one
+    cascades to nothing."""
+    if "source" not in _columns(c, "portfolio"):
+        return
+    c.execute("CREATE TABLE portfolio_new (name TEXT PRIMARY KEY, label TEXT NOT NULL, "
+              "type TEXT NOT NULL CHECK (type IN ('parqet', 'manual', 'game')))")
+    c.execute("INSERT INTO portfolio_new (name, label, type) SELECT name, label, "
+              "CASE WHEN allow_cli THEN 'game' ELSE source END FROM portfolio ORDER BY rowid")
+    c.execute("DROP TABLE portfolio")
+    c.execute("ALTER TABLE portfolio_new RENAME TO portfolio")
+
+
+MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4}
 
 
 def migrate(c):
     row = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if row and int(row[0]) >= SCHEMA_VERSION:
         return
+    c.execute("PRAGMA foreign_keys = OFF")       # a rebuilt table must not cascade (see _to_4)
     c.execute("BEGIN IMMEDIATE")
     try:
         row = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
         for v in range(int(row[0]) + 1 if row else 2, SCHEMA_VERSION + 1):
             MIGRATIONS[v](c)
+        broken = c.execute("PRAGMA foreign_key_check").fetchall()
+        if broken:
+            raise RuntimeError(f"migration left {len(broken)} rows pointing nowhere, e.g. {tuple(broken[0])}")
         c.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
                   "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (str(SCHEMA_VERSION),))
         c.execute("COMMIT")
     except BaseException:
         c.execute("ROLLBACK")
         raise
+    finally:
+        c.execute("PRAGMA foreign_keys = ON")
     with open(os.path.join(SCRIPTS, "schema.sql"), encoding="utf-8") as fh:
         c.executescript(fh.read())            # every statement there is IF NOT EXISTS
 
@@ -164,7 +184,7 @@ def text(v):
 
 def settings(portfolio=""):
     """The keys stored for one scope — '' for the global ones (was config.json), else a portfolio's own
-    (was its profile.json, less label/source/allow-cli, which are its `portfolio` row)."""
+    (was its profile.json, less label/source/allow-cli, now its `portfolio` row's label and type)."""
     return {r["key"]: json.loads(r["value"])
             for r in conn().execute("SELECT key, value FROM setting WHERE portfolio = ? ORDER BY rowid",
                                     (portfolio,))}
@@ -285,7 +305,7 @@ def write_fx(pair, rates):
 
 
 # ---------- portfolios ----------
-# A portfolio is one row in `portfolio` (label, source, allow_cli) plus its own settings (watchlist,
+# A portfolio is one row in `portfolio` (label, type) plus its own settings (watchlist,
 # benchmarkIsin, parqetPortfolios, ...) — together what its profile.json used to say.
 
 POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares", "currency",
@@ -299,7 +319,7 @@ PORTFOLIO_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "c
 
 
 def portfolio(name):
-    """The portfolio's row as {name, label, source, allow_cli}, or None."""
+    """The portfolio's row as {name, label, type}, or None."""
     r = conn().execute("SELECT * FROM portfolio WHERE name = ?", (name,)).fetchone()
     return dict(r) if r else None
 
@@ -309,19 +329,20 @@ def portfolios():
 
 
 def portfolio_config(name):
-    """What the portfolio's profile.json used to hold: label, source, allow-cli and its settings."""
+    """Its label and type with its own settings — what its profile.json used to hold."""
     p = portfolio(name)
     if not p:
         return None
-    return {"label": p["label"], "source": p["source"],
-            **({"allow-cli": True} if p["allow_cli"] else {}), **settings(name)}
+    return {"label": p["label"], "type": p["type"], **settings(name)}
 
 
-def create_portfolio(name, label, source, allow_cli=False):
+TYPES = ("parqet", "manual", "game")
+
+
+def create_portfolio(name, label, type_):
     """A new, empty portfolio with an empty watchlist; sqlite3.IntegrityError if the name is taken."""
     with tx() as c:
-        c.execute("INSERT INTO portfolio (name, label, source, allow_cli) VALUES (?, ?, ?, ?)",
-                  (name, label or name, source, 1 if allow_cli else 0))
+        c.execute("INSERT INTO portfolio (name, label, type) VALUES (?, ?, ?)", (name, label or name, type_))
         c.execute("INSERT INTO setting (portfolio, key, value) VALUES (?, 'watchlist', '[]')", (name,))
 
 

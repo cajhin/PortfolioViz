@@ -7,7 +7,7 @@ lives in one SQLite database, `data/portfolio.db`.
 ```
 web/                    the page — all the server serves besides its routes
   portfolio.html          markup only; loads the css and the two scripts, in that order
-  login.html              log in or create an account — server.py's login, see **Users**
+  login.html              log in or create a user — server.py's login, see **Users**
   portfolio.css
   portfolio.model.js      data and arithmetic — never touches the DOM
   portfolio.view.js       everything that reads or writes the page
@@ -27,8 +27,8 @@ scripts/                every Python script; each finds the repo as its own fold
                             rebuilds a manual portfolio's positions/activities/cash from its ledger
   import_parqet.py        imports a Parqet refresh (two CSVs) into a Parqet portfolio
   manual_tx.py            adds/edits/deletes a transaction in a manual portfolio (the page's backend)
-  trade.py                trades a demo account from the command line — live only, JSON out
-  manage-accounts.py      creates demo accounts, moves their cash, lists them, purges an obsolete
+  trade.py                trades a game portfolio from the command line — live only, JSON out
+  manage-portfolios.py    creates game portfolios, moves their cash, lists them, purges an obsolete
                             portfolio — same style; admin only, never given to an agent
   manage-users.py         the page's users: add, passwd, grant/revoke portfolios, delete, list-users,
                             list-portfolios — same style, admin only
@@ -46,7 +46,7 @@ backup/                 the files the data came from before the database (config
 The database's tables (`scripts/schema.sql`) fall into three groups that differ by
 **lifecycle**, and that is the distinction to preserve:
 
-- **a portfolio's own** (IMPORTED) — `portfolio` (label, source, allow_cli), its keys in `setting`,
+- **a portfolio's own** (IMPORTED) — `portfolio` (label, type), its keys in `setting`,
   `ledger`, and `position`/`activity`/`cash`. A Parqet portfolio's positions and activities are
   replaced wholesale by each refresh; a manual portfolio's `ledger` is its real source — every TR
   row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
@@ -91,7 +91,7 @@ writes `cash` (each booking's cash effect, by depot), and the page shows the bal
 date in a Cash tile of its own and counts it into **nothing else**: not the Current value /
 "Value on" tile, not Invested, no gain, return or IRR, no benchmark, no map area. Moving
 money to the broker is not an investment. Cash may go negative (a demo buy is never refused for
-want of a deposit). Reconstructed TR cash matches Parqet's balance for the same account to the
+want of a deposit). Reconstructed TR cash matches Parqet's balance for the same depot to the
 cent, apart from TR's tax refunds, which Parqet leaves out.
 
 **Portfolios.** The page can show several portfolios — each a whole the page draws, made of one or
@@ -107,54 +107,56 @@ holdings into it. The page picks the portfolio from `?portfolio=`, else the glob
 stays shared because the price series are converted into it on write. The Update button runs
 `scripts/update_prices.py --portfolio <p>`, fetching only that portfolio's instruments.
 
-A portfolio is controlled **either** by Parqet **or** manually, and its `source` says
-which: `parqet` — refreshed by REFRESH_PARQET_DATA.md (`import_parqet.py`), never imported into
-otherwise — or `manual` — fed
-by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand (`manual_tx.py`,
-for virtual demo portfolios; booked under depot "Manual", so never merged with a real
-position), both on the Transactions tab, never refreshed from Parqet. That tab's "+ New
-instrument…" writes to the registry (via `add_instrument.py`), the shared catalog. server.py,
-`import_tr.py`, `manual_tx.py`, `import_parqet.py` and the page all check the source, so `main`
-cannot be overwritten by a stray import. The TR conversion follows Parqet's conventions and was
-checked against Parqet's own import of the same account; its docstring lists them.
+A portfolio's `type` says where its transactions come from, and nothing else may change them:
+`parqet` — refreshed by REFRESH_PARQET_DATA.md (`import_parqet.py`), never imported into otherwise;
+`manual` — fed by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand
+(`manual_tx.py`; booked under depot "Manual", so never merged with a real position), both on the
+Transactions tab, never refreshed from Parqet; `game` — trades made with `trade.py` under
+`trading-rules.md` alone, cash moved only by `manage-portfolios.py` (see **Game portfolios**
+below). The page creates parqet and manual ones; a game starts with cash, so the command line
+does. That tab's "+ New instrument…" writes to the registry (via `add_instrument.py`), the shared
+catalog. server.py, `import_tr.py`, `manual_tx.py`, `import_parqet.py`, `trade.py` and the page all
+check the type, so `main` cannot be overwritten by a stray import, nor a game's rules bent from the
+page. The TR conversion follows Parqet's conventions and was checked against Parqet's own import of
+the same depot; its docstring lists them.
 
 **Users.** server.py wants a login for every route but the page's own files (no data in them) and
 login.html's: an HttpOnly session cookie, its token's hash in the `session` table. A user sees and
 changes only the portfolios granted to them (`user_portfolio`, `can_write`); any other is a 404 on
 every route, the same as one that does not exist, and api/config's `defaultPortfolio` is rewritten
-to one they have. Anyone who reaches the page can create an account; it sees nothing until it
+to one they have. Anyone who reaches the page can create a user; it sees nothing until it
 creates a portfolio (granted to its creator) or is granted one — `scripts/manage-users.py grant`,
 which is also how every portfolio made by a script gets an owner. Update fetches one granted
 portfolio's instruments, never the whole registry; registering an instrument takes write access to
 some portfolio. The Config tab lists the user's other portfolios and deletes one they may change —
-`manage-accounts.py purge`, with no backup. These tables (`user`, `user_portfolio`, `session`) are a
+`manage-portfolios.py purge`, with no backup. These tables (`user`, `user_portfolio`, `session`) are a
 fourth lifecycle — people, neither a portfolio's own nor the registry — and an older database gets
 them like any other schema change (below). It is for convenience and keeping people apart, not
 hardened: the registry, prices and every script stay shared and unchecked, and an agent's boundary
-is still `allow_cli`/`TRADE_ACCOUNT` below.
+is still the `game` type and `TRADE_PORTFOLIO` below.
 
-**Agent accounts.** `scripts/manage-accounts.py` creates demo accounts, moves their cash and lists
-them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every answer
-is one JSON object. Both touch only portfolios with `allow_cli` set (which `manage-accounts.py
-create` sets); the scripts cannot tell an agent from a human, so that flag is the boundary — and
-splitting the two lets an agent be handed trading alone: `manage-accounts.py` is admin only. Its
+**Game portfolios.** `scripts/manage-portfolios.py` creates game portfolios, moves their cash and
+lists them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every
+answer is one JSON object. Both touch only portfolios of type `game` (which `manage-portfolios.py
+create` makes); the scripts cannot tell an agent from a human, so that type is the boundary — and
+splitting the two lets an agent be handed trading alone: `manage-portfolios.py` is admin only. Its
 `purge` removes any obsolete portfolio (not the default one), after backing the database up to
-`--backup-dir` — or, said explicitly, `--no-backup`. An agent's session is also
-bound to its own account: its `start-agent` sets `TRADE_ACCOUNT`, and `trade.py` refuses any other
-(the agent cannot override it — a command not starting with trade.py's path is not allowed). Each
-agent folder under `agents/` has its own config dir, so agents share no memory. It is **live only**: no date can be given. A trade executes at once at a live price: gettex's ask
-(buy) or bid (sell) while gettex is open (weekdays 08:00–22:00 German time) and its quote is under
-15 minutes old — read from onvista's unofficial API — else the home exchange via Yahoo while that is
-open and its price under 30 minutes old, else not at all. `status`/`list-accounts` value a position
-at gettex's bid while its home market is closed and gettex is open; otherwise at Yahoo's latest
-price. Charts, history and the page stay on Yahoo's closes. A trade
-costs a €10 fee, on top of the spread — gettex's own, or 1% each way at the home exchange, which has
-no bid/ask; a sale also pays 20% tax on its gain. Cash can
-never go below zero: buys (fee included) and withdrawals are refused past it. The rules, with
-examples, are `trading-rules.md` — keep it in step with `trade.py`'s FEE_FIXED/TAX_RATE. `buy --eur` is the total that leaves the account,
-fee included. Trades land in the ledger like hand-entered ones (their `--reason` in its
-description), so the page shows and can edit them — the one way round these rules; leave them
-alone if accounts are to be compared.
+`--backup-dir` — or, said explicitly, `--no-backup`. An agent's session is also bound to its own
+portfolio: its `start-agent` sets `TRADE_PORTFOLIO`, and `trade.py` refuses any other (the agent
+cannot override it — a command not starting with trade.py's path is not allowed). Each agent folder
+under `agents/` has its own config dir, so agents share no memory. It is **live only**: no date can
+be given. A trade executes at once at a live price: gettex's ask (buy) or bid (sell) while gettex is
+open (weekdays 08:00–22:00 German time) and its quote is under 15 minutes old — read from onvista's
+unofficial API — else the home exchange via Yahoo while that is open and its price under 30 minutes
+old, else not at all. `status`/`list-games` value a position at gettex's bid while its home market
+is closed and gettex is open; otherwise at Yahoo's latest price. Charts, history and the page stay
+on Yahoo's closes. A trade costs a €10 fee, on top of the spread — gettex's own, or 1% each way at
+the home exchange, which has no bid/ask; a sale also pays 20% tax on its gain. Cash can never go
+below zero: buys (fee included) and withdrawals are refused past it. The rules, with examples, are
+`trading-rules.md` — keep it in step with `trade.py`'s FEE_FIXED/TAX_RATE. `buy --eur` is the total
+that leaves the portfolio's cash, fee included. Trades land in the ledger like hand-entered ones
+(their `--reason` in its description), and the page shows them, but neither it nor `manual_tx.py`
+can change them: a game's only way in is these two scripts.
 
 The global settings (`python3 scripts/db.py config`, `... config set <key> '<json>'`) are what
 an agent changes for the as-of picker's earliest date (`timelineStart`), the portfolio `currency`,

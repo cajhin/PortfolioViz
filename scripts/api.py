@@ -40,7 +40,7 @@ def no_portfolio(name):
     if not names:
         return ("The database has no portfolios yet — it was created empty (scripts/sqlite-install.sh). "
                 "Copy a backup over data/portfolio.db (made with scripts/db.py backup), or fill a portfolio: "
-                "REFRESH_PARQET_DATA.md for Parqet, scripts/manage-accounts.py create for a demo account.")
+                "REFRESH_PARQET_DATA.md for Parqet, scripts/manage-portfolios.py create for a game.")
     return (f"No portfolio {name!r} in the database — it has {', '.join(names)}. Pick one with "
             f"?portfolio=<name>, or change the default: scripts/db.py config set defaultPortfolio '\"<name>\"'.")
 

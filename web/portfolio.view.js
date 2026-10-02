@@ -906,7 +906,7 @@ function renderTrades() {
     `${TRADES.length} Trades (${fmtMoney(feesTotal)} Fees)` +
     (cashRows.length ? ` · ${cashRows.length} cash bookings` : '');
   // a manual portfolio's rows each name the ledger row they came from, and can be edited by it
-  const deletable = PORTFOLIO_SOURCE === 'manual';
+  const deletable = PORTFOLIO_TYPE === 'manual';
   document.getElementById('txDelHead').hidden = !deletable;
   const tb = document.querySelector('#tblTrades tbody');
   tb.replaceChildren(...rows.map(t => {
@@ -1175,7 +1175,7 @@ function attachRelTip(text) {
   tile.onpointerleave = () => tip.classList.remove('on');
 }
 
-// The Cash tile's breakdown, per account: the balance, and what moved it from outside — money in,
+// The Cash tile's breakdown, per depot: the balance, and what moved it from outside — money in,
 // money out, interest. Up to the date the tiles show, the same as the balance itself.
 function attachCashTip() {
   const tile = document.getElementById('tileCash');
@@ -1733,7 +1733,7 @@ function gradientStops() {
   return out.join(',');
 }
 
-// one stacked bar over every realised result in the account, pre-tax. Two main blocks — gains and
+// one stacked bar over every realised result in the portfolio, pre-tax. Two main blocks — gains and
 // losses — each split into the positions still open and the ones closed out; tax closes the losses.
 function renderClosed(over = null) {
   const wrap = document.getElementById('closedWrap');
@@ -3546,40 +3546,50 @@ function renderPortfolioPicker() {
       renderOtherPortfolios(list);
       if (!me) return list;
       document.getElementById('portfolioLabel').value = me.label || PORTFOLIO;
-      // every server.py that knows about portfolio kinds says one; none at all means the running
-      // server predates this page — say so, rather than let "no source" read as Parqet
-      if (!('source' in me)) staleServer();
-      else applyPortfolioSource(me.source, me.label);
+      // every server.py that knows about portfolio types says one; none at all means the running
+      // server predates this page — say so, rather than let "no type" read as Parqet
+      if (!('type' in me)) staleServer();
+      else applyPortfolioType(me.type, me.label);
       return list;
     })
     .catch(() => { sel.hidden = true; return null; });
   sel.addEventListener('change', () => gotoPortfolio(sel.value));
 }
 
-// A portfolio is controlled by Parqet or manually (its "source", which server.py reports). That decides the Transactions tab: a Parqet portfolio's
-// list is read-only, with a note saying where it comes from; a manual one gets the import, a
-// delete per row and the add form. server.py and the scripts refuse a Parqet portfolio regardless, so
-// hiding the tools here is a courtesy, not the guard. Unknown (no /portfolios to ask) shows neither.
-let PORTFOLIO_SOURCE = null;
-function applyPortfolioSource(source, label) {
-  PORTFOLIO_SOURCE = source === 'manual' ? 'manual' : 'parqet';
-  const manual = PORTFOLIO_SOURCE === 'manual';
+// A portfolio's type (which server.py reports) says where its transactions come from: Parqet, by
+// hand (manual) or trade.py under trading-rules.md (game). That decides the Transactions tab: a
+// parqet or game portfolio's list is read-only, with a note saying where it comes from; a manual
+// one gets the import, a delete per row and the add form. server.py and the scripts refuse the
+// others regardless, so hiding the tools here is a courtesy, not the guard. Unknown (no
+// /portfolios to ask) shows neither.
+let PORTFOLIO_TYPE = null;
+const TYPE_TEXT = {
+  manual: { note: '', tag: '· manual — transactions entered or imported here',
+            how: 'Import a Trade Republic transaction export, or add transactions by hand, below.' },
+  parqet: { note: label => `All ${label} transactions are imported from Parqet. Create a 'manual' ` +
+                           'portfolio to edit transactions or import Trade Republic exports.',
+            tag: '· controlled by Parqet — no manual changes',
+            how: 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.' },
+  game:   { note: label => `${label} is a game: every transaction is a trade made with scripts/trade.py ` +
+                           'under trading-rules.md, and none can be entered or changed here.',
+            tag: '· game — trades only through trade.py, under trading-rules.md',
+            how: 'It is a game: trade it with <code>scripts/trade.py</code>, then reload.' },
+};
+function applyPortfolioType(type, label) {
+  PORTFOLIO_TYPE = TYPE_TEXT[type] ? type : 'parqet';
+  const manual = PORTFOLIO_TYPE === 'manual', text = TYPE_TEXT[PORTFOLIO_TYPE];
   document.getElementById('txImport').hidden = !manual;
   document.getElementById('txAdd').hidden = !manual;
   document.getElementById('txAddRow').hidden = !manual;
   const note = document.getElementById('txSourceNote');
   note.hidden = manual;
-  note.textContent = `All ${label || PORTFOLIO} transactions are imported from Parqet. Create a ` +
-    `'manual' portfolio to edit transactions or import Trade Republic exports.`;
+  note.textContent = manual ? '' : text.note(label || PORTFOLIO);
   // the delete column depends on this, and the list may already be drawn without it
   TRADES_DRAWN_FOR = null;
   if (VIEW === 'trades' && ITEMS.length) renderTrades();
   refreshManualTools();
-  document.getElementById('portfolioSource').textContent =
-    manual ? '· manual — transactions entered or imported here' : '· controlled by Parqet — no manual changes';
-  document.getElementById('emptyPortfolioHow').innerHTML = manual
-    ? 'Import a Trade Republic transaction export, or add transactions by hand, below.'
-    : 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.';
+  document.getElementById('portfolioType').textContent = text.tag;
+  document.getElementById('emptyPortfolioHow').innerHTML = text.how;
 }
 
 // The Config tab's "Other portfolios": every portfolio the user may open but this one, each a link to
@@ -3594,7 +3604,7 @@ function renderOtherPortfolios(list) {
     const link = Object.assign(document.createElement('a'), { href: '#', textContent: p.label || p.name });
     link.addEventListener('click', e => { e.preventDefault(); gotoPortfolio(p.name); });
     const what = Object.assign(document.createElement('span'), { className: 'muted',
-      textContent: `${p.name} · ${p.source}${p.write === false ? ' · read only' : ''}` });
+      textContent: `${p.name} · ${p.type}${p.write === false ? ' · read only' : ''}` });
     row.append(link, what);
     if (p.write === false) return row;
     const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel', textContent: 'Delete' });
@@ -3627,7 +3637,7 @@ function renderOtherPortfolios(list) {
 // turns that into the same advice instead of a bare "File not found".
 const STALE_MSG = 'The server is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
 function staleServer() {
-  document.getElementById('portfolioSource').textContent = '· ' + STALE_MSG;
+  document.getElementById('portfolioType').textContent = '· ' + STALE_MSG;
   document.getElementById('emptyPortfolioHow').textContent = STALE_MSG;
   reportError('server', STALE_MSG);
 }
@@ -3683,9 +3693,9 @@ async function createPortfolio(label) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   if (!name) { err.textContent = `"${label}" has no letters or digits to name a directory after.`; return; }
   try {
-    const source = document.getElementById('newPortfolioSource').value;
+    const type = document.getElementById('newPortfolioType').value;
     const r = await fetch('portfolios', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ name, label, source }) });
+                                        body: JSON.stringify({ name, label, type }) });
     // statusText, not the body: send_error's body is an HTML page, its status line the message
     if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : r.statusText || `HTTP ${r.status}`);
     gotoPortfolio(name);
@@ -3720,7 +3730,7 @@ function showNoPortfolio(list) {
 // way out short of editing the URL.
 function showEmptyPortfolio() {
   document.getElementById('emptyPortfolioName').textContent = PORTFOLIO;
-  if (!PORTFOLIO_SOURCE) document.getElementById('emptyPortfolioHow').textContent = 'Fill it, then reload.';
+  if (!PORTFOLIO_TYPE) document.getElementById('emptyPortfolioHow').textContent = 'Fill it, then reload.';
   const slot = document.getElementById('emptyPortfolioSlot');
   slot.appendChild(document.getElementById('portfolioSel'));
   slot.appendChild(document.getElementById('txImport'));
@@ -3776,7 +3786,7 @@ function reloadOnTransactions() {
 // price is prefilled with that series' close on the date picked, editable after.
 //
 // Two things must be in hand before this can draw: the portfolio's kind (from /portfolios, see
-// applyPortfolioSource) and the registry (from ingest). Either can land first, so both call this and
+// applyPortfolioType) and the registry (from ingest). Either can land first, so both call this and
 // it simply waits for the other.
 const NEW_INSTRUMENT = '+new';            // not an ISIN, so never confused with one
 const TX_FORM_KEY = 'portfolioviz.txForm';   // date and type, kept across the reload an add causes
@@ -3788,7 +3798,7 @@ function txOption(inst) {
   return o;
 }
 function refreshManualTools() {
-  if (PORTFOLIO_SOURCE !== 'manual' || !INSTRUMENTS.size) return;
+  if (PORTFOLIO_TYPE !== 'manual' || !INSTRUMENTS.size) return;
   const sel = document.getElementById('txIsin');
   if (sel.options.length) return;
   const priced = [...new Set(INSTRUMENTS.values())]

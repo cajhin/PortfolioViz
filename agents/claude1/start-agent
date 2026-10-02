@@ -18,7 +18,7 @@
 cd "$(dirname "$0")" || exit 1
 export CLAUDE_CONFIG_DIR="$HOME/.claude-agents"
 export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
-export TRADE_ACCOUNT=claude1               # trade.py refuses any other account
+export TRADE_PORTFOLIO=claude1             # trade.py refuses any other portfolio
 mkdir -p var
 exec claude --append-system-prompt-file instructions.md --settings settings.json \
   --setting-sources project,local "$@"

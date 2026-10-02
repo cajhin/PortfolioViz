@@ -9,9 +9,9 @@ To init:
 5. run start.sh for local webserver
 6. click [Update]; this pulls all missing daily EOB ticks for 1.1.2019..today for the current portfolio's stocks from Yahoo (thank you Y).
 
-Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete portfolio goes with `scripts/manage-accounts.py purge <portfolio> --yes --backup-dir <dir>` (backs up there first; `--no-backup` instead to skip that).
+Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete portfolio goes with `scripts/manage-portfolios.py purge <portfolio> --yes --backup-dir <dir>` (backs up there first; `--no-backup` instead to skip that).
 
-Demo accounts for AI agents (or for you, from a terminal): `scripts/manage-accounts.py --help` to create and fund them (admin only), `scripts/trade.py --help` to trade (all an agent gets). Accounts are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
+Game portfolios for AI agents (or for you, from a terminal): `scripts/manage-portfolios.py --help` to create and fund them (admin only), `scripts/trade.py --help` to trade (all an agent gets). Games are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
 
 Notes:
 - you can tell Claude directly to analyze the known data (like 'calc the max downdraw for all my stocks' or 'how many successful trades did i do in 2025?')

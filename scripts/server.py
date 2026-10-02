@@ -45,16 +45,16 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # it has no memory between requests, unlike every other price this page ever shows. Pre- and
 # post-market bars are included where Yahoo has them (US stocks and ETFs; not indices).
 #
-# GET /portfolios — the page's portfolio picker: one {name, label, source, write} per portfolio the
+# GET /portfolios — the page's portfolio picker: one {name, label, type, write} per portfolio the
 # user may open.
 #
-# POST /portfolios {name, label, source} — the Config tab's "Create new portfolio", source "parqet"
-# or "manual" (see SOURCES below): an empty portfolio with an empty watchlist, ready for its first
+# POST /portfolios {name, label, type} — the Config tab's "Create new portfolio", type "parqet"
+# or "manual" (see PAGE_TYPES below): an empty portfolio with an empty watchlist, ready for its first
 # refresh or import, granted to its creator. 409 if it already exists.
 # POST /portfolio-label?portfolio=NAME {label} — the Config tab's rename: only the label changes. The
 # name never does — it is what URLs, baselines and the refresh task refer to the portfolio by.
 # POST /portfolio-delete?portfolio=NAME — the Config tab's Delete, for a portfolio the user may change:
-# manage-accounts.py purge, with no backup. The default portfolio is refused there.
+# manage-portfolios.py purge, with no backup. The default portfolio is refused there.
 #
 # POST /import-tr?portfolio=NAME&name=FILE.csv — the Config tab's "Import Trade Republic file":
 # the body is the export itself. Kept in private-portfolios/<name>/exports/ (the record of what
@@ -88,17 +88,19 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 
 PORTFOLIO_NAME = re.compile(r"^[A-Za-z0-9_-]+$")   # a directory name, never a path
 
-# A portfolio is controlled by Parqet (REFRESH_PARQET_DATA.md imports its positions and activities)
-# or manually (imports from the Config tab). Its source says which; a manual import into a Parqet
-# one is refused, so a slip can never overwrite a Parqet export.
-SOURCES = ("parqet", "manual")
+# A portfolio's type says where its transactions come from: parqet (REFRESH_PARQET_DATA.md imports
+# its positions and activities), manual (imports and hand entries on the page) or game (trade.py
+# only). The page's imports and hand entries are refused for all but a manual one, so a slip can
+# never overwrite a Parqet export or bend a game's rules. The page creates parqet and manual ones;
+# a game starts with cash, which only manage-portfolios.py books.
+PAGE_TYPES = ("parqet", "manual")
 
 def is_manual(name):
     p = db.portfolio(name) if PORTFOLIO_NAME.match(name) else None
-    return bool(p) and p["source"] == "manual"
+    return bool(p) and p["type"] == "manual"
 
 def list_portfolios(user):
-    return [{"name": p["name"], "label": p["label"], "source": p["source"], "write": bool(p["can_write"])}
+    return [{"name": p["name"], "label": p["label"], "type": p["type"], "write": bool(p["can_write"])}
             for p in db.user_portfolios(user)]
 
 # USERS. A login is a random token in an HttpOnly cookie; the database keeps its hash (db.py's
@@ -207,18 +209,18 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                 name, label = str(req.get("name") or ""), str(req.get("label") or "").strip()
-                source = str(req.get("source") or "")
+                type_ = str(req.get("type") or "")
             except ValueError:
-                name, label, source = "", "", ""
+                name, label, type_ = "", "", ""
             if not PORTFOLIO_NAME.match(name):
                 self.send_error(400, "bad portfolio name")
                 return
-            if source not in SOURCES:
-                self.send_error(400, "source must be parqet or manual")
+            if type_ not in PAGE_TYPES:
+                self.send_error(400, "type must be parqet or manual")
                 return
             try:
                 with db.tx():
-                    db.create_portfolio(name, label or name, source)
+                    db.create_portfolio(name, label or name, type_)
                     db.grant(self.user, name)
             except sqlite3.IntegrityError:
                 self.send_error(409, f"portfolio {name} already exists")
@@ -325,7 +327,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not self.may_change(portfolio):
             self.send_text(404 if not self.may_open(portfolio) else 403, f"you may not delete {portfolio}")
             return
-        proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manage-accounts.py"), "purge", portfolio,
+        proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manage-portfolios.py"), "purge", portfolio,
                                "--yes", "--no-backup"],
                               capture_output=True, text=True, timeout=120)
         try:

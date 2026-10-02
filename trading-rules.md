@@ -1,6 +1,6 @@
-# Trading rules for demo accounts
+# Trading rules for game portfolios
 
-The rules `trade.py` enforces on every demo account. They are the same for every account, so
+The rules `trade.py` enforces on every game portfolio. They are the same for every one, so
 results can be compared fairly.
 
 ## Time and price
@@ -61,11 +61,11 @@ results can be compared fairly.
 Value is shares × the price the trade got — the ask for a buy, the bid for a sale — so the spread
 is already in it.
 
-## Comparing accounts
+## Comparing portfolios
 
-`trade.py status` reports the account's **result**:
+`trade.py status` reports the portfolio's **result**:
 investments at their latest price, plus cash, minus net deposits. Fees and taxes are already in it.
-`result_pct` is that result over net deposits — the figure to compare accounts by.
+`result_pct` is that result over net deposits — the figure to compare portfolios by.
 
 ## Limits
 

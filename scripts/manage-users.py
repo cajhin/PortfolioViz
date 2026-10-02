@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Manage the page's users from the command line — JSON in every answer. Admin only, like
-manage-accounts.py.
+manage-portfolios.py.
 
     manage-users.py add     <user>                          # asks for the password
     manage-users.py passwd  <user>                          # asks for the new one; logs them out
@@ -12,8 +12,8 @@ manage-accounts.py.
 
 server.py lets nobody in without a login, and shows a user only the portfolios granted to them —
 scripts/db.py's `user_portfolio`. Anyone who can reach the page can also create a user there
-("Create account"), who then sees only the portfolios they create. Every portfolio that existed
-before, or that a script made (an agent's account, a Parqet refresh), is granted here. A grant
+("Create user"), who then sees only the portfolios they create. Every portfolio that existed
+before, or that a script made (an agent's game, a Parqet refresh), is granted here. A grant
 lets the user change the portfolio too (rename, import, transactions), unless --read-only.
 
 A password is read from the terminal, never the command line (it would land in the shell's
@@ -82,8 +82,7 @@ def revoke(name, portfolios):
 
 def list_portfolios():
     users = db.users()
-    return {"portfolios": [{"name": p["name"], "label": p["label"], "source": p["source"],
-                          "allow_cli": bool(p["allow_cli"]),
+    return {"portfolios": [{"name": p["name"], "label": p["label"], "type": p["type"],
                           "users": {u["name"]: u["portfolios"][p["name"]] for u in users if p["name"] in u["portfolios"]}}
                          for p in db.portfolios()]}
 

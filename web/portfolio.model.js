@@ -178,7 +178,7 @@ const isDeal = t => t.type === 'buy' || t.type === 'sell';
 // the buys and sells alone — a fresh array, safe to rewrite (the split rescaling does)
 const dealsOf = d => tradesOf(d).filter(isDeal);
 
-// Account-wide dividend and tax figures over whatever slice of the log is handed in — the whole
+// Portfolio-wide dividend and tax figures over whatever slice of the log is handed in — the whole
 // thing for the live view, everything up to a date for an as-of pick. One pass: these used to be
 // six separate filter+reduce sweeps written out twice.
 function incomeAndTax(rows) {
@@ -259,7 +259,7 @@ function xirr(flows) {
   return ((lo + hi) / 2) * 100;
 }
 
-// Cash: what the account holds besides its positions, on `date` (an ISO date; null for now), for
+// Cash: what the depots hold besides their positions, on `date` (an ISO date; null for now), for
 // one depot or all. Shown in the header's own Cash tile and counted into no other figure:
 // moving money to the broker is not an investment, so cash stays out of the value, Invested, every
 // gain, return and IRR, the benchmark comparisons and the map's areas. It may be negative.
@@ -328,7 +328,7 @@ function benchSeriesPath(configText, instrumentsText) {
   return row ? seriesPath(row.id) : '';
 }
 
-// The money that has actually left the account and stayed out: everything paid in, less everything
+// The money actually put in and kept in: everything paid in, less everything
 // taken back out, over the whole activity log. Buys and costs count in; sales, dividends and
 // interest count out — the same signs XIRR uses.
 //
@@ -706,7 +706,7 @@ async function computeAsOf(dateStr, fromStr = null) {
       depot: d.depot, name: d.name, label: d.label, identifier: d.identifier,
       fund: d.fund, shares: sharesAtD,
       // purAbs is what these shares actually cost, before any re-basing or benchmark substitution
-      // — the money that left the account. `pur` is what the range or the vs.-World mode measures
+      // — the money actually put in. `pur` is what the range or the vs.-World mode measures
       // against, which on a range pick is a market value rather than a purchase, so only purAbs
       // divides into an average price paid.
       purAbs: lotCost(heldLots),

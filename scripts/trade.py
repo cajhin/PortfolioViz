@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Trade a demo account from the command line — live only, JSON in every answer.
+"""Trade a game portfolio from the command line — live only, JSON in every answer.
 
     trade.py quote    <instrument> [<instrument> ...]
     trade.py chart    <instrument> [<instrument> ...]
-    trade.py buy      <account> <instrument> (--eur EUR | --shares N) [--reason TEXT] [--id ID]
-    trade.py sell     <account> <instrument> (--shares N | --all)      [--reason TEXT] [--id ID]
-    trade.py status   <account>
-    trade.py history  <account>
+    trade.py buy      <portfolio> <instrument> (--eur EUR | --shares N) [--reason TEXT] [--id ID]
+    trade.py sell     <portfolio> <instrument> (--shares N | --all)      [--reason TEXT] [--id ID]
+    trade.py status   <portfolio>
+    trade.py history  <portfolio>
     trade.py rules
 
-Accounts themselves — creating one, putting cash in or taking it out — are their owner's to
-manage, not this script's.
+Game portfolios themselves — creating one, putting cash in or taking it out — are their owner's to
+manage (manage-portfolios.py), not this script's.
 
 <instrument> is an ISIN, a ticker or a name; anything ambiguous answers with the candidates.
 Quoting several at once answers {"quotes": [...]}, one entry each — an instrument that cannot be
@@ -27,13 +27,13 @@ no trade is possible. Each trade costs a €10 fee, on top of the spread a gette
 Cash can never go below zero: a buy must be covered, fee included. Prices are in the portfolio
 currency.
 
-buy --eur is everything that leaves the account, the fee included (--eur 2000 buys €1990 of
+buy --eur is everything that leaves the portfolio's cash, the fee included (--eur 2000 buys €1990 of
 shares and pays €10); buy --shares adds the fee on top. A sale's fee comes off its proceeds,
 and so does a 20% tax on its gain, if any. The full rules, with examples: trade.py rules.
 
-Only accounts set up for command-line trading can be traded; any other is refused. --id makes a
-call safe to repeat: a second call with the same id answers with the first one's result instead of
-trading twice. --reason is kept with the trade.
+Only game portfolios can be traded; any other is refused. --id makes a call safe to repeat: a
+second call with the same id answers with the first one's result instead of trading twice.
+--reason is kept with the trade.
 """
 import argparse, contextlib, fcntl, io, json, os, re, subprocess, sys, time, urllib.parse, uuid
 from datetime import date, datetime, timedelta, timezone
@@ -46,7 +46,7 @@ from update_prices import GETTEX_MAX_AGE_MIN, gettex_quote
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
-ACCOUNT = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 
 
@@ -68,40 +68,40 @@ def quiet(fn, *args, **kw):
         raise Refusal(str(e.code) if e.code not in (None, 0) else "failed", out.getvalue().strip()[-300:])
 
 
-# ---------- accounts ----------
+# ---------- portfolios ----------
 
-def account(name, must_exist=True):
-    """The account's name, checked — an account is a portfolio."""
-    if not ACCOUNT.match(name or ""):
-        raise Refusal(f"{name!r} is not an account name",
+def check_name(name, must_exist=True):
+    """The portfolio's name, checked."""
+    if not NAME.match(name or ""):
+        raise Refusal(f"{name!r} is not a portfolio name",
                       "lowercase letters, digits, - and _, starting with a letter or digit")
     if must_exist and not db.portfolio(name):
-        raise Refusal(f"no account {name!r}", "check the name — accounts are set up by their owner")
+        raise Refusal(f"no portfolio {name!r}", "check the name — portfolios are set up by their owner")
     return name
 
 
 def portfolio(name):
-    """The account's settings, as its profile.json used to hold them."""
+    """The portfolio's settings, with its label and type."""
     return db.portfolio_config(name) or {}
 
 
-def require_cli(name):
-    # an agent's session is bound to its own account: its start script sets TRADE_ACCOUNT, and
-    # another account — someone else's demo, to look at or to trade — is refused. (The variable cannot
+def require_game(name):
+    # an agent's session is bound to its own portfolio: its start script sets TRADE_PORTFOLIO, and
+    # another portfolio — someone else's game, to look at or to trade — is refused. (The variable cannot
     # be changed from inside the session: a command not starting with this script is not allowed.)
-    bound = os.environ.get("TRADE_ACCOUNT")
+    bound = os.environ.get("TRADE_PORTFOLIO")
     if bound and name != bound:
-        raise Refusal(f"this session trades account {bound!r} only, not {name!r}")
-    cfg = portfolio(account(name))
-    if cfg.get("source") != "manual" or cfg.get("allow-cli") is not True:
-        raise Refusal(f"account {name!r} is not open to the command line",
-                      "only accounts set up for command-line trading can be traded")
+        raise Refusal(f"this session trades portfolio {bound!r} only, not {name!r}")
+    cfg = portfolio(check_name(name))
+    if cfg.get("type") != "game":
+        raise Refusal(f"portfolio {name!r} is not a game",
+                      "only game portfolios can be traded")
     return name
 
 
 @contextlib.contextmanager
 def locked(name):
-    """One change at a time per account: two callers at once (two agents, or one and the page)
+    """One change at a time per portfolio: two callers at once (two agents, or one and its admin moving cash)
     would otherwise each read the ledger, add their row, and the second write lose the first.
     A lock file, not a database transaction: a trade looks prices up (and may fetch a new
     instrument's history, which writes to the database) before it books."""
@@ -250,12 +250,12 @@ def sale_tax(rows, isin, shares, value, fee):
 
 
 def cash_of(name):
-    """The account's cash now — every booking's effect, as the last rebuild wrote it."""
+    """The portfolio's cash now — every booking's effect, as the last rebuild wrote it."""
     return round(sum(num(c["amount"]) for c in db.portfolio_rows(name, "cash")), 2)
 
 
 def held(name, isin):
-    """Shares of `isin` in the account now."""
+    """Shares of `isin` in the portfolio now."""
     rows = manual_tx.manual_rows(name)
     return round(sum(num(r["shares"]) for r in rows if r["symbol"] == isin and r["type"] in ("BUY", "SELL")), 6)
 
@@ -357,7 +357,7 @@ def latest_close(inst):
 
 
 def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="", oid=None):
-    require_cli(name)
+    require_game(name)
     with locked(name):
         rows = manual_tx.manual_rows(name)
         tid = f"manual-{oid}" if oid else None
@@ -375,7 +375,7 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
             if ((eur or 0) > 0) == ((shares or 0) > 0):
                 raise Refusal("give either --eur or --shares, as a positive number")
             if eur:
-                # --eur is everything that leaves the account, the fee included
+                # --eur is everything that leaves the portfolio's cash, the fee included
                 value = eur - FEE_FIXED
                 if value <= 0:
                     raise Refusal(f"€{eur:g} does not cover the €{FEE_FIXED:g} fee")
@@ -385,7 +385,7 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
             fee = fee_for(value)
             if value + fee > cash + 0.005:
                 raise Refusal(f"not enough cash: this buy costs €{value + fee:.2f} with its fee, "
-                              f"the account holds €{cash:.2f}",
+                              f"the portfolio holds €{cash:.2f}",
                               f"buy for at most --eur {cash:.2f}, or sell something first")
         else:
             have = held(name, inst["isin"])
@@ -437,7 +437,7 @@ def trade_view(r):
 # and gettex is open with a fresh quote: then at gettex's bid, what it could be sold for right now.
 # Without that, a buy on gettex in the evening (at a price that has moved on since the home close)
 # shows a loss that is only the gap between two clocks. Looked up once per instrument per call:
-# list-accounts asks for the same instruments across several accounts.
+# list-games asks for the same instruments across several portfolios.
 LIVE_MARKS = {}
 
 
@@ -462,8 +462,8 @@ def live_mark(isin):
 
 
 def summary(name):
-    """The account as it stands: cash, positions at their current value (see live_mark), and the
-    result against the money put in — cash included, the one fair way to set two accounts side by
+    """The portfolio as it stands: cash, positions at their current value (see live_mark), and the
+    result against the money put in — cash included, the one fair way to set two portfolios side by
     side."""
     positions = [p for p in db.portfolio_rows(name, "position") if p["isSold"] == "0"]
     cash_rows = db.portfolio_rows(name, "cash")
@@ -487,7 +487,7 @@ def summary(name):
                          "cost": round(num(p["purchaseValue"]), 2), "gain": round(value - num(p["purchaseValue"]), 2)})
     invested = sum(h["value"] for h in holdings)
     total = invested + cash
-    return {"account": name, "label": portfolio(name).get("label") or name, "date": today(),
+    return {"portfolio": name, "label": portfolio(name).get("label") or name, "date": today(),
             "cash": round(cash, 2), "positions": holdings,
             "value_positions": round(invested, 2), "value_total": round(total, 2),
             "net_deposits": round(net_in, 2),
@@ -496,12 +496,12 @@ def summary(name):
 
 
 def status(name):
-    return summary(require_cli(name))
+    return summary(require_game(name))
 
 
 def history(name):
-    rows = manual_tx.manual_rows(require_cli(name))
-    return {"account": name,
+    rows = manual_tx.manual_rows(require_game(name))
+    return {"portfolio": name,
             "transactions": [trade_view(r) if r["category"] == "TRADING" else
                              {"id": r["transaction_id"].removeprefix("manual-"), "date": r["date"],
                               "side": "deposit" if num(r["amount"]) > 0 else "withdrawal",
@@ -520,7 +520,7 @@ def rules():
         with open(RULES, encoding="utf-8") as fh:
             return {"rules": fh.read()}
     except OSError:
-        raise Refusal("the rules are not available", "ask the account's owner")
+        raise Refusal("the rules are not available", "ask the admin")
 
 
 def quote(text):
@@ -658,7 +658,7 @@ def chart(text):
 
 
 # ---------- command line ----------
-# Shared with manage-accounts.py: an argparse whose mistakes are answered as JSON like every other
+# Shared with manage-portfolios.py: an argparse whose mistakes are answered as JSON like every other
 # refusal, and one runner that prints the single JSON object either way.
 
 class Parser(argparse.ArgumentParser):
@@ -682,7 +682,7 @@ def configure(sub):
     sub.add_parser("quote").add_argument("instrument", nargs="+")
     sub.add_parser("chart").add_argument("instrument", nargs="+")
     for side in ("buy", "sell"):
-        s = sub.add_parser(side); s.add_argument("account"); s.add_argument("instrument")
+        s = sub.add_parser(side); s.add_argument("portfolio"); s.add_argument("instrument")
         s.add_argument("--shares", type=float)
         if side == "buy":
             s.add_argument("--eur", type=float)
@@ -690,7 +690,7 @@ def configure(sub):
             s.add_argument("--all", action="store_true")
         s.add_argument("--reason", default=""); s.add_argument("--id")
     for cmd in ("status", "history"):
-        sub.add_parser(cmd).add_argument("account")
+        sub.add_parser(cmd).add_argument("portfolio")
     sub.add_parser("rules")
 
 
@@ -707,14 +707,14 @@ def dispatch(a):
                 out.append({"ok": False, "query": text, "error": r.error, **({"hint": r.hint} if r.hint else {})})
         return {"quotes" if a.cmd == "quote" else "charts": out}
     if a.cmd == "buy":
-        return execute(a.account, "buy", a.instrument, shares=a.shares, eur=a.eur, reason=a.reason, oid=a.id)
+        return execute(a.portfolio, "buy", a.instrument, shares=a.shares, eur=a.eur, reason=a.reason, oid=a.id)
     if a.cmd == "sell":
-        return execute(a.account, "sell", a.instrument, shares=a.shares, all_=a.all, reason=a.reason, oid=a.id)
+        return execute(a.portfolio, "sell", a.instrument, shares=a.shares, all_=a.all, reason=a.reason, oid=a.id)
     if a.cmd == "status":
-        return status(a.account)
+        return status(a.portfolio)
     if a.cmd == "rules":
         return rules()
-    return history(a.account)
+    return history(a.portfolio)
 
 
 if __name__ == "__main__":

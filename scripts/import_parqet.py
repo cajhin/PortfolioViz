@@ -54,8 +54,8 @@ def main():
     p = db.portfolio(portfolio)
     if not p:
         sys.exit(f"no portfolio {portfolio!r} (create it on the page's Config tab)")
-    if p["source"] != "parqet":
-        sys.exit(f"{portfolio} is a manual portfolio — its data comes from its own ledger, not Parqet")
+    if p["type"] != "parqet":
+        sys.exit(f"{portfolio} is a {p['type']} portfolio — its data comes from its own ledger, not Parqet")
     positions, activities = load(pos_path, POSITION_FIELDS), load(act_path, ACTIVITY_FIELDS)
     problems = check(positions, activities)
     if problems:

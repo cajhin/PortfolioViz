@@ -9,11 +9,11 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '3');   -- db.py SCHEMA_VERSION
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '4');   -- db.py SCHEMA_VERSION
 
 -- ---------- settings: was config.json (portfolio '') and private-profiles/<p>/profile.json ----------
 -- value is JSON. A portfolio's keys override the global ones (flat, shallow), except currency.
--- label/source/allow-cli live in `portfolio`, not here.
+-- label and type live in `portfolio`, not here.
 CREATE TABLE IF NOT EXISTS setting (
   portfolio TEXT NOT NULL DEFAULT '',
   key     TEXT NOT NULL,
@@ -88,11 +88,13 @@ CREATE TABLE IF NOT EXISTS fx_rate (
 ) WITHOUT ROWID;
 
 -- ---------- portfolios: was private-profiles/<p>/ ----------
+-- type: where its transactions come from. parqet — a Parqet refresh (import_parqet.py); manual —
+-- Trade Republic imports and hand entries (import_tr.py, manual_tx.py); game — trades under
+-- trading-rules.md alone (trade.py), its cash moved by manage-portfolios.py
 CREATE TABLE IF NOT EXISTS portfolio (
-  name      TEXT PRIMARY KEY,
-  label     TEXT NOT NULL,
-  source    TEXT NOT NULL CHECK (source IN ('parqet', 'manual')),
-  allow_cli INTEGER NOT NULL DEFAULT 0
+  name  TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  type  TEXT NOT NULL CHECK (type IN ('parqet', 'manual', 'game'))
 );
 
 -- A manual portfolio's source of truth: every Trade Republic row imported (origin 'tr', kept even
@@ -135,7 +137,7 @@ CREATE INDEX IF NOT EXISTS cash_portfolio ON cash (portfolio);
 
 -- ---------- access: who may see and change which portfolio (server.py's login) ----------
 -- Not a portfolio's own and not the registry: people, managed by scripts/manage-users.py and the
--- login page's "Create account". pw_hash is scrypt (see db.hash_password).
+-- login page's "Create user". pw_hash is scrypt (see db.hash_password).
 CREATE TABLE IF NOT EXISTS user (
   name    TEXT PRIMARY KEY,
   pw_hash TEXT NOT NULL,

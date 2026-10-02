@@ -4,10 +4,10 @@
     python3 scripts/import_tr.py <portfolio> <transactions*.csv> [...]
     python3 scripts/import_tr.py <portfolio>                  # just rebuild from what is already in
 
-Manual portfolios only — the portfolio's source is "manual". A Parqet portfolio is refused, since its
-positions and activities belong to the Parqet refresh (import_parqet.py).
+Manual portfolios only — type "manual". A parqet one is refused, since its positions and activities
+belong to the Parqet refresh (import_parqet.py), and so is a game, which only trades (trade.py).
 
-Trade Republic's export (app → Portfolio → Transaction export) is one CSV of every booking, each
+Trade Republic's export (app → Profile → Transaction export) is one CSV of every booking, each
 with a `transaction_id`. Every row ever imported is kept, untouched, in the database's ledger
 (origin 'tr'), keyed by that id — so importing the same file twice, or two exports whose date
 ranges overlap, adds only the rows not seen before. What the page reads — the portfolio's
@@ -17,7 +17,7 @@ virtual demo portfolio, say) are in the same ledger (origin 'manual'), in the sa
 and the rebuild reads both. Positions, activities and cash are output, never input: a fix to the
 conversion below is applied by re-running this, not by repairing data.
 
-The conventions are Parqet's, matched against Parqet's own import of the same account:
+The conventions are Parqet's, matched against Parqet's own import of the same depot:
   buy/sell   `amount` gross and positive, `fee`/`tax` positive, `amountNet` = what actually moved
              (gross + fee on a buy, gross − tax − fee on a sale), `price` = amount / shares
   dividend   `amount` before withholding, `tax` the withholding, `amountNet` what was paid out
@@ -26,14 +26,14 @@ The conventions are Parqet's, matched against Parqet's own import of the same ac
   warrant    an exercise (WARRANT_EXERCISE + its TILG payout) is a sale of everything left, at
              whatever TILG paid — usually a few cents, or nothing
 Two things Parqet does not have, done here the closest equivalent way:
-  TAX_OPTIMIZATION   TR's tax refund (loss offsetting), booked as an account-level `fees_taxes`
+  TAX_OPTIMIZATION   TR's tax refund (loss offsetting), booked as a depot-level `fees_taxes`
                      row with a negative tax — it belongs to no position
   cash               deposits, transfers, interest: no activity, as for Parqet (see build()) —
                      but every booking's cash effect goes to the portfolio's cash (see cash_rows)
 
 Realised gains are FIFO, gross and net. Net subtracts the sale's own tax and fee *and* the buy
 fees of the lots it retires — that is how Parqet's realizedGainsNet comes out. Checked against
-Parqet's import of the same account: every trade agrees, and every position to within a euro,
+Parqet's import of the same depot: every trade agrees, and every position to within a euro,
 except where Parqet is itself inconsistent (a closed position whose realised gain is not
 proceeds − cost − tax − fees) or drops a warrant's few-cent payout.
 """
@@ -52,7 +52,7 @@ REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_cla
 # delete names. A Parqet portfolio's activities have none, and nothing there is deletable.
 DIVIDEND_TYPES = {"DIVIDEND", "DISTRIBUTION", "EARNINGS"}
 
-# cash: every booking's effect on its account's cash, tagged by what moved it. The page sums it
+# cash: every booking's effect on its depot's cash, tagged by what moved it. The page sums it
 # into a balance on any date; only "deposit"/"withdrawal"/"interest" are listed as transactions of
 # their own — the rest already are, as the trade, dividend or tax row they came with.
 CASH_KIND = {"CUSTOMER_INBOUND": "deposit", "TRANSFER_INBOUND": "deposit",
@@ -63,9 +63,9 @@ CASH_KIND = {"CUSTOMER_INBOUND": "deposit", "TRANSFER_INBOUND": "deposit",
 
 
 def cash_rows(ledger):
-    """What each booking did to its account's cash: amount + fee + tax, signed as TR signs them
+    """What each booking did to its depot's cash: amount + fee + tax, signed as TR signs them
     (a buy's amount and fee are negative, a refund's tax positive). Checked against Parqet's own
-    record of the same account's balance: equal to the cent, but for the TAX_OPTIMIZATION
+    record of the same depot's balance: equal to the cent, but for the TAX_OPTIMIZATION
     refunds Parqet leaves out."""
     out = []
     for t in ledger:
@@ -265,16 +265,17 @@ def convert(ledger):
     return activities, positions, notes
 
 
-def require_manual(portfolio):
-    """The portfolio's name, or exit: it must exist and be a manual one.
+def require_manual(portfolio, types=("manual",)):
+    """The portfolio's name, or exit: it must exist and be a manual one (or of `types`).
 
-    A Parqet one has its positions and activities written by the refresh, and rebuilding them from
-    these ledgers would throw its other depots away — so only "manual" is let through."""
+    A parqet one has its positions and activities written by the refresh, and rebuilding them from
+    these ledgers would throw its other depots away; a game takes trades under trading-rules.md
+    alone (trade.py) — so only "manual" is let through."""
     p = db.portfolio(portfolio)
     if not p:
         sys.exit(f"no portfolio {portfolio!r} (create it on the page's Config tab)")
-    if p["source"] != "manual":
-        sys.exit(f"{portfolio} is controlled by Parqet, not manually — refusing to change it")
+    if p["type"] not in types:
+        sys.exit(f"{portfolio} is a {p['type']} portfolio, not a manual one — refusing to change it")
     return portfolio
 
 
@@ -312,7 +313,8 @@ def main():
         sys.exit(f"usage: {sys.argv[0]} <portfolio> [<transactions.csv> ...]")
     portfolio, files = sys.argv[1], sys.argv[2:]
     with db.tx():
-        require_manual(portfolio)
+        # a rebuild alone changes nothing a game's rules guard, so a game may have one
+        require_manual(portfolio, ("manual",) if files else ("manual", "game"))
         merge_into_ledger(portfolio, files)
         rebuild(portfolio)
 

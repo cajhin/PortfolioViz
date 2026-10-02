@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""Manage demo accounts from the command line — live only, JSON in every answer. Admin only: a
+"""Manage game portfolios, and purge any portfolio, from the command line — live only, JSON in every answer. Admin only: a
 trading agent is given trade.py and nothing else.
 
-    manage-accounts.py create        <account> --cash EUR [--label TEXT]
-    manage-accounts.py deposit       <account> --eur EUR [--reason TEXT] [--id ID]
-    manage-accounts.py withdraw      <account> --eur EUR [--reason TEXT] [--id ID]
-    manage-accounts.py list-accounts
-    manage-accounts.py purge         <portfolio> --yes (--backup-dir DIR | --no-backup)
+    manage-portfolios.py create      <portfolio> --cash EUR [--label TEXT]
+    manage-portfolios.py deposit     <portfolio> --eur EUR [--reason TEXT] [--id ID]
+    manage-portfolios.py withdraw    <portfolio> --eur EUR [--reason TEXT] [--id ID]
+    manage-portfolios.py list-games
+    manage-portfolios.py purge       <portfolio> --yes (--backup-dir DIR | --no-backup)
 
-Trading in an account is trade.py's; the rules both enforce are trading-rules.md. Every answer is one JSON object; on error
-{"ok": false, "error": ..., "hint": ...}, exit code 1.
+Trading in a game portfolio is trade.py's; the rules both enforce are trading-rules.md. Every
+answer is one JSON object; on error {"ok": false, "error": ..., "hint": ...}, exit code 1.
 
-`create` makes an account open to both scripts — its portfolio says allow-cli — and
+`create` makes a game portfolio — the only type these scripts touch, and trade.py trades — and
 books the opening cash today. deposit and withdraw move cash today as well; there is no date to
 give. --id makes a call safe to repeat: a second call with the same id answers with the first
 one's result instead of moving the money twice. Cash can never go below zero: a withdrawal larger
-than the account holds is refused.
+than the portfolio holds is refused.
 
-`list-accounts` shows every account open to these scripts as it stands — value at the latest close
+`list-games` shows every game portfolio as it stands — value at the latest close
 on file, cash, and the result against the money put in, cash included, the measure to compare
-accounts by.
+portfolios by.
 
-`purge` removes any obsolete portfolio, account or not, for good: every row it has in the database
+`purge` removes any obsolete portfolio, of any type, for good: every row it has in the database
 (ledgers, positions, activities, cash, settings). The registry and the prices stay — they are
 shared. Where the backup goes is not guessed: --backup-dir DIR backs the database up there first
 (scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The portfolio's
@@ -36,11 +36,11 @@ import db
 import import_tr
 import manual_tx
 import trade
-from trade import Refusal, account, locked, portfolio, quiet, require_cli, today
+from trade import Refusal, check_name, locked, portfolio, quiet, require_game, today
 
 
 def move_cash(name, kind, eur, reason="", oid=None):
-    require_cli(name)
+    require_game(name)
     if not (eur or 0) > 0:
         raise Refusal("give --eur as a positive number")
     with locked(name):
@@ -49,10 +49,10 @@ def move_cash(name, kind, eur, reason="", oid=None):
         if tid and any(r["transaction_id"] == tid for r in rows):
             return {"repeat": True, "id": oid}
         if kind == "withdrawal" and eur > trade.cash_of(name) + 0.005:
-            raise Refusal(f"the account holds €{trade.cash_of(name):.2f}, less than €{eur:g}",
+            raise Refusal(f"the portfolio holds €{trade.cash_of(name):.2f}, less than €{eur:g}",
                           "cash can never go below zero")
         row = quiet(manual_tx.make_cash_row, rows, today(), kind, eur, tid=tid)
-        row["description"] = reason or "manage-accounts.py"
+        row["description"] = reason or "manage-portfolios.py"
         rows.append(row)
         with db.tx():
             manual_tx.save(name, rows)
@@ -61,28 +61,28 @@ def move_cash(name, kind, eur, reason="", oid=None):
 
 
 def create(name, eur, label=""):
-    account(name, must_exist=False)
+    check_name(name, must_exist=False)
     if db.portfolio(name):
-        raise Refusal(f"account {name!r} exists", "pick another name, or use it as it is")
+        raise Refusal(f"portfolio {name!r} exists", "pick another name, or use it as it is")
     if not (eur or 0) >= 0:
         raise Refusal("give --cash as zero or more")
-    db.create_portfolio(name, label or name, "manual", allow_cli=True)
+    db.create_portfolio(name, label or name, "game")
     quiet(import_tr.rebuild, name)
     if eur:
         move_cash(name, "deposit", eur, "opening balance")
-    return {"account": name, "cash": eur or 0, "date": today()}
+    return {"portfolio": name, "cash": eur or 0, "date": today()}
 
 
-def list_accounts():
+def list_games():
     out = []
     for p in db.portfolios():
-        if p["source"] != "manual" or not p["allow_cli"]:
+        if p["type"] != "game":
             continue
         s = trade.summary(p["name"])
-        out.append({k: s[k] for k in ("account", "label", "cash", "value_positions", "value_total",
+        out.append({k: s[k] for k in ("portfolio", "label", "cash", "value_positions", "value_total",
                                       "net_deposits", "result", "result_pct")}
                    | {"positions": len(s["positions"])})
-    return {"date": today(), "accounts": out}
+    return {"date": today(), "portfolios": out}
 
 
 def purge(name, yes=False, backup_dir=None):
@@ -117,13 +117,13 @@ def purge(name, yes=False, backup_dir=None):
 
 
 def configure(sub):
-    c = sub.add_parser("create"); c.add_argument("account")
+    c = sub.add_parser("create"); c.add_argument("portfolio")
     c.add_argument("--cash", type=float, required=True); c.add_argument("--label", default="")
     for kind in ("deposit", "withdraw"):
-        m = sub.add_parser(kind); m.add_argument("account"); m.add_argument("--eur", type=float, required=True)
+        m = sub.add_parser(kind); m.add_argument("portfolio"); m.add_argument("--eur", type=float, required=True)
         m.add_argument("--reason", default=""); m.add_argument("--id")
-    sub.add_parser("list-accounts")
-    p = sub.add_parser("purge"); p.add_argument("account")
+    sub.add_parser("list-games")
+    p = sub.add_parser("purge"); p.add_argument("portfolio")
     p.add_argument("--yes", action="store_true")
     where = p.add_mutually_exclusive_group(required=True)
     where.add_argument("--backup-dir"); where.add_argument("--no-backup", action="store_true")
@@ -131,13 +131,13 @@ def configure(sub):
 
 def dispatch(a):
     if a.cmd == "create":
-        return create(a.account, a.cash, a.label)
+        return create(a.portfolio, a.cash, a.label)
     if a.cmd in ("deposit", "withdraw"):
-        return move_cash(a.account, "deposit" if a.cmd == "deposit" else "withdrawal", a.eur, a.reason, a.id)
+        return move_cash(a.portfolio, "deposit" if a.cmd == "deposit" else "withdrawal", a.eur, a.reason, a.id)
     if a.cmd == "purge":
-        return purge(a.account, a.yes, a.backup_dir)
-    return list_accounts()
+        return purge(a.portfolio, a.yes, a.backup_dir)
+    return list_games()
 
 
 if __name__ == "__main__":
-    trade.run(__doc__, "manage-accounts.py", configure, dispatch)
+    trade.run(__doc__, "manage-portfolios.py", configure, dispatch)
