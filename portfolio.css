@@ -153,9 +153,10 @@
   .liveindex-chart .line { fill: none; stroke-width: 1.4; }
   .liveindex-chart .line.pos { stroke: var(--series-2); }
   .liveindex-chart .line.neg { stroke: var(--loss); }
-  /* the name only, not the gain badge below it — stale means "this market's own last tick is 5+
-     minutes old," not "no gain to show" */
-  .liveindex.stale .liveindex-symbol { color: var(--text-muted); }
+  /* stale: the market is closed, or its last tick did not move in 5 minutes — the gain badge is
+     then the last session's, not today's, so it greys out with the name */
+  .liveindex.stale .liveindex-symbol,
+  .liveindex.stale .liveindex-gain { color: var(--text-muted); }
 
   /* the odd one out in .totals: a note about the data, not a figure, so it sits on the tiles'
      bottom line rather than aligning its own baseline with theirs, and never grows the row.

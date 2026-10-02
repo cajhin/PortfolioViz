@@ -60,7 +60,8 @@ import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.
 # Yahoo'"'"'s chart API directly (no CORS allowance there — the same reason update_prices.py runs
 # server-side rather than from portfolio.view.js), so this fetches it here and hands back just
 # the day'"'"'s 5-minute bars. Nothing is written to disk — the whole point of this route is that
-# it has no memory between requests, unlike every other price this page ever shows.
+# it has no memory between requests, unlike every other price this page ever shows. Pre- and
+# post-market bars are included where Yahoo has them (US stocks and ETFs; not indices).
 #
 # GET /profiles — the page'"'"'s profile picker: one {name, label, source} per private-profiles/<name>/
 # that has a positions.csv, label from its profile.json when it has one. A static server cannot
@@ -381,21 +382,31 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(400, "missing ?symbol=")
             return
         try:
-            url = ("https://query1.finance.yahoo.com/v8/finance/chart/"
-                   + urllib.parse.quote(symbol, safe="") + "?interval=5m&range=1d")
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                raw = json.load(r)
-            result = raw["chart"]["result"][0]
+            # with pre/post-market bars first; a symbol that has none (an index) gets no bars at all
+            # that way before its open, so it is asked again for its last regular session instead
+            for prepost in ("true", "false"):
+                url = ("https://query1.finance.yahoo.com/v8/finance/chart/" + urllib.parse.quote(symbol, safe="")
+                       + "?interval=5m&range=1d&includePrePost=" + prepost)
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    raw = json.load(r)
+                result = raw["chart"]["result"][0]
+                if result.get("timestamp"):
+                    break
             quote = result["indicators"]["quote"][0]
             meta = result.get("meta") or {}
+            # Yahoo pairs pre-market bars with the close from the session BEFORE the last one; when
+            # the last regular trade predates every bar here, that trade is the previous close
+            prev = meta.get("chartPreviousClose")
+            if result.get("timestamp") and (meta.get("regularMarketTime") or 0) < result["timestamp"][0]:
+                prev = meta.get("regularMarketPrice") or prev
             body = json.dumps({
                 "symbol": symbol,
                 "times": result["timestamp"],
                 "closes": quote["close"],
                 "highs": quote["high"],
                 "lows": quote["low"],
-                "previousClose": meta.get("chartPreviousClose"),
+                "previousClose": prev,
                 # "USD", "EUR", etc. An index (^NDX and friends) has no real currency to quote in,
                 # but Yahoo still fills this in with something regardless; the page decides for
                 # itself whether the symbol is an index at all (see renderLiveIndex, isIndex)

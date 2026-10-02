@@ -4063,8 +4063,9 @@ const TRADING_HOURS = [
   { test: s => /^\^(GDAXI|STOXX50E)$/.test(s), tz: 'Europe/Berlin', open: 9 * 60, close: 17 * 60 + 30 },
   { test: s => /^\^(IXIC|NDX|NDXT|SOX|GSPC|DJI|RUT)$/.test(s), tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 },
   // a bare symbol with no suffix and no ^ — every US stock/ETF ticker (GOOG, AAPL, ...) looks
-  // like this, and every non-US one carries an exchange suffix instead, so this is the US catch-all
-  { test: s => !s.includes('.') && !s.startsWith('^'), tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 },
+  // like this, and every non-US one carries an exchange suffix instead, so this is the US catch-all.
+  // Pre- to post-market: /live-index includes those bars for a US stock, and an index has none
+  { test: s => !s.includes('.') && !s.startsWith('^'), tz: 'America/New_York', open: 4 * 60, close: 20 * 60 },
 ];
 function isWithinTradingHours(symbol) {
   const spec = TRADING_HOURS.find(e => e.test(symbol));
@@ -4119,6 +4120,7 @@ function renderLiveIndex(elId, symbol, name) {
   let pcts = [], times = [], base = null, last = null; // stashed for draw(), below
   let tileDay = null;                     // this tile's own last-fetched session — see liveWindow.day
   let prevToTime = null;                  // the last refresh's own latest tick — see updateStaleness
+  let gainSign = '';                      // 'pos' / 'neg' for the badge while not stale
 
   async function refresh() {
     let data;
@@ -4159,7 +4161,7 @@ function renderLiveIndex(elId, symbol, name) {
     base = Number.isFinite(data.previousClose) ? data.previousClose : open;
     const gain = (last - base) / base * 100;
     gainEl.textContent = fmtPct(gain);
-    gainEl.className = 'liveindex-gain ' + posNeg(gain);
+    gainSign = posNeg(gain);              // its colour, unless stale — see updateStaleness
 
     times = data.times;
     pcts = data.closes.map(c => c == null ? null : (c / base - 1) * 100);
@@ -4218,9 +4220,14 @@ function renderLiveIndex(elId, symbol, name) {
   // constant lag; a closed one stops advancing at all — so it needs no threshold, no per-market
   // calibration, and no timer of its own beyond refresh()'s own 5-minute one: prevToTime (set at
   // the end of refresh(), below) is compared against next time, once, right here.
+  // Outside the market's regular hours the tile is stale outright, whatever the ticks say: before
+  // the open, the badge is still the last session's change, which reads as today's otherwise.
   function updateStaleness() {
     if (!latest) return;
-    el.classList.toggle('stale', prevToTime != null && latest.toTime === prevToTime);
+    const stale = !isWithinTradingHours(symbol) || (prevToTime != null && latest.toTime === prevToTime);
+    el.classList.toggle('stale', stale);
+    // stale, the badge loses its gain/loss colour along with the meaning of it
+    gainEl.className = 'liveindex-gain' + (stale ? '' : ' ' + gainSign);
   }
 
   // epoch seconds (Yahoo's own timestamp unit) to the viewer's own local HH:MM — deliberately not
@@ -4248,9 +4255,10 @@ function renderLiveIndex(elId, symbol, name) {
   el.addEventListener('pointerleave', () => tip.classList.remove('on'));
 
   refresh();   // always once on load, even outside trading hours — see isWithinTradingHours
-  // staleness now only ever changes inside refresh() itself (see updateStaleness above), so
-  // there's no separate fast timer to poll it with any more — one interval, not two
-  const iv1 = setInterval(() => { if (isWithinTradingHours(symbol)) refresh(); }, LIVE_INDEX_REFRESH_MS);
+  // one interval: a refresh while the market is open, and outside it just the staleness check,
+  // so a tile greys out at the close without another fetch (see updateStaleness above)
+  const iv1 = setInterval(() => { if (isWithinTradingHours(symbol)) refresh(); else updateStaleness(); },
+    LIVE_INDEX_REFRESH_MS);
   // handed back so rebuildLiveTickers() can tear a removed (or about-to-be-rebuilt) tile all the
   // way down — both its own timer and its slot in the shared liveRedraws array — rather than
   // leaving it fetching forever in the background for a tile no longer on the page
