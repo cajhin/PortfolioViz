@@ -3,46 +3,48 @@
 Task for an agent with the **Parqet MCP tools** and write access to `/Users/jjj/git/parqet`.
 
 Goal: pull fresh data from Parqet, write it as two CSVs with **exactly the schema below**, and
-import them into the profile with `scripts/import_parqet.py`. All data lives in the database
+import them into the portfolio with `scripts/import_parqet.py`. All data lives in the database
 (`data/portfolio.db`); the page reads it from there. The two CSVs are only the import's input —
 kept, timestamped, as the record of what was imported. Never write to the database any other way
 than through the scripts named here.
 
-**Which profile.** Refresh one profile at a time — the one the user names, else the
-`defaultProfile` setting (`python3 scripts/db.py config`). Only a Parqet profile is yours to
+**Which portfolio.** Refresh one portfolio at a time — the one the user names, else the
+`defaultPortfolio` setting (`python3 scripts/db.py config`). Only a Parqet portfolio is yours to
 refresh; a manual one is filled by Trade Republic imports and hand entries, and import_parqet.py
 refuses it — stop and say so instead. List them with
 
 ```bash
-python3 scripts/db.py query "SELECT name, label, source FROM profile"
-python3 scripts/db.py config --profile <profile>     # its own settings
+python3 scripts/db.py query "SELECT name, label, source FROM portfolio"
+python3 scripts/db.py config --portfolio <portfolio>     # its own settings
 ```
 
-Its settings may carry `"parqetPortfolios": [...]`, the Parqet portfolio names that belong to it;
-pull only those. Without that key, pull every portfolio the account has. Never change another
-profile. A new profile is made on the page's Config tab — create one only when the user asks.
+Its settings may carry `"parqetPortfolios": [...]`, the names of Parqet's own portfolios — its
+depots — that belong to it; pull only those. Without that key, pull every one the Parqet login has. Never change another
+portfolio. A new portfolio is made on the page's Config tab — create one only when the user asks.
 
 ---
 
 ## 1. Where the files go
 
-Both files go into the profile's exports folder, named by the time of the pull — so earlier
+Both files go into the portfolio's exports folder, named by the time of the pull — so earlier
 imports are never overwritten:
 
 ```bash
 cd /Users/jjj/git/portfolioviz
-P=<profile>; TS=$(date +%Y%m%d-%H%M)
-mkdir -p private-profiles/$P/exports
-# write private-profiles/$P/exports/positions_$TS.csv and .../activities_$TS.csv (sections 3, 4)
+P=<portfolio>; TS=$(date +%Y%m%d-%H%M)
+mkdir -p private-portfolios/$P/exports
+# write private-portfolios/$P/exports/positions_$TS.csv and .../activities_$TS.csv (sections 3, 4)
 ```
 
 If either name already exists, stop and report rather than clobbering it.
 
 ## 2. Pull fresh data
 
+In this section "portfolio" is Parqet's word, as its tools use it: one depot.
+
 Portfolio IDs are not hardcoded here — they are per-account and this file is committed. Call
 `parqet_list_portfolios` first to get the current IDs (for `main`: Trade Republic, Comdirect,
-Schwab), keep the ones this profile covers, and re-read them if any later call 404s.
+Schwab), keep the ones this portfolio covers, and re-read them if any later call 404s.
 
 Three calls give everything:
 
@@ -74,8 +76,8 @@ depot,name,identifier,assetType,isSold,shares,currency,currentValue,purchaseValu
 lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,activityCount
 ```
 
-- `depot` — the Parqet portfolio's display name (`Trade Republic`, `Comdirect`, `Schwab`), not the
-  ID. Parqet calls each depot a portfolio; here a portfolio is the whole (a profile).
+- `depot` — the display name of Parqet's portfolio (`Trade Republic`, `Comdirect`, `Schwab`), not
+  the ID. Parqet calls each depot a portfolio; here a portfolio is the whole the page draws.
 - `identifier` — ISIN; empty for cash rows.
 - `isSold` — `1` for a position closed out (`isSold: true`), else `0`. Closed rows carry
   `shares`, `currentValue`, `purchaseValue` = 0 and keep their `realizedGainNet`.
@@ -113,16 +115,16 @@ Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 ## 5. Import
 
 ```bash
-python3 scripts/import_parqet.py $P private-profiles/$P/exports/positions_$TS.csv private-profiles/$P/exports/activities_$TS.csv
+python3 scripts/import_parqet.py $P private-portfolios/$P/exports/positions_$TS.csv private-portfolios/$P/exports/activities_$TS.csv
 ```
 
 It checks before it writes anything — every activity named, every traded `(depot, ISIN)` also a
 position, every sale's net = gross − tax − fee — and refuses the import if one fails: fix the
-files and run it again. On success it replaces the profile's positions and activities in one go,
+files and run it again. On success it replaces the portfolio's positions and activities in one go,
 prints the counts and headline figures, and lists any held instrument the registry lacks or that
 has no price source (section 6).
 
-## 6. Update the registry and the profile's watchlist
+## 6. Update the registry and the portfolio's watchlist
 
 The registry (tables `instrument` and `price_source`) has one row per instrument, with an `id`
 (equal to its ISIN for a security). It carries `display` (the short label the page prints), `slug`
@@ -136,16 +138,16 @@ python3 scripts/add_instrument.py <ISIN> <symbol> "<name>" "<sector>"    # regis
 python3 scripts/db.py upsert instrument id=<ISIN> display="<short label>"   # amend one column
 ```
 
-The registry is shared by every profile, so it is the union of all their instruments — add rows,
-never remove one because *this* profile no longer holds it.
+The registry is shared by every portfolio, so it is the union of all their instruments — add rows,
+never remove one because *this* portfolio no longer holds it.
 
 An instrument needs no matching Parqet holding. That is how the benchmark is charted, and how a
-watchlist name gets charted. The `benchmarkIsin` setting names the benchmark by ISIN (a profile's
-own setting may override it). A watchlist name must also be in the profile's own `watchlist`
-setting — the registry alone would put it in every profile's watchlist:
+watchlist name gets charted. The `benchmarkIsin` setting names the benchmark by ISIN (a portfolio's
+own setting may override it). A watchlist name must also be in the portfolio's own `watchlist`
+setting — the registry alone would put it in every portfolio's watchlist:
 
 ```bash
-python3 scripts/db.py config --profile $P set watchlist '["US30303M1027", "NL0009805522"]'
+python3 scripts/db.py config --portfolio $P set watchlist '["US30303M1027", "NL0009805522"]'
 ```
 
 ## 7. Refresh the price series
@@ -155,8 +157,8 @@ by its `id` — and fetched by `update_prices.py`. Nothing about *how* to fetch 
 its series, and there is no hand-maintained price to update.
 
 ```bash
-python3 scripts/update_prices.py --profile <p>    # just what this profile holds, watches, benchmarks
-python3 scripts/update_prices.py                  # every instrument in the registry, all profiles
+python3 scripts/update_prices.py --portfolio <p>    # just what this portfolio holds, watches, benchmarks
+python3 scripts/update_prices.py                  # every instrument in the registry, all portfolios
 python3 scripts/update_prices.py roche            # just this one (slug or id)
 python3 scripts/update_prices.py roche --from 2019-01-01   # also backfill, from that date
 ```
@@ -206,13 +208,13 @@ The import (section 5) already checked the three things that make it refuse. Wha
 ```bash
 cd /Users/jjj/git/portfolioviz
 python3 scripts/db.py query "SELECT p.identifier FROM position p LEFT JOIN instrument i ON i.id = p.identifier
-  WHERE p.profile = '$P' AND p.identifier <> '' AND i.id IS NULL"         # missing from the registry
+  WHERE p.portfolio = '$P' AND p.identifier <> '' AND i.id IS NULL"         # missing from the registry
 python3 scripts/db.py query "SELECT DISTINCT p.identifier FROM position p JOIN instrument i ON i.id = p.identifier
-  LEFT JOIN price_source s ON s.id = i.id WHERE p.profile = '$P' AND s.id IS NULL"   # no price source
+  LEFT JOIN price_source s ON s.id = i.id WHERE p.portfolio = '$P' AND s.id IS NULL"   # no price source
 ```
 
 Both must come back empty (`[]`), and the totals import_parqet.py printed must be in the same
-ballpark as the previous import's. Then load `http://localhost:8765/portfolio.html?profile=<profile>` (serve the folder with
+ballpark as the previous import's. Then load `http://localhost:8765/portfolio.html?portfolio=<portfolio>` (serve the folder with
 `./start.sh 8765 -n`) and confirm the map renders and the realised bar under it shows both
 the open and closed groups — the page fetches with `cache: no-store`, so a plain reload is enough.
 

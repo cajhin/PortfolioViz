@@ -71,18 +71,18 @@ def quiet(fn, *args, **kw):
 # ---------- accounts ----------
 
 def account(name, must_exist=True):
-    """The account's name, checked — an account is a profile."""
+    """The account's name, checked — an account is a portfolio."""
     if not ACCOUNT.match(name or ""):
         raise Refusal(f"{name!r} is not an account name",
                       "lowercase letters, digits, - and _, starting with a letter or digit")
-    if must_exist and not db.profile(name):
+    if must_exist and not db.portfolio(name):
         raise Refusal(f"no account {name!r}", "check the name — accounts are set up by their owner")
     return name
 
 
-def profile(name):
+def portfolio(name):
     """The account's settings, as its profile.json used to hold them."""
-    return db.profile_config(name) or {}
+    return db.portfolio_config(name) or {}
 
 
 def require_cli(name):
@@ -92,7 +92,7 @@ def require_cli(name):
     bound = os.environ.get("TRADE_ACCOUNT")
     if bound and name != bound:
         raise Refusal(f"this session trades account {bound!r} only, not {name!r}")
-    cfg = profile(account(name))
+    cfg = portfolio(account(name))
     if cfg.get("source") != "manual" or cfg.get("allow-cli") is not True:
         raise Refusal(f"account {name!r} is not open to the command line",
                       "only accounts set up for command-line trading can be traded")
@@ -251,7 +251,7 @@ def sale_tax(rows, isin, shares, value, fee):
 
 def cash_of(name):
     """The account's cash now — every booking's effect, as the last rebuild wrote it."""
-    return round(sum(num(c["amount"]) for c in db.profile_rows(name, "cash")), 2)
+    return round(sum(num(c["amount"]) for c in db.portfolio_rows(name, "cash")), 2)
 
 
 def held(name, isin):
@@ -465,8 +465,8 @@ def summary(name):
     """The account as it stands: cash, positions at their current value (see live_mark), and the
     result against the money put in — cash included, the one fair way to set two accounts side by
     side."""
-    positions = [p for p in db.profile_rows(name, "position") if p["isSold"] == "0"]
-    cash_rows = db.profile_rows(name, "cash")
+    positions = [p for p in db.portfolio_rows(name, "position") if p["isSold"] == "0"]
+    cash_rows = db.portfolio_rows(name, "cash")
     cash = sum(num(c["amount"]) for c in cash_rows)
     net_in = sum(num(c["amount"]) for c in cash_rows if c["kind"] in ("deposit", "withdrawal"))
     latest = import_tr.latest_prices()
@@ -487,7 +487,7 @@ def summary(name):
                          "cost": round(num(p["purchaseValue"]), 2), "gain": round(value - num(p["purchaseValue"]), 2)})
     invested = sum(h["value"] for h in holdings)
     total = invested + cash
-    return {"account": name, "label": profile(name).get("label") or name, "date": today(),
+    return {"account": name, "label": portfolio(name).get("label") or name, "date": today(),
             "cash": round(cash, 2), "positions": holdings,
             "value_positions": round(invested, 2), "value_total": round(total, 2),
             "net_deposits": round(net_in, 2),

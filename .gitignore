@@ -6,19 +6,19 @@ data/
 # migrated. Only the registry and config.json were ever committed; the
 # rest — private-profiles/, gen_prices/, gen_fx/ — holds real values or is bulk, and stays ignored.
 # An import file (a Trade Republic export, a staged Parqet refresh) is a CSV under
-# private-profiles/<p>/exports/, and ignored the same way.
+# private-portfolios/<p>/exports/, and ignored the same way.
 *.csv
 gen_prices/
 gen_fx/
 !backup/registry/*.csv
 
-# Any directory named private* — private-profiles/ today, and a catch-all for anything else added
+# Any directory named private* — private-portfolios/ today, and a catch-all for anything else added
 # under that naming convention later, so a new folder is safe by default rather than needing its
 # own line here first.
 private*/
 
-# check_portfolio.js records real position values and tooltips here, one file per profile —
-# same rule as private-profiles/
+# check_portfolio.js records real position values and tooltips here, one file per portfolio —
+# same rule as private-portfolios/
 check_baseline*.json
 
 .DS_Store

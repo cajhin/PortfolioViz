@@ -121,9 +121,9 @@ INSERT INTO price_source (id, source, symbol, quote_currency, fx_symbol, note) V
 INSERT INTO price_source (id, source, symbol, quote_currency, fx_symbol, note) VALUES ('IE00B4L5YX21', 'yahoo', 'IJPA.L', 'USD', 'EURUSD=X', '');
 INSERT INTO price_source (id, source, symbol, quote_currency, fx_symbol, note) VALUES ('IE00B43HR379', 'yahoo', 'IUHC.L', 'USD', 'EURUSD=X', '');
 INSERT INTO price_source (id, source, symbol, quote_currency, fx_symbol, note) VALUES ('US69608A1088', 'yahoo', 'PLTR', 'USD', 'EURUSD=X', '');
-INSERT INTO setting (profile, key, value) VALUES ('', 'timelineStart', '"2019-01-01"');
-INSERT INTO setting (profile, key, value) VALUES ('', 'currency', '"EUR"');
-INSERT INTO setting (profile, key, value) VALUES ('', 'benchmarkIsin', '"IE00B4L5Y983"');
-INSERT INTO setting (profile, key, value) VALUES ('', 'benchmarkLabel', '"MSCI World"');
-INSERT INTO setting (profile, key, value) VALUES ('', 'defaultProfile', '"main"');
+INSERT INTO setting (portfolio, key, value) VALUES ('', 'timelineStart', '"2019-01-01"');
+INSERT INTO setting (portfolio, key, value) VALUES ('', 'currency', '"EUR"');
+INSERT INTO setting (portfolio, key, value) VALUES ('', 'benchmarkIsin', '"IE00B4L5Y983"');
+INSERT INTO setting (portfolio, key, value) VALUES ('', 'benchmarkLabel', '"MSCI World"');
+INSERT INTO setting (portfolio, key, value) VALUES ('', 'defaultPortfolio', '"main"');
 COMMIT;

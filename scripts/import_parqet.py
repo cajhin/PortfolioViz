@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Import a Parqet refresh — the positions and activities REFRESH_PARQET_DATA.md pulls — into a profile.
+"""Import a Parqet refresh — the positions and activities REFRESH_PARQET_DATA.md pulls — into a portfolio.
 
-    python3 scripts/import_parqet.py <profile> <positions.csv> <activities.csv>
+    python3 scripts/import_parqet.py <portfolio> <positions.csv> <activities.csv>
 
-Parqet profiles only: a manual one is rebuilt from its own ledger (import_tr.py), and this would
+Parqet portfolios only: a manual one is rebuilt from its own ledger (import_tr.py), and this would
 throw that away. The two files are what the refresh task writes, in Parqet's schema bar one name —
-a Parqet portfolio is a `depot` here (see REFRESH_PARQET_DATA.md, sections 3 and 4); they replace
-the profile's positions and activities wholesale, in one transaction — the page sees the old data or the new, never a mix. Kept where the
-task wrote them (private-profiles/<profile>/exports/), they are the record of what was imported.
+a portfolio in Parqet is a `depot` here (see REFRESH_PARQET_DATA.md, sections 3 and 4); they replace
+the portfolio's positions and activities wholesale, in one transaction — the page sees the old data or the new, never a mix. Kept where the
+task wrote them (private-portfolios/<portfolio>/exports/), they are the record of what was imported.
 
 Before it writes anything, checks what REFRESH_PARQET_DATA.md asks to hold: every activity named,
 every (depot, ISIN) traded also a position, every sale's net amount = gross − tax − fee. A
@@ -50,25 +50,25 @@ def check(positions, activities):
 def main():
     if len(sys.argv) != 4:
         sys.exit(__doc__.strip().split("\n\n")[1])
-    profile, pos_path, act_path = sys.argv[1:]
-    p = db.profile(profile)
+    portfolio, pos_path, act_path = sys.argv[1:]
+    p = db.portfolio(portfolio)
     if not p:
-        sys.exit(f"no profile {profile!r} (create it on the page's Config tab)")
+        sys.exit(f"no portfolio {portfolio!r} (create it on the page's Config tab)")
     if p["source"] != "parqet":
-        sys.exit(f"{profile} is a manual profile — its data comes from its own ledger, not Parqet")
+        sys.exit(f"{portfolio} is a manual portfolio — its data comes from its own ledger, not Parqet")
     positions, activities = load(pos_path, POSITION_FIELDS), load(act_path, ACTIVITY_FIELDS)
     problems = check(positions, activities)
     if problems:
         sys.exit("not imported:\n  " + "\n  ".join(problems))
     with db.tx():
-        db.replace_profile_rows(profile, "position", positions)
-        db.replace_profile_rows(profile, "activity", activities)
+        db.replace_portfolio_rows(portfolio, "position", positions)
+        db.replace_portfolio_rows(portfolio, "activity", activities)
 
     open_n = sum(1 for r in positions if r["isSold"] == "0" and r["assetType"] != "cash")
     kinds = {}
     for r in activities:
         kinds[r["type"]] = kinds.get(r["type"], 0) + 1
-    print(f"{profile}: {len(positions)} positions ({open_n} open), {len(activities)} activities "
+    print(f"{portfolio}: {len(positions)} positions ({open_n} open), {len(activities)} activities "
           + ", ".join(f"{n} {k}" for k, n in sorted(kinds.items())))
     print(f"  current value {sum(num(r['currentValue']) for r in positions):.2f}, "
           f"total tax {sum(num(r['tax']) for r in activities):.2f}")

@@ -4,7 +4,7 @@
  *
  *   node check_portfolio.js --save     record the current output as the baseline
  *   node check_portfolio.js            re-run and diff against that baseline
- *   node check_portfolio.js --profile test [--save]   the same, for another profile
+ *   node check_portfolio.js --portfolio test [--save]   the same, for another portfolio
  *
  * How it works: the scripts portfolio.html loads are concatenated in page order and run in a vm
  * context against a mini DOM defined below and the real data: data/portfolio.db, read through the same
@@ -35,10 +35,10 @@ const ROOT = __dirname;
 const WEB = path.join(ROOT, 'web');                         // the page and its scripts
 const PAGE = path.join(WEB, 'portfolio.html');
 const SAVE = process.argv.includes('--save');
-// no --profile means the page's own default (config.json's defaultProfile), against the plain
-// baseline; a named one gets a baseline of its own, since each profile's figures differ
-const PROFILE_ARG = process.argv.includes('--profile') ? process.argv[process.argv.indexOf('--profile') + 1] : '';
-const BASELINE = path.join(ROOT, PROFILE_ARG ? `check_baseline.${PROFILE_ARG}.json` : 'check_baseline.json');
+// no --portfolio means the page's own default (config.json's defaultPortfolio), against the plain
+// baseline; a named one gets a baseline of its own, since each portfolio's figures differ
+const PORTFOLIO_ARG = process.argv.includes('--portfolio') ? process.argv[process.argv.indexOf('--portfolio') + 1] : '';
+const BASELINE = path.join(ROOT, PORTFOLIO_ARG ? `check_baseline.${PORTFOLIO_ARG}.json` : 'check_baseline.json');
 
 /* ---------- the page's scripts, plus a few hooks into their scope ----------
    Concatenated in the order portfolio.html loads them, which is also the order they depend on.
@@ -119,7 +119,7 @@ const sandbox = {
   innerWidth: 1400, innerHeight: 900,
   // window-level, for the page's uncaught-error reporter
   addEventListener() {}, removeEventListener() {},
-  location: { search: PROFILE_ARG ? `?profile=${encodeURIComponent(PROFILE_ARG)}` : '' },
+  location: { search: PORTFOLIO_ARG ? `?portfolio=${encodeURIComponent(PORTFOLIO_ARG)}` : '' },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   document: {
     getElementById: byId,
@@ -181,7 +181,7 @@ function hoverAll(nodes, rows, tag, out) {
 (async () => {
   await new Promise(res => setTimeout(res, 600));            // let the fetch chain settle
   const h = sandbox.__hooks;
-  if (!h.items().length && !h.closed().length && !h.cash().length) { console.error(`no positions loaded — is profile ${PROFILE_ARG || '<default>'} in data/portfolio.db?`); process.exit(2); }
+  if (!h.items().length && !h.closed().length && !h.cash().length) { console.error(`no positions loaded — is portfolio ${PORTFOLIO_ARG || '<default>'} in data/portfolio.db?`); process.exit(2); }
   const out = {};
 
   for (const mode of ['abs', 'rel']) {

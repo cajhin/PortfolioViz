@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Import a Trade Republic transaction export into a profile, in place of a Parqet refresh.
+"""Import a Trade Republic transaction export into a portfolio, in place of a Parqet refresh.
 
-    python3 scripts/import_tr.py <profile> <transactions*.csv> [...]
-    python3 scripts/import_tr.py <profile>                  # just rebuild from what is already in
+    python3 scripts/import_tr.py <portfolio> <transactions*.csv> [...]
+    python3 scripts/import_tr.py <portfolio>                  # just rebuild from what is already in
 
-Manual profiles only — the profile's source is "manual". A Parqet profile is refused, since its
+Manual portfolios only — the portfolio's source is "manual". A Parqet portfolio is refused, since its
 positions and activities belong to the Parqet refresh (import_parqet.py).
 
-Trade Republic's export (app → Profile → Transaction export) is one CSV of every booking, each
+Trade Republic's export (app → Portfolio → Transaction export) is one CSV of every booking, each
 with a `transaction_id`. Every row ever imported is kept, untouched, in the database's ledger
 (origin 'tr'), keyed by that id — so importing the same file twice, or two exports whose date
-ranges overlap, adds only the rows not seen before. What the page reads — the profile's
+ranges overlap, adds only the rows not seen before. What the page reads — the portfolio's
 positions, activities and cash — is then rebuilt from the whole ledger on every run, in exactly
 the schema REFRESH_PARQET_DATA.md imports from Parqet. Rows entered by hand (manual_tx.py — a
 virtual demo portfolio, say) are in the same ledger (origin 'manual'), in the same TR row format,
@@ -29,7 +29,7 @@ Two things Parqet does not have, done here the closest equivalent way:
   TAX_OPTIMIZATION   TR's tax refund (loss offsetting), booked as an account-level `fees_taxes`
                      row with a negative tax — it belongs to no position
   cash               deposits, transfers, interest: no activity, as for Parqet (see build()) —
-                     but every booking's cash effect goes to the profile's cash (see cash_rows)
+                     but every booking's cash effect goes to the portfolio's cash (see cash_rows)
 
 Realised gains are FIFO, gross and net. Net subtracts the sale's own tax and fee *and* the buy
 fees of the lots it retires — that is how Parqet's realizedGainsNet comes out. Checked against
@@ -49,7 +49,7 @@ REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_cla
 
 # Positions and activities are in Parqet's schema (db.POSITION_FIELDS, db.ACTIVITY_FIELDS), each
 # activity with the ledger row it came from as its transactionId — what the Transactions tab's
-# delete names. A Parqet profile's activities have none, and nothing there is deletable.
+# delete names. A Parqet portfolio's activities have none, and nothing there is deletable.
 DIVIDEND_TYPES = {"DIVIDEND", "DISTRIBUTION", "EARNINGS"}
 
 # cash: every booking's effect on its account's cash, tagged by what moved it. The page sums it
@@ -101,9 +101,9 @@ def read_csv(path):
 
 # ---------- the ledger: every TR row ever imported, deduplicated by transaction_id ----------
 
-def merge_into_ledger(profile, files):
-    """Each export's rows not imported before, into the profile's ledger (origin 'tr')."""
-    seen = {r["transaction_id"] for r in db.rows("SELECT transaction_id FROM ledger WHERE profile = ?", (profile,))}
+def merge_into_ledger(portfolio, files):
+    """Each export's rows not imported before, into the portfolio's ledger (origin 'tr')."""
+    seen = {r["transaction_id"] for r in db.rows("SELECT transaction_id FROM ledger WHERE portfolio = ?", (portfolio,))}
     rows = []
     for f in files:
         new = read_csv(f)
@@ -120,7 +120,7 @@ def merge_into_ledger(profile, files):
             added += 1
         print(f"{os.path.basename(f)}: {len(new)} rows — {added} new, {len(new) - added} already imported")
     rows.sort(key=lambda r: (r["datetime"], r["transaction_id"]))
-    db.add_ledger_rows(profile, "tr", rows)
+    db.add_ledger_rows(portfolio, "tr", rows)
 
 
 # ---------- conversion ----------
@@ -265,35 +265,35 @@ def convert(ledger):
     return activities, positions, notes
 
 
-def require_manual(profile):
-    """The profile's name, or exit: it must exist and be a manual one.
+def require_manual(portfolio):
+    """The portfolio's name, or exit: it must exist and be a manual one.
 
     A Parqet one has its positions and activities written by the refresh, and rebuilding them from
     these ledgers would throw its other depots away — so only "manual" is let through."""
-    p = db.profile(profile)
+    p = db.portfolio(portfolio)
     if not p:
-        sys.exit(f"no profile {profile!r} (create it on the page's Config tab)")
+        sys.exit(f"no portfolio {portfolio!r} (create it on the page's Config tab)")
     if p["source"] != "manual":
-        sys.exit(f"{profile} is controlled by Parqet, not manually — refusing to change it")
-    return profile
+        sys.exit(f"{portfolio} is controlled by Parqet, not manually — refusing to change it")
+    return portfolio
 
 
-def rebuild(profile):
+def rebuild(portfolio):
     """Positions, activities and cash from both ledgers — the TR imports (less the rows deleted on
     the page) and the hand-entered rows (manual_tx.py), which share one row format and so one
     conversion. One transaction: the page never sees half of a rebuild."""
-    tr_rows = db.ledger(profile, "tr", deleted=False)
-    manual = db.ledger(profile, "manual")
+    tr_rows = db.ledger(portfolio, "tr", deleted=False)
+    manual = db.ledger(portfolio, "manual")
     ledger = sorted(tr_rows + manual, key=lambda r: (r["datetime"], r["transaction_id"]))
     activities, positions, notes = convert(ledger)
     cash = cash_rows(ledger)
     with db.tx():
-        db.replace_profile_rows(profile, "activity", activities)
-        db.replace_profile_rows(profile, "position", positions)
-        db.replace_profile_rows(profile, "cash", cash)
+        db.replace_portfolio_rows(portfolio, "activity", activities)
+        db.replace_portfolio_rows(portfolio, "position", positions)
+        db.replace_portfolio_rows(portfolio, "cash", cash)
 
     open_n = sum(1 for p in positions if p["isSold"] == "0")
-    print(f"{profile}: {len(tr_rows)} imported + {len(manual)} hand-entered rows → "
+    print(f"{portfolio}: {len(tr_rows)} imported + {len(manual)} hand-entered rows → "
           f"{len(activities)} activities, {open_n} open and {len(positions) - open_n} closed positions")
     for note, n in sorted(notes.items()):
         print(f"  {note}" + (f" (×{n})" if n > 1 else ""))
@@ -309,12 +309,12 @@ def rebuild(profile):
 
 def main():
     if len(sys.argv) < 2:
-        sys.exit(f"usage: {sys.argv[0]} <profile> [<transactions.csv> ...]")
-    profile, files = sys.argv[1], sys.argv[2:]
+        sys.exit(f"usage: {sys.argv[0]} <portfolio> [<transactions.csv> ...]")
+    portfolio, files = sys.argv[1], sys.argv[2:]
     with db.tx():
-        require_manual(profile)
-        merge_into_ledger(profile, files)
-        rebuild(profile)
+        require_manual(portfolio)
+        merge_into_ledger(portfolio, files)
+        rebuild(portfolio)
 
 
 if __name__ == "__main__":

@@ -6,12 +6,12 @@ trading agent is given trade.py and nothing else.
     manage-accounts.py deposit       <account> --eur EUR [--reason TEXT] [--id ID]
     manage-accounts.py withdraw      <account> --eur EUR [--reason TEXT] [--id ID]
     manage-accounts.py list-accounts
-    manage-accounts.py purge         <profile> --yes (--backup-dir DIR | --no-backup)
+    manage-accounts.py purge         <portfolio> --yes (--backup-dir DIR | --no-backup)
 
 Trading in an account is trade.py's; the rules both enforce are trading-rules.md. Every answer is one JSON object; on error
 {"ok": false, "error": ..., "hint": ...}, exit code 1.
 
-`create` makes an account open to both scripts — its profile says allow-cli — and
+`create` makes an account open to both scripts — its portfolio says allow-cli — and
 books the opening cash today. deposit and withdraw move cash today as well; there is no date to
 give. --id makes a call safe to repeat: a second call with the same id answers with the first
 one's result instead of moving the money twice. Cash can never go below zero: a withdrawal larger
@@ -21,12 +21,12 @@ than the account holds is refused.
 on file, cash, and the result against the money put in, cash included, the measure to compare
 accounts by.
 
-`purge` removes any obsolete profile, account or not, for good: every row it has in the database
+`purge` removes any obsolete portfolio, account or not, for good: every row it has in the database
 (ledgers, positions, activities, cash, settings). The registry and the prices stay — they are
 shared. Where the backup goes is not guessed: --backup-dir DIR backs the database up there first
-(scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The profile's
-leftover folder, if any (private-profiles/<profile>/, its imported export files), is moved
-to backup/purged/. The default profile cannot be purged; an agent's own folder under agents/ is
+(scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The portfolio's
+leftover folder, if any (private-portfolios/<portfolio>/, its imported export files), is moved
+to backup/purged/. The default portfolio cannot be purged; an agent's own folder under agents/ is
 not touched.
 """
 import contextlib, os, shutil, sqlite3
@@ -36,7 +36,7 @@ import db
 import import_tr
 import manual_tx
 import trade
-from trade import Refusal, account, locked, profile, quiet, require_cli, today
+from trade import Refusal, account, locked, portfolio, quiet, require_cli, today
 
 
 def move_cash(name, kind, eur, reason="", oid=None):
@@ -62,11 +62,11 @@ def move_cash(name, kind, eur, reason="", oid=None):
 
 def create(name, eur, label=""):
     account(name, must_exist=False)
-    if db.profile(name):
+    if db.portfolio(name):
         raise Refusal(f"account {name!r} exists", "pick another name, or use it as it is")
     if not (eur or 0) >= 0:
         raise Refusal("give --cash as zero or more")
-    db.create_profile(name, label or name, "manual", allow_cli=True)
+    db.create_portfolio(name, label or name, "manual", allow_cli=True)
     quiet(import_tr.rebuild, name)
     if eur:
         move_cash(name, "deposit", eur, "opening balance")
@@ -75,7 +75,7 @@ def create(name, eur, label=""):
 
 def list_accounts():
     out = []
-    for p in db.profiles():
+    for p in db.portfolios():
         if p["source"] != "manual" or not p["allow_cli"]:
             continue
         s = trade.summary(p["name"])
@@ -87,11 +87,11 @@ def list_accounts():
 
 def purge(name, yes=False, backup_dir=None):
     """backup_dir None means no backup — the command line insists on one or the other."""
-    if not db.profile(name):
-        raise Refusal(f"no profile {name!r}")
-    if name == db.config().get("defaultProfile"):
-        raise Refusal(f"{name!r} is the default profile", "make another one the default first: "
-                      "scripts/db.py config set defaultProfile '\"<name>\"'")
+    if not db.portfolio(name):
+        raise Refusal(f"no portfolio {name!r}")
+    if name == db.config().get("defaultPortfolio"):
+        raise Refusal(f"{name!r} is the default portfolio", "make another one the default first: "
+                      "scripts/db.py config set defaultPortfolio '\"<name>\"'")
     if not yes:
         raise Refusal(f"purging {name!r} deletes all its data for good", "add --yes to go ahead")
     saved = None
@@ -102,11 +102,11 @@ def purge(name, yes=False, backup_dir=None):
             raise Refusal(f"no backup could be made, so nothing was purged: {getattr(err, 'error', err)}",
                           "give another --backup-dir, or --no-backup")
     with locked(name):
-        label = profile(name).get("label") or name
-        db.purge_profile(name)
+        label = portfolio(name).get("label") or name
+        db.purge_portfolio(name)
     with contextlib.suppress(OSError):
         os.remove(os.path.join(os.path.dirname(db.DB_PATH), "locks", f"{name}.lock"))
-    folder = os.path.join(db.ROOT, "private-profiles", name)
+    folder = os.path.join(db.ROOT, "private-portfolios", name)
     moved = None
     if os.path.isdir(folder):
         moved = os.path.join(db.ROOT, "backup", "purged", f"{name}-{datetime.now():%Y%m%d-%H%M%S}")

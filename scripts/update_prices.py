@@ -6,12 +6,12 @@ price_source) is the single place that maps an instrument to a source, a symbol 
 currency, so "what am I tracking, and from where?" is one table, not every series.
 
     python3 scripts/update_prices.py                       # update every instrument in the registry
-    python3 scripts/update_prices.py --profile main        # just what that profile holds/watches/benchmarks
+    python3 scripts/update_prices.py --portfolio main        # just what that portfolio holds/watches/benchmarks
     python3 scripts/update_prices.py roche                 # just this one (slug or id)
     python3 scripts/update_prices.py roche --from 2019-01-01   # also backfill, from that date
 
-The registry and the prices are shared by every profile, so --profile narrows the run rather
-than redirecting it: the instruments in that profile's positions and activities (open and closed
+The registry and the prices are shared by every portfolio, so --portfolio narrows the run rather
+than redirecting it: the instruments in that portfolio's positions and activities (open and closed
 alike — a closed position's series keeps extending), its watchlist, and its benchmark.
 
 One row per instrument, keyed by its registry `id` — not by ISIN, since a synthetic instrument
@@ -47,12 +47,12 @@ PLACEHOLDER_RUN = 5   # a shorter identical run is coincidence, not a dormant li
 MAX_WORKERS = 4
 
 
-def profile_instruments(name):
-    """Every id a profile has any use for a series of: held ever, watched, or benchmarked."""
-    if not db.profile(name):
-        sys.exit(f"no profile {name!r}")
+def portfolio_instruments(name):
+    """Every id a portfolio has any use for a series of: held ever, watched, or benchmarked."""
+    if not db.portfolio(name):
+        sys.exit(f"no portfolio {name!r}")
     ids = {r["identifier"] for r in db.rows(
-        "SELECT identifier FROM position WHERE profile = ? UNION SELECT identifier FROM activity WHERE profile = ?",
+        "SELECT identifier FROM position WHERE portfolio = ? UNION SELECT identifier FROM activity WHERE portfolio = ?",
         (name, name)) if r["identifier"]}
     own = db.settings(name)
     ids |= set(own.get("watchlist") or [])
@@ -278,13 +278,13 @@ def main():
         i = args.index("--from")
         backfill = args[i + 1]
         del args[i:i + 2]
-    profile = None
-    if "--profile" in args:
-        i = args.index("--profile")
-        profile = args[i + 1]
+    portfolio = None
+    if "--portfolio" in args:
+        i = args.index("--portfolio")
+        portfolio = args[i + 1]
         del args[i:i + 2]
-    if len(args) > 1 or (args and profile):
-        sys.exit(f"usage: {sys.argv[0]} [<slug|id> | --profile NAME] [--from YYYY-MM-DD]")
+    if len(args) > 1 or (args and portfolio):
+        sys.exit(f"usage: {sys.argv[0]} [<slug|id> | --portfolio NAME] [--from YYYY-MM-DD]")
 
     # one price_source row per instrument is the table's own key — no duplicate to refuse here
     instruments = {r["id"]: r for r in db.instruments()}
@@ -296,10 +296,10 @@ def main():
         wanted = [i for i in instruments.values() if key in (i["id"], i["slug"])]
         if not wanted:
             sys.exit(f"no instrument matching {key!r} in the registry")
-    if profile:
-        relevant = profile_instruments(profile)
+    if portfolio:
+        relevant = portfolio_instruments(portfolio)
         wanted = [i for i in instruments.values() if i["id"] in relevant or i["isin"] in relevant]
-        print(f"profile {profile}: {len(wanted)} of {len(instruments)} instruments")
+        print(f"portfolio {portfolio}: {len(wanted)} of {len(instruments)} instruments")
 
     # "manual" with no symbol is the registry's way of marking an instrument dead — an expired
     # warrant, mainly — nothing to fetch, so it never earns a place in the pool or the log

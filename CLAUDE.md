@@ -23,20 +23,20 @@ scripts/                every Python script; each finds the repo as its own fold
   server.py               the page's server: web/ on localhost, the api/ routes, plus
                             every route the page writes through — most just run a script below
   update_prices.py        fetches price history per the registry's price sources
-  import_tr.py            imports a Trade Republic transaction export into a manual profile, and
-                            rebuilds a manual profile's positions/activities/cash from its ledger
-  import_parqet.py        imports a Parqet refresh (two CSVs) into a Parqet profile
-  manual_tx.py            adds/edits/deletes a transaction in a manual profile (the page's backend)
+  import_tr.py            imports a Trade Republic transaction export into a manual portfolio, and
+                            rebuilds a manual portfolio's positions/activities/cash from its ledger
+  import_parqet.py        imports a Parqet refresh (two CSVs) into a Parqet portfolio
+  manual_tx.py            adds/edits/deletes a transaction in a manual portfolio (the page's backend)
   trade.py                trades a demo account from the command line — live only, JSON out
   manage-accounts.py      creates demo accounts, moves their cash, lists them, purges an obsolete
-                            profile — same style; admin only, never given to an agent
-  manage-users.py         the page's users: add, passwd, grant/revoke profiles, delete, list-users,
-                            list-profiles — same style, admin only
+                            portfolio — same style; admin only, never given to an agent
+  manage-users.py         the page's users: add, passwd, grant/revoke portfolios, delete, list-users,
+                            list-portfolios — same style, admin only
   add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
                             "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 REFRESH_PARQET_DATA.md  how to pull fresh data from Parqet — a task for an agent with the MCP tools
 data/portfolio.db       ALL the data — gitignored; backed up by hand (`scripts/db.py backup`)
-private-profiles/<p>/exports/   import files only: the Trade Republic exports and staged Parqet
+private-portfolios/<p>/exports/ import files only: the Trade Republic exports and staged Parqet
                           refreshes that were imported, kept as the record; gitignored
 backup/                 the files the data came from before the database (config.json, registry/,
                           gen_prices/, gen_fx/, private-profiles/) — read by nothing; only
@@ -46,9 +46,9 @@ backup/                 the files the data came from before the database (config
 The database's tables (`scripts/schema.sql`) fall into three groups that differ by
 **lifecycle**, and that is the distinction to preserve:
 
-- **a profile's own** (IMPORTED) — `profile` (label, source, allow_cli), its keys in `setting`,
-  `ledger`, and `position`/`activity`/`cash`. A Parqet profile's positions and activities are
-  replaced wholesale by each refresh; a manual profile's `ledger` is its real source — every TR
+- **a portfolio's own** (IMPORTED) — `portfolio` (label, source, allow_cli), its keys in `setting`,
+  `ledger`, and `position`/`activity`/`cash`. A Parqet portfolio's positions and activities are
+  replaced wholesale by each refresh; a manual portfolio's `ledger` is its real source — every TR
   row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
   hand-entered or traded row (origin `manual`) — and `position`/`activity`/`cash` are rebuilt from
   it on every change.
@@ -71,9 +71,9 @@ schema change bumps both and adds its step.
 
 Changes go through the scripts, never raw SQL: `db.py`'s own CLI for settings and registry rows
 (`config`, `upsert`, `delete`), `add_instrument.py` to register an instrument, `import_tr.py` /
-`import_parqet.py` / `manual_tx.py` for profiles. `db.py query` is read-only. The page reads only
+`import_parqet.py` / `manual_tx.py` for portfolios. `db.py query` is read-only. The page reads only
 through the `api/` routes, which answer in the old files' shapes (same CSV header, same JSON), so
-its parsing never changed. Profile tables keep numbers as the text that was written; prices are
+its parsing never changed. Portfolio tables keep numbers as the text that was written; prices are
 real numbers.
 
 `instrument` gives every instrument an `id`, equal to its ISIN, and is the single answer to "what
@@ -86,7 +86,7 @@ portfolio currency **on write**, with the original kept in `close_raw`; nothing 
 FX. An instrument may be listed with no matching Parqet holding — that is how a benchmark or a
 watchlist name gets charted. Parqet's cash accounts are not tracked: `build()` drops the export's
 cash rows, since they carry no dated balance history and no past date could be reconstructed for
-them. A TR-imported or manual profile *does* have that history — every booking — so its rebuild
+them. A TR-imported or manual portfolio *does* have that history — every booking — so its rebuild
 writes `cash` (each booking's cash effect, by depot), and the page shows the balance on a
 date in a Cash tile of its own and counts it into **nothing else**: not the Current value /
 "Value on" tile, not Invested, no gain, return or IRR, no benchmark, no map area. Moving
@@ -94,19 +94,20 @@ money to the broker is not an investment. Cash may go negative (a demo buy is ne
 want of a deposit). Reconstructed TR cash matches Parqet's balance for the same account to the
 cent, apart from TR's tax refunds, which Parqet leaves out.
 
-**Profiles.** The page can show several portfolios (profiles of the same person — no access
-control). Only a profile's own tables are per profile; the registry, the prices and the browser's
-localStorage are shared, since an instrument is the same thing whoever holds it. So the registry
-is the union of every profile's instruments, and a profile sees only its slice: what its
-positions and activities hold (open or closed), its `watchlist` setting, and its benchmark. Being in the
-registry without being held is **not** enough to show up in a profile's watchlist — that would leak
-every other profile's holdings into it. The page picks the profile from `?profile=`, else the
-global `defaultProfile` setting; a profile's own settings override the global ones (flat, shallow —
+**Portfolios.** The page can show several portfolios — each a whole the page draws, made of one or
+more depots, and seen only by the users it is granted to (**Users** below). Only a portfolio's own
+tables are per portfolio; the registry, the prices and the browser's localStorage are shared, since
+an instrument is the same thing whoever holds it. So the registry is the union of every portfolio's
+instruments, and a portfolio sees only its slice: what its positions and activities hold (open or
+closed), its `watchlist` setting, and its benchmark. Being in the registry without being held is
+**not** enough to show up in a portfolio's watchlist — that would leak every other portfolio's
+holdings into it. The page picks the portfolio from `?portfolio=`, else the global
+`defaultPortfolio` setting; a portfolio's own settings override the global ones (flat, shallow —
 `label`, `watchlist`, `benchmarkIsin`, `benchmarkLabel`, `timelineStart`), except `currency`, which
 stays shared because the price series are converted into it on write. The Update button runs
-`scripts/update_prices.py --profile <p>`, fetching only that profile's instruments.
+`scripts/update_prices.py --portfolio <p>`, fetching only that portfolio's instruments.
 
-A profile is controlled **either** by Parqet **or** manually, and its `source` says
+A portfolio is controlled **either** by Parqet **or** manually, and its `source` says
 which: `parqet` — refreshed by REFRESH_PARQET_DATA.md (`import_parqet.py`), never imported into
 otherwise — or `manual` — fed
 by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand (`manual_tx.py`,
@@ -117,27 +118,27 @@ instrument…" writes to the registry (via `add_instrument.py`), the shared cata
 cannot be overwritten by a stray import. The TR conversion follows Parqet's conventions and was
 checked against Parqet's own import of the same account; its docstring lists them.
 
-**Users.** server.py wants a login for every route but the page's own files (no data in them)
-and login.html's: an HttpOnly session cookie, its token's hash in the `session` table. A user
-sees and changes only the profiles granted to them (`user_profile`, `can_write`); any other is a
-404 on every route, the same as one that does not exist, and api/config's `defaultProfile` is
-rewritten to one they have. Anyone who reaches the page can create an account; it sees nothing
-until it creates a profile (granted to its creator) or is granted one —
-`scripts/manage-users.py grant`, which is also how every profile made by a script gets an
-owner. Update fetches one granted profile's instruments, never the whole registry; registering an
-instrument takes write access to some profile. The Config tab lists the user's other profiles and deletes one
-they may change — `manage-accounts.py purge`, with no backup. These tables (`user`, `user_profile`,
-`session`) are a fourth lifecycle — people, neither a profile's own nor the registry — and
-an older database gets them like any other schema change (below). It is for
-convenience and keeping people apart, not hardened: the registry, prices and every script stay
-shared and unchecked, and an agent's boundary is still `allow_cli`/`TRADE_ACCOUNT` below.
+**Users.** server.py wants a login for every route but the page's own files (no data in them) and
+login.html's: an HttpOnly session cookie, its token's hash in the `session` table. A user sees and
+changes only the portfolios granted to them (`user_portfolio`, `can_write`); any other is a 404 on
+every route, the same as one that does not exist, and api/config's `defaultPortfolio` is rewritten
+to one they have. Anyone who reaches the page can create an account; it sees nothing until it
+creates a portfolio (granted to its creator) or is granted one — `scripts/manage-users.py grant`,
+which is also how every portfolio made by a script gets an owner. Update fetches one granted
+portfolio's instruments, never the whole registry; registering an instrument takes write access to
+some portfolio. The Config tab lists the user's other portfolios and deletes one they may change —
+`manage-accounts.py purge`, with no backup. These tables (`user`, `user_portfolio`, `session`) are a
+fourth lifecycle — people, neither a portfolio's own nor the registry — and an older database gets
+them like any other schema change (below). It is for convenience and keeping people apart, not
+hardened: the registry, prices and every script stay shared and unchecked, and an agent's boundary
+is still `allow_cli`/`TRADE_ACCOUNT` below.
 
 **Agent accounts.** `scripts/manage-accounts.py` creates demo accounts, moves their cash and lists
 them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every answer
-is one JSON object. Both touch only profiles with `allow_cli` set (which `manage-accounts.py
+is one JSON object. Both touch only portfolios with `allow_cli` set (which `manage-accounts.py
 create` sets); the scripts cannot tell an agent from a human, so that flag is the boundary — and
 splitting the two lets an agent be handed trading alone: `manage-accounts.py` is admin only. Its
-`purge` removes any obsolete profile (not the default one), after backing the database up to
+`purge` removes any obsolete portfolio (not the default one), after backing the database up to
 `--backup-dir` — or, said explicitly, `--no-backup`. An agent's session is also
 bound to its own account: its `start-agent` sets `TRADE_ACCOUNT`, and `trade.py` refuses any other
 (the agent cannot override it — a command not starting with trade.py's path is not allowed). Each
@@ -157,8 +158,8 @@ alone if accounts are to be compared.
 
 The global settings (`python3 scripts/db.py config`, `... config set <key> '<json>'`) are what
 an agent changes for the as-of picker's earliest date (`timelineStart`), the portfolio `currency`,
-the benchmark (`benchmarkIsin`, `benchmarkLabel`) or the `defaultProfile`; `--profile <p>` does the
-same for one profile's own. `ingest()` reads them (falling back to built-in defaults for a missing
+the benchmark (`benchmarkIsin`, `benchmarkLabel`) or the `defaultPortfolio`; `--portfolio <p>` does the
+same for one portfolio's own. `ingest()` reads them (falling back to built-in defaults for a missing
 key) and `update_prices.py` reads `timelineStart`/`currency` too, so the page and the fetcher move
 together. Keep them flat.
 
@@ -197,7 +198,7 @@ rendered tooltip. Around any edit:
 ```bash
 node check_portfolio.js --save     # before: record what the code does today
 node check_portfolio.js            # after: diff against it
-node check_portfolio.js --profile x [--save]   # another profile, against check_baseline.x.json
+node check_portfolio.js --portfolio x [--save]   # another portfolio, against check_baseline.x.json
 ```
 
 A clean run means the numbers and the rendered text are untouched — worth having after any
@@ -209,7 +210,7 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-`data/`, `private-profiles/`, `backup/`'s old data files and `check_baseline*.json` hold real
+`data/`, `private-portfolios/`, `backup/`'s old data files and `check_baseline*.json` hold real
 position values and are gitignored — never commit them, and don't paste figures from them into
 commit messages or issues. Nothing in the database is committed, the registry included:
 `scripts/seed.sql` (no amounts — only what each instrument is and where its prices come from,

@@ -10,7 +10,7 @@
 
    Sections, in order:
 
-     files                the api/ routes the page reads: settings, registry, prices, profile
+     files                the api/ routes the page reads: settings, registry, prices, portfolio
      state                every mutable global, and who is allowed to write it
      CSV                  parsing, and the "# key=value" header lines an old series file carried
      the trade log        TRADE_INDEX — one position's activities, the input to almost everything
@@ -26,7 +26,7 @@
      dividends            attributing income to the lots that earned it
      display names        trimming legal boilerplate off a position's full name
      build                CSV rows → the position objects every renderer consumes
-     ingest               config + profile + registry + the Parqet export in, the whole model out
+     ingest               config + portfolio + registry + the Parqet export in, the whole model out
 
    Two rules the code holds to, worth keeping: a position is identified by depot *and*
    identifier (the same ISIN can live in two depots with separate histories), and money
@@ -34,12 +34,12 @@
 
    Every input comes out of data/portfolio.db through server.py's api/ routes, each in the shape
    of the CSV or JSON file it replaced. Three kinds of data, by lifecycle — worth preserving:
-     a profile's own   IMPORTED  its positions/activities/cash, replaced wholesale by a Parqet
+     a portfolio's own   IMPORTED  its positions/activities/cash, replaced wholesale by a Parqet
                                  refresh or rebuilt from its ledger; plus its own settings
      the registry      CURATED   what exists and where its prices come from; never overwritten
      the prices        DERIVED   reproducible from the registry's price sources alone
-   Only the first is per profile. The registry and the price series are shared by every profile —
-   an instrument is the same thing whoever holds it — so a profile sees just the slice of the
+   Only the first is per portfolio. The registry and the price series are shared by every portfolio —
+   an instrument is the same thing whoever holds it — so a portfolio sees just the slice of the
    registry it holds or watches (see watchedInstruments).
    Every stored close is already in the portfolio currency — update_prices.py converts on write
    and keeps the untouched quote alongside — so nothing here does FX. The prices also outrank the
@@ -52,17 +52,17 @@
 // each in the shape of the file it replaced — the same CSV header, the same JSON — so the parsing
 // here never changed when the files went.
 const CONFIG_PATH = 'api/config';    // the global settings — `python3 scripts/db.py config` edits them
-// Per profile: its positions and activities (a Parqet export, or rebuilt from its ledger) plus its
-// own settings, whose keys override the global ones (see mergeConfig). Which profile is read is
-// PROFILE below — the ?profile= URL parameter, else the defaultProfile setting — so these are
+// Per portfolio: its positions and activities (a Parqet export, or rebuilt from its ledger) plus its
+// own settings, whose keys override the global ones (see mergeConfig). Which portfolio is read is
+// PORTFOLIO below — the ?portfolio= URL parameter, else the defaultPortfolio setting — so these are
 // functions of it rather than fixed strings.
-const profilePath = route => `api/${route}?profile=${encodeURIComponent(PROFILE)}`;
-const PROFILE_CONFIG_PATH = () => profilePath('profile');
-const CSV_PATH = () => profilePath('positions');
-const TRADES_PATH = () => profilePath('activities');
-// A TR-imported or manual profile's cash, booking by booking (written by import_tr.py's rebuild).
-// A Parqet profile has none — its export carries no cash history — and the page then shows none.
-const CASH_PATH = () => profilePath('cash');
+const portfolioPath = route => `api/${route}?portfolio=${encodeURIComponent(PORTFOLIO)}`;
+const PORTFOLIO_CONFIG_PATH = () => portfolioPath('portfolio');
+const CSV_PATH = () => portfolioPath('positions');
+const TRADES_PATH = () => portfolioPath('activities');
+// A TR-imported or manual portfolio's cash, booking by booking (written by import_tr.py's rebuild).
+// A Parqet portfolio has none — its export carries no cash history — and the page then shows none.
+const CASH_PATH = () => portfolioPath('cash');
 // The registry is curated: what exists, and what each instrument is called. It is keyed by ISIN
 // and is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
@@ -97,8 +97,8 @@ const LIVE_PATH = 'api/live';
    AS_FROM is the other end of the same pick: with it set the map answers "what happened between
    these two dates" rather than "what has happened up to this date", and every basis figure is
    re-based onto that start date (see rebaseLots).
-   PROFILE is settled once at startup (see resolveProfile) and never changes without a reload;
-   WATCHLIST is that profile's own list of instruments it tracks without holding.
+   PORTFOLIO is settled once at startup (see resolvePortfolio) and never changes without a reload;
+   WATCHLIST is that portfolio's own list of instruments it tracks without holding.
    TIMELINE_START / BENCH_LABEL start at sensible defaults and are overwritten by ingest() from
    the settings — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
@@ -116,8 +116,9 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     DEPOTS = [],                                       // [{ name }] — depots in draw order
     TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
     TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World',
-    PROFILE = new URLSearchParams(location.search).get('profile') || '',
-    WATCHLIST = new Set(),                             // ids from the profile's "watchlist" key
+    // ?profile= is the old name, kept so a bookmark made before the rename still opens
+    PORTFOLIO = new URLSearchParams(location.search).get('portfolio') || new URLSearchParams(location.search).get('profile') || '',
+    WATCHLIST = new Set(),                             // ids from the portfolio's "watchlist" key
     CASH = [];                                         // api/cash rows, oldest first — see cashBalance
 
 /* ---------- CSV ---------- */
@@ -281,29 +282,29 @@ function cashSummary(date = null) {
   return [...by.values()];
 }
 
-// The profile named in the URL wins; failing that, the defaultProfile setting, then "main".
-// Called by the view once the settings are in hand, before any profile route is asked for.
-function resolveProfile(configText) {
-  if (PROFILE) return PROFILE;
+// The portfolio named in the URL wins; failing that, the defaultPortfolio setting, then "main".
+// Called by the view once the settings are in hand, before any portfolio route is asked for.
+function resolvePortfolio(configText) {
+  if (PORTFOLIO) return PORTFOLIO;
   let cfg = {};
   try { cfg = configText ? JSON.parse(configText) : {}; } catch { /* keep the fallback */ }
-  return (PROFILE = cfg.defaultProfile || 'main');
+  return (PORTFOLIO = cfg.defaultPortfolio || 'main');
 }
 
-// The global settings with the profile's own keys laid over it, back as text so ingest() and
+// The global settings with the portfolio's own keys laid over it, back as text so ingest() and
 // benchSeriesPath() read one settings text exactly as before. Flat keys, so a shallow merge is the
-// whole job. `currency` is the one key a profile cannot override: update_prices.py converts every
-// series into it on write, and those series are shared by all profiles.
-function mergeConfig(configText, profileText) {
+// whole job. `currency` is the one key a portfolio cannot override: update_prices.py converts every
+// series into it on write, and those series are shared by all portfolios.
+function mergeConfig(configText, portfolioText) {
   const parse = t => { try { return t ? JSON.parse(t) : {}; } catch { return {}; } };
-  const base = parse(configText), own = parse(profileText);
+  const base = parse(configText), own = parse(portfolioText);
   delete own.currency;
   return JSON.stringify({ ...base, ...own });
 }
 
-// Registry instruments this profile tracks without holding them, open or closed: the ones its
+// Registry instruments this portfolio tracks without holding them, open or closed: the ones its
 // watchlist names. The registry itself is shared, so "listed but not held" would be every other
-// profile's holdings too — the explicit list is what keeps one profile's names out of another's.
+// portfolio's holdings too — the explicit list is what keeps one portfolio's names out of another's.
 // INSTRUMENTS carries each row under both its id and its ISIN (equal, for a security), so de-dupe
 // by object identity rather than trusting the map's own size.
 function watchedInstruments() {
@@ -1283,15 +1284,15 @@ function totals(rows) {
   return { cur, pur, gain: cur - pur, rel: rows.reduce((s, d) => s + (d.relPre ?? d.rel), 0) };
 }
 
-// What ingest() throws for a profile with nothing in it at all — no position, open or closed, and
-// no cash: a freshly created profile, before its first import or entry. A demo holding only its
+// What ingest() throws for a portfolio with nothing in it at all — no position, open or closed, and
+// no cash: a freshly created portfolio, before its first import or entry. A demo holding only its
 // starting cash, or one that has sold everything, is not empty and renders as usual. The view
 // tells this apart from a real failure by it.
-const EMPTY_PROFILE_MSG = 'no rows with a positive value';
+const EMPTY_PORTFOLIO_MSG = 'no rows with a positive value';
 
 /* ---------- ingest ----------
-   the settings (already merged with the profile's own, see mergeConfig) plus the eight CSV texts
-   in — cash the seventh, empty for a Parqet profile; live the eighth, empty outside a
+   the settings (already merged with the portfolio's own, see mergeConfig) plus the eight CSV texts
+   in — cash the seventh, empty for a Parqet portfolio; live the eighth, empty outside a
    pre-market or a European session — the whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
 function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText, cashText, liveText) {
@@ -1347,5 +1348,5 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
   const all = build(parseCSV(text));
   ITEMS = all.filter(d => !d.sold);
   CLOSED = all.filter(d => d.sold).sort((a, b) => b.rel - a.rel);
-  if (!ITEMS.length && !CLOSED.length && !CASH.length) throw new Error(EMPTY_PROFILE_MSG);
+  if (!ITEMS.length && !CLOSED.length && !CASH.length) throw new Error(EMPTY_PORTFOLIO_MSG);
 }

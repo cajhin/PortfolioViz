@@ -14,11 +14,11 @@ check_portfolio.js reads the same routes without a server, through this same cod
     api/prices?id=ID                one instrument's closes (gen_prices/<id>-<slug>.csv)
     api/latest                      the newest close per instrument (gen_prices/_latest.csv)
     api/live                        live prices fresher than any close (gen_prices/_live.csv)
-    api/profile?profile=P           a profile's own settings (private-profiles/<p>/profile.json)
-    api/positions?profile=P         its positions (positions.csv), open and closed
-    api/activities?profile=P        its activities (activities.csv)
-    api/cash?profile=P              its cash bookings (cash.csv) — none for a Parqet profile
-An unknown profile is a 404 on each of the four, its body (plain text) saying why — the page
+    api/portfolio?portfolio=P       a portfolio's own settings (private-profiles/<p>/profile.json)
+    api/positions?portfolio=P         its positions (positions.csv), open and closed
+    api/activities?portfolio=P        its activities (activities.csv)
+    api/cash?portfolio=P              its cash bookings (cash.csv) — none for a Parqet portfolio
+An unknown portfolio is a 404 on each of the four, its body (plain text) saying why — the page
 shows it in place of the data it could not load.
 """
 import csv, io, json, sys, urllib.parse
@@ -34,15 +34,15 @@ def to_csv(fields, rows):
     return out.getvalue()
 
 
-def no_profile(name):
-    """Why a profile cannot be shown, in words for the page's error box."""
-    names = [p["name"] for p in db.profiles()]
+def no_portfolio(name):
+    """Why a portfolio cannot be shown, in words for the page's error box."""
+    names = [p["name"] for p in db.portfolios()]
     if not names:
-        return ("The database has no profiles yet — it was created empty (scripts/sqlite-install.sh). "
-                "Copy a backup over data/portfolio.db (made with scripts/db.py backup), or fill a profile: "
+        return ("The database has no portfolios yet — it was created empty (scripts/sqlite-install.sh). "
+                "Copy a backup over data/portfolio.db (made with scripts/db.py backup), or fill a portfolio: "
                 "REFRESH_PARQET_DATA.md for Parqet, scripts/manage-accounts.py create for a demo account.")
-    return (f"No profile {name!r} in the database — it has {', '.join(names)}. Pick one with "
-            f"?profile=<name>, or change the default: scripts/db.py config set defaultProfile '\"<name>\"'.")
+    return (f"No portfolio {name!r} in the database — it has {', '.join(names)}. Pick one with "
+            f"?portfolio=<name>, or change the default: scripts/db.py config set defaultPortfolio '\"<name>\"'.")
 
 
 def get(path):
@@ -66,15 +66,15 @@ def get(path):
         return 200, CSV, to_csv(db.LATEST_FIELDS, db.latest().values())
     if route == "api/live":
         return 200, CSV, to_csv(db.LIVE_FIELDS, db.live())
-    if route in ("api/profile", "api/positions", "api/activities", "api/cash"):
-        name = q.get("profile", "")
-        cfg = db.profile_config(name)
+    if route in ("api/portfolio", "api/positions", "api/activities", "api/cash"):
+        name = q.get("portfolio", "")
+        cfg = db.portfolio_config(name)
         if cfg is None:
-            return 404, "text/plain; charset=utf-8", no_profile(name)
-        if route == "api/profile":
+            return 404, "text/plain; charset=utf-8", no_portfolio(name)
+        if route == "api/portfolio":
             return 200, JSON, json.dumps(cfg, indent=2, ensure_ascii=False)
         table = {"api/positions": "position", "api/activities": "activity", "api/cash": "cash"}[route]
-        return 200, CSV, to_csv(db.PROFILE_TABLES[table], db.profile_rows(name, table))
+        return 200, CSV, to_csv(db.PORTFOLIO_TABLES[table], db.portfolio_rows(name, table))
     return 404, CSV, ""
 
 

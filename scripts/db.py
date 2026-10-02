@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The one way into data/portfolio.db — every other script imports this, none opens the DB itself.
 
-    python3 scripts/db.py config [--profile P]                    # the settings, as JSON
-    python3 scripts/db.py config [--profile P] set <key> <json>   # e.g. set timelineStart '"2019-01-01"'
-    python3 scripts/db.py config [--profile P] unset <key>
+    python3 scripts/db.py config [--portfolio P]                    # the settings, as JSON
+    python3 scripts/db.py config [--portfolio P] set <key> <json>   # e.g. set timelineStart '"2019-01-01"'
+    python3 scripts/db.py config [--portfolio P] unset <key>
     python3 scripts/db.py upsert <table> <col>=<value> ...        # a registry row: instrument,
                                                                   #   price_source or sector_color
     python3 scripts/db.py delete <table> <key>                    # one registry row, by its key
@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _columns(c, table):
@@ -80,13 +80,30 @@ def _rename_column(c, table, old, new):
         c.execute(f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}")
 
 
+def _rename_table(c, old, new):
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (old,)).fetchone():
+        c.execute(f"ALTER TABLE {old} RENAME TO {new}")
+
+
 def _to_2(c):
     """A position's, activity's or cash booking's `portfolio` (Parqet's word) is its `depot`."""
     for table in ("position", "activity", "cash"):
         _rename_column(c, table, "portfolio", "depot")
 
 
-MIGRATIONS = {2: _to_2}
+def _to_3(c):
+    """A profile is a portfolio: its table, every column naming one, and their indexes."""
+    _rename_table(c, "profile", "portfolio")
+    _rename_table(c, "user_profile", "user_portfolio")
+    for table in ("setting", "ledger", "position", "activity", "cash", "user_portfolio"):
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone():
+            _rename_column(c, table, "profile", "portfolio")
+    for table in ("position", "activity", "cash"):
+        c.execute(f"DROP INDEX IF EXISTS {table}_profile")      # schema.sql makes {table}_portfolio
+    c.execute("UPDATE setting SET key = 'defaultPortfolio' WHERE key = 'defaultProfile'")
+
+
+MIGRATIONS = {2: _to_2, 3: _to_3}
 
 
 def migrate(c):
@@ -145,12 +162,12 @@ def text(v):
 
 # ---------- settings ----------
 
-def settings(profile=""):
-    """The keys stored for one scope — '' for the global ones (was config.json), else a profile's own
-    (was its profile.json, less label/source/allow-cli, which are its `profile` row)."""
+def settings(portfolio=""):
+    """The keys stored for one scope — '' for the global ones (was config.json), else a portfolio's own
+    (was its profile.json, less label/source/allow-cli, which are its `portfolio` row)."""
     return {r["key"]: json.loads(r["value"])
-            for r in conn().execute("SELECT key, value FROM setting WHERE profile = ? ORDER BY rowid",
-                                    (profile,))}
+            for r in conn().execute("SELECT key, value FROM setting WHERE portfolio = ? ORDER BY rowid",
+                                    (portfolio,))}
 
 
 def config():
@@ -158,16 +175,16 @@ def config():
     return {**DEFAULTS, **settings("")}
 
 
-def set_setting(key, value, profile=""):
+def set_setting(key, value, portfolio=""):
     with tx() as c:
-        c.execute("INSERT INTO setting (profile, key, value) VALUES (?, ?, ?) "
-                  "ON CONFLICT (profile, key) DO UPDATE SET value = excluded.value",
-                  (profile, key, json.dumps(value, ensure_ascii=False)))
+        c.execute("INSERT INTO setting (portfolio, key, value) VALUES (?, ?, ?) "
+                  "ON CONFLICT (portfolio, key) DO UPDATE SET value = excluded.value",
+                  (portfolio, key, json.dumps(value, ensure_ascii=False)))
 
 
-def unset_setting(key, profile=""):
+def unset_setting(key, portfolio=""):
     with tx() as c:
-        c.execute("DELETE FROM setting WHERE profile = ? AND key = ?", (profile, key))
+        c.execute("DELETE FROM setting WHERE portfolio = ? AND key = ?", (portfolio, key))
 
 
 def timeline_start():
@@ -267,8 +284,8 @@ def write_fx(pair, rates):
                       [(pair, d, r) for d, r in rates.items()])
 
 
-# ---------- profiles ----------
-# A profile is one row in `profile` (label, source, allow_cli) plus its own settings (watchlist,
+# ---------- portfolios ----------
+# A portfolio is one row in `portfolio` (label, source, allow_cli) plus its own settings (watchlist,
 # benchmarkIsin, parqetPortfolios, ...) — together what its profile.json used to say.
 
 POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares", "currency",
@@ -278,79 +295,79 @@ ACTIVITY_FIELDS = ["depot", "name", "identifier", "type", "datetime", "shares", 
                    "amountNet", "fee", "tax", "realizedGains", "realizedGainsNet", "currency",
                    "transactionId"]
 CASH_FIELDS = ["depot", "datetime", "date", "kind", "amount", "transactionId"]
-PROFILE_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "cash": CASH_FIELDS}
+PORTFOLIO_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "cash": CASH_FIELDS}
 
 
-def profile(name):
-    """The profile's row as {name, label, source, allow_cli}, or None."""
-    r = conn().execute("SELECT * FROM profile WHERE name = ?", (name,)).fetchone()
+def portfolio(name):
+    """The portfolio's row as {name, label, source, allow_cli}, or None."""
+    r = conn().execute("SELECT * FROM portfolio WHERE name = ?", (name,)).fetchone()
     return dict(r) if r else None
 
 
-def profiles():
-    return rows("SELECT * FROM profile ORDER BY name")
+def portfolios():
+    return rows("SELECT * FROM portfolio ORDER BY name")
 
 
-def profile_config(name):
-    """What the profile's profile.json used to hold: label, source, allow-cli and its settings."""
-    p = profile(name)
+def portfolio_config(name):
+    """What the portfolio's profile.json used to hold: label, source, allow-cli and its settings."""
+    p = portfolio(name)
     if not p:
         return None
     return {"label": p["label"], "source": p["source"],
             **({"allow-cli": True} if p["allow_cli"] else {}), **settings(name)}
 
 
-def create_profile(name, label, source, allow_cli=False):
-    """A new, empty profile with an empty watchlist; sqlite3.IntegrityError if the name is taken."""
+def create_portfolio(name, label, source, allow_cli=False):
+    """A new, empty portfolio with an empty watchlist; sqlite3.IntegrityError if the name is taken."""
     with tx() as c:
-        c.execute("INSERT INTO profile (name, label, source, allow_cli) VALUES (?, ?, ?, ?)",
+        c.execute("INSERT INTO portfolio (name, label, source, allow_cli) VALUES (?, ?, ?, ?)",
                   (name, label or name, source, 1 if allow_cli else 0))
-        c.execute("INSERT INTO setting (profile, key, value) VALUES (?, 'watchlist', '[]')", (name,))
+        c.execute("INSERT INTO setting (portfolio, key, value) VALUES (?, 'watchlist', '[]')", (name,))
 
 
 def set_label(name, label):
     with tx() as c:
-        return c.execute("UPDATE profile SET label = ? WHERE name = ?", (label, name)).rowcount
+        return c.execute("UPDATE portfolio SET label = ? WHERE name = ?", (label, name)).rowcount
 
 
-def purge_profile(name):
-    """Every row the profile has — ledgers, positions, activities, cash, settings. The registry and
+def purge_portfolio(name):
+    """Every row the portfolio has — ledgers, positions, activities, cash, settings. The registry and
     the prices stay: they are shared."""
     with tx() as c:
-        c.execute("DELETE FROM setting WHERE profile = ?", (name,))
-        return c.execute("DELETE FROM profile WHERE name = ?", (name,)).rowcount   # cascades
+        c.execute("DELETE FROM setting WHERE portfolio = ?", (name,))
+        return c.execute("DELETE FROM portfolio WHERE name = ?", (name,)).rowcount   # cascades
 
 
-def profile_rows(name, table):
-    """A profile's positions, activities or cash, as text, in the order they were written."""
-    fields = PROFILE_TABLES[table]
-    return rows(f"SELECT {', '.join(fields)} FROM {table} WHERE profile = ? ORDER BY rowid", (name,))
+def portfolio_rows(name, table):
+    """A portfolio's positions, activities or cash, as text, in the order they were written."""
+    fields = PORTFOLIO_TABLES[table]
+    return rows(f"SELECT {', '.join(fields)} FROM {table} WHERE portfolio = ? ORDER BY rowid", (name,))
 
 
-def replace_profile_rows(name, table, new):
-    fields = PROFILE_TABLES[table]
+def replace_portfolio_rows(name, table, new):
+    fields = PORTFOLIO_TABLES[table]
     with tx() as c:
-        c.execute(f"DELETE FROM {table} WHERE profile = ?", (name,))
-        c.executemany(f"INSERT INTO {table} (profile, {', '.join(fields)}) VALUES "
+        c.execute(f"DELETE FROM {table} WHERE portfolio = ?", (name,))
+        c.executemany(f"INSERT INTO {table} (portfolio, {', '.join(fields)}) VALUES "
                       f"(?, {', '.join('?' * len(fields))})",
                       [[name] + [r.get(f) for f in fields] for r in new])
 
 
 # ---------- ledgers ----------
-# A manual profile's source of truth: the Trade Republic rows it imported (origin 'tr') and the
+# A manual portfolio's source of truth: the Trade Republic rows it imported (origin 'tr') and the
 # rows entered by hand or traded (origin 'manual'), each the TR export's row as a dict.
 
 def ledger(name, origin, deleted=True):
     """One origin's rows, oldest first (same-time rows in the order they were written). An
     imported row deleted on the page is left out unless `deleted`."""
     return [json.loads(r[0]) for r in conn().execute(
-        "SELECT data FROM ledger WHERE profile = ? AND origin = ?" + ("" if deleted else " AND NOT deleted")
+        "SELECT data FROM ledger WHERE portfolio = ? AND origin = ?" + ("" if deleted else " AND NOT deleted")
         + " ORDER BY datetime, rowid", (name, origin))]
 
 
 def add_ledger_rows(name, origin, new):
     with tx() as c:
-        c.executemany("INSERT INTO ledger (profile, transaction_id, origin, datetime, data) VALUES (?, ?, ?, ?, ?)",
+        c.executemany("INSERT INTO ledger (portfolio, transaction_id, origin, datetime, data) VALUES (?, ?, ?, ?, ?)",
                       [(name, r["transaction_id"], origin, r["datetime"], json.dumps(r, ensure_ascii=False))
                        for r in new])
 
@@ -358,19 +375,19 @@ def add_ledger_rows(name, origin, new):
 def replace_ledger(name, origin, new):
     """All of one origin's rows at once — how a hand-entered row is added, edited or removed."""
     with tx() as c:
-        c.execute("DELETE FROM ledger WHERE profile = ? AND origin = ?", (name, origin))
+        c.execute("DELETE FROM ledger WHERE portfolio = ? AND origin = ?", (name, origin))
         add_ledger_rows(name, origin, new)
 
 
 def mark_deleted(name, tid):
     """An imported row deleted on the page: kept, so a re-import still knows it, but left out."""
     with tx() as c:
-        return c.execute("UPDATE ledger SET deleted = 1 WHERE profile = ? AND transaction_id = ? AND origin = 'tr'",
+        return c.execute("UPDATE ledger SET deleted = 1 WHERE portfolio = ? AND transaction_id = ? AND origin = 'tr'",
                          (name, tid)).rowcount
 
 
 # ---------- access ----------
-# Users, which profiles each may open (and change), and their logged-in sessions — server.py's
+# Users, which portfolios each may open (and change), and their logged-in sessions — server.py's
 # login. The scripts themselves never ask: a command line is the admin's.
 
 SESSION_DAYS = 30
@@ -397,11 +414,11 @@ def user(name):
 
 
 def users():
-    """Every user with the profiles they may open: {name, created, profiles: {profile: can_write}}."""
-    out = {u["name"]: {"name": u["name"], "created": u["created"], "profiles": {}}
+    """Every user with the portfolios they may open: {name, created, portfolios: {portfolio: can_write}}."""
+    out = {u["name"]: {"name": u["name"], "created": u["created"], "portfolios": {}}
            for u in rows("SELECT name, created FROM user ORDER BY name")}
-    for g in rows("SELECT * FROM user_profile ORDER BY profile"):
-        out[g["user"]]["profiles"][g["profile"]] = bool(g["can_write"])
+    for g in rows("SELECT * FROM user_portfolio ORDER BY portfolio"):
+        out[g["user"]]["portfolios"][g["portfolio"]] = bool(g["can_write"])
     return list(out.values())
 
 
@@ -424,29 +441,29 @@ def delete_user(name):
         return c.execute("DELETE FROM user WHERE name = ?", (name,)).rowcount   # cascades
 
 
-def grant(name, profile_name, can_write=True):
+def grant(name, portfolio_name, can_write=True):
     with tx() as c:
-        c.execute("INSERT INTO user_profile (user, profile, can_write) VALUES (?, ?, ?) "
-                  "ON CONFLICT (user, profile) DO UPDATE SET can_write = excluded.can_write",
-                  (name, profile_name, 1 if can_write else 0))
+        c.execute("INSERT INTO user_portfolio (user, portfolio, can_write) VALUES (?, ?, ?) "
+                  "ON CONFLICT (user, portfolio) DO UPDATE SET can_write = excluded.can_write",
+                  (name, portfolio_name, 1 if can_write else 0))
 
 
-def revoke(name, profile_name):
+def revoke(name, portfolio_name):
     with tx() as c:
-        return c.execute("DELETE FROM user_profile WHERE user = ? AND profile = ?",
-                         (name, profile_name)).rowcount
+        return c.execute("DELETE FROM user_portfolio WHERE user = ? AND portfolio = ?",
+                         (name, portfolio_name)).rowcount
 
 
-def access(name, profile_name):
-    """None if the user may not open the profile, else whether they may change it."""
-    r = conn().execute("SELECT can_write FROM user_profile WHERE user = ? AND profile = ?",
-                       (name, profile_name)).fetchone()
+def access(name, portfolio_name):
+    """None if the user may not open the portfolio, else whether they may change it."""
+    r = conn().execute("SELECT can_write FROM user_portfolio WHERE user = ? AND portfolio = ?",
+                       (name, portfolio_name)).fetchone()
     return None if r is None else bool(r[0])
 
 
-def user_profiles(name):
-    """The profile rows the user may open, each with its `can_write`."""
-    return rows("SELECT p.*, g.can_write FROM profile p JOIN user_profile g ON g.profile = p.name "
+def user_portfolios(name):
+    """The portfolio rows the user may open, each with its `can_write`."""
+    return rows("SELECT p.*, g.can_write FROM portfolio p JOIN user_portfolio g ON g.portfolio = p.name "
                 "WHERE g.user = ? ORDER BY p.name", (name,))
 
 
@@ -517,8 +534,8 @@ def seed_sql():
         for r in rows(f"SELECT {', '.join(fields)} FROM {table} ORDER BY rowid"):
             out.append(f"INSERT INTO {table} ({', '.join(fields)}) VALUES "
                        f"({', '.join(lit(r[f]) for f in fields)});")
-    for r in rows("SELECT key, value FROM setting WHERE profile = '' ORDER BY rowid"):
-        out.append(f"INSERT INTO setting (profile, key, value) VALUES ('', {lit(r['key'])}, {lit(r['value'])});")
+    for r in rows("SELECT key, value FROM setting WHERE portfolio = '' ORDER BY rowid"):
+        out.append(f"INSERT INTO setting (portfolio, key, value) VALUES ('', {lit(r['key'])}, {lit(r['value'])});")
     out.append("COMMIT;")
     return "\n".join(out) + "\n"
 
@@ -532,19 +549,19 @@ def main():
         sys.exit(usage)
     cmd, rest = args[0], args[1:]
     if cmd == "config":
-        profile = ""
-        if rest[:1] == ["--profile"] and len(rest) >= 2:
-            profile, rest = rest[1], rest[2:]
+        portfolio = ""
+        if rest[:1] == ["--portfolio"] and len(rest) >= 2:
+            portfolio, rest = rest[1], rest[2:]
         if not rest:
-            print(json.dumps(settings(profile) if profile else config(), indent=2, ensure_ascii=False))
+            print(json.dumps(settings(portfolio) if portfolio else config(), indent=2, ensure_ascii=False))
         elif rest[0] == "set" and len(rest) == 3:
             try:
                 value = json.loads(rest[2])
             except ValueError:
                 sys.exit(f"{rest[2]!r} is not JSON — a string needs its quotes: '\"{rest[2]}\"'")
-            set_setting(rest[1], value, profile)
+            set_setting(rest[1], value, portfolio)
         elif rest[0] == "unset" and len(rest) == 2:
-            unset_setting(rest[1], profile)
+            unset_setting(rest[1], portfolio)
         else:
             sys.exit(usage)
     elif cmd == "upsert" and len(rest) >= 2 and rest[0] in REGISTRY:

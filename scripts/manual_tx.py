@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Enter buys and sells by hand into a manual profile — a virtual demo portfolio, say.
+"""Enter buys and sells by hand into a manual portfolio — a virtual demo portfolio, say.
 
-    python3 scripts/manual_tx.py <profile> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>]
-    python3 scripts/manual_tx.py <profile> edit <transaction_id> <YYYY-MM-DD> buy|sell <shares> <price> [<fee>]
-    python3 scripts/manual_tx.py <profile> delete <transaction_id>
-    python3 scripts/manual_tx.py <profile> cash <YYYY-MM-DD> deposit|withdrawal <amount>
-    python3 scripts/manual_tx.py <profile> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
+    python3 scripts/manual_tx.py <portfolio> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>]
+    python3 scripts/manual_tx.py <portfolio> edit <transaction_id> <YYYY-MM-DD> buy|sell <shares> <price> [<fee>]
+    python3 scripts/manual_tx.py <portfolio> delete <transaction_id>
+    python3 scripts/manual_tx.py <portfolio> cash <YYYY-MM-DD> deposit|withdrawal <amount>
+    python3 scripts/manual_tx.py <portfolio> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
 
-Rows go to the profile's ledger (origin 'manual') in the same format as a Trade Republic export
-row, so import_tr.py's one conversion turns both ledgers into the profile's positions,
+Rows go to the portfolio's ledger (origin 'manual') in the same format as a Trade Republic export
+row, so import_tr.py's one conversion turns both ledgers into the portfolio's positions,
 activities and cash — which every change here rebuilds, in the same transaction. Prices are per share in the portfolio
 currency, the fee is on top (a buy costs shares × price + fee, a sale brings shares × price − fee).
 
@@ -99,49 +99,49 @@ def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
             "transaction_id": tid or f"manual-{uuid.uuid4()}"}
 
 
-def cash(profile, day, kind, amount):
-    rows = manual_rows(profile)
+def cash(portfolio, day, kind, amount):
+    rows = manual_rows(portfolio)
     rows.append(make_cash_row(rows, day, kind, amount))
-    save(profile, rows)
+    save(portfolio, rows)
     print(f"added: {day} {kind} {num(amount):g}")
 
 
-def edit_cash(profile, tid, day, kind, amount):
-    rows = manual_rows(profile)
+def edit_cash(portfolio, tid, day, kind, amount):
+    rows = manual_rows(portfolio)
     old = next((r for r in rows if r["transaction_id"] == tid and r["category"] == "CASH"), None)
     if not old:
         sys.exit("only deposits and withdrawals entered by hand can be edited this way")
     rest = [r for r in rows if r is not old]
     rest.append(make_cash_row(rest, day, kind, amount, tid=tid,
                               keep_at=old["datetime"] if old["date"] == day else None))
-    save(profile, rest)
+    save(portfolio, rest)
     print(f"edited: {day} {kind} {num(amount):g}")
 
 
-def manual_rows(profile):
-    """The profile's hand-entered rows, oldest first."""
-    return db.ledger(profile, "manual")
+def manual_rows(portfolio):
+    """The portfolio's hand-entered rows, oldest first."""
+    return db.ledger(portfolio, "manual")
 
 
-def save(profile, rows):
+def save(portfolio, rows):
     """The hand-entered rows as they now stand, all of them, oldest first."""
-    db.replace_ledger(profile, "manual", sorted(rows, key=lambda r: r["datetime"]))
+    db.replace_ledger(portfolio, "manual", sorted(rows, key=lambda r: r["datetime"]))
 
 
-def add(profile, day, isin, kind, shares, price, fee):
-    rows = manual_rows(profile)
+def add(portfolio, day, isin, kind, shares, price, fee):
+    rows = manual_rows(portfolio)
     row, inst = make_row(rows, day, isin, kind, shares, price, fee)
     rows.append(row)
     never_short(rows, isin)
-    save(profile, rows)
+    save(portfolio, rows)
     print(f"added: {day} {kind} {num(shares):g} × {inst.get('display') or isin} at {num(price):g}"
           + (f" + fee {num(fee):g}" if num(fee) else ""))
 
 
-def edit(profile, tid, day, kind, shares, price, fee):
+def edit(portfolio, tid, day, kind, shares, price, fee):
     """A hand-entered row rewritten in place — same id, same instrument. An imported row is a copy
     of what the broker booked, so it is not edited: delete it instead."""
-    rows = manual_rows(profile)
+    rows = manual_rows(portfolio)
     old = next((r for r in rows if r["transaction_id"] == tid and r["category"] != "CASH"), None)
     if not old:
         sys.exit("only buys and sells entered by hand can be edited — an imported one can be deleted")
@@ -150,27 +150,27 @@ def edit(profile, tid, day, kind, shares, price, fee):
                          keep_at=old["datetime"] if old["date"] == day else None)
     rest.append(row)
     never_short(rest, old["symbol"])
-    save(profile, rest)
+    save(portfolio, rest)
     print(f"edited: {day} {kind} {num(shares):g} × {inst.get('display') or old['symbol']} at {num(price):g}"
           + (f" + fee {num(fee):g}" if num(fee) else ""))
 
 
-def delete(profile, tid):
+def delete(portfolio, tid):
     """A hand-entered row is removed outright. An imported one stays in the ledger — so the next
     import of an overlapping export still recognises it as seen — marked deleted, which the
     rebuild leaves out. Clearing that mark (ledger.deleted) restores it."""
-    rows = manual_rows(profile)
+    rows = manual_rows(portfolio)
     keep = [r for r in rows if r["transaction_id"] != tid]
     if len(keep) < len(rows):
         gone = next(r for r in rows if r["transaction_id"] == tid)
         never_short(keep, gone["symbol"])          # a buy that a later sale still needs stays
-        save(profile, keep)
+        save(portfolio, keep)
         print(f"deleted {tid}")
         return
-    if db.mark_deleted(profile, tid):
+    if db.mark_deleted(portfolio, tid):
         print(f"deleted imported {tid} (marked deleted; a re-import will not bring it back)")
         return
-    sys.exit(f"no transaction {tid!r} in this profile")
+    sys.exit(f"no transaction {tid!r} in this portfolio")
 
 
 def main():
@@ -183,9 +183,9 @@ def main():
     rest = args[2:] + (["0"] if fn in (add, edit) and len(args) == 7 else [])   # no fee given
     # the change and the rebuild it causes land together, or (on any refusal) not at all
     with db.tx():
-        profile = require_manual(args[0])
-        fn(profile, *rest)
-        rebuild(profile)
+        portfolio = require_manual(args[0])
+        fn(portfolio, *rest)
+        rebuild(portfolio)
 
 
 if __name__ == "__main__":

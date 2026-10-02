@@ -16,18 +16,18 @@
 <div class="wrap">
   <div id="loader" class="loader" hidden>
     <div>Could not read <code id="csvPath">api/positions</code>.</div>
-    <div id="loaderWhy">No such profile, or the page is not served by <code>./start.sh</code> (opened from <code>file://</code>, say).</div>
+    <div id="loaderWhy">No such portfolio, or the page is not served by <code>./start.sh</code> (opened from <code>file://</code>, say).</div>
     <div>Serve it with <code>./start.sh</code>, or pick a positions CSV by hand.</div>
     <input type="file" id="file" accept=".csv,text/csv">
     <div class="err" id="err"></div>
   </div>
-  <!-- in place of #app when the profile has no positions yet (see showEmptyProfile), which moves
-       the profile picker in here — #app, where it normally lives, stays hidden -->
-  <div id="emptyProfile" class="loader" hidden>
-    <div id="emptyProfileMsg">Profile <b id="emptyProfileName"></b> has no positions yet. <span id="emptyProfileHow"></span></div>
-    <!-- the step before: no such profile at all, or none yet (see showNoProfile) -->
-    <div id="noProfileMsg" hidden></div>
-    <div id="emptyProfileSlot"></div>
+  <!-- in place of #app when the portfolio has no positions yet (see showEmptyPortfolio), which moves
+       the portfolio picker in here — #app, where it normally lives, stays hidden -->
+  <div id="emptyPortfolio" class="loader" hidden>
+    <div id="emptyPortfolioMsg">Portfolio <b id="emptyPortfolioName"></b> has no positions yet. <span id="emptyPortfolioHow"></span></div>
+    <!-- the step before: no such portfolio at all, or none yet (see showNoPortfolio) -->
+    <div id="noPortfolioMsg" hidden></div>
+    <div id="emptyPortfolioSlot"></div>
   </div>
 
   <div id="app" hidden>
@@ -47,7 +47,7 @@
       <div class="totals">
         <div class="tile curtile" id="tilePur"><div class="k" id="kPur">Invested</div><div class="v" id="tPur">–</div><div class="vsub" id="tPurCash" hidden></div></div>
         <div class="tile curtile" id="tileCur"><div class="k" id="kCur">Current value</div><div class="v" id="tCur">–</div><div class="vsub" id="tCurCash" hidden></div></div>
-        <!-- shown only for a profile with cash (TR-imported or manual); see renderHeaderTotals. After
+        <!-- shown only for a portfolio with cash (TR-imported or manual); see renderHeaderTotals. After
              Invested and Current value, which a range labels "Value on <start>" and "Value on <end>"
              — kept side by side, start first -->
         <div class="tile curtile" id="tileCash" hidden><div class="k" id="kCash">Cash</div><div class="v" id="tCash">–</div></div>
@@ -56,12 +56,12 @@
         <div class="tile"><div class="k">Positions</div><div class="v" id="tN">–</div></div>
         <!-- not a tile: a footnote about the data itself, parked in the space the tiles leave -->
         <span class="datastamp" id="dataStamp"></span>
-        <!-- the profile picker (filled from start.sh's /profiles route, see renderProfilePicker)
+        <!-- the portfolio picker (filled from start.sh's /portfolios route, see renderPortfolioPicker)
              stacked over Update, which POSTs to start.sh's own server (see its update-prices
-             route) for that profile — nothing to do with ingest()/load(); a plain page served any
+             route) for that portfolio — nothing to do with ingest()/load(); a plain page served any
              other way has nowhere to send either, and the picker stays hidden there. -->
         <div class="updatecol">
-          <select id="profileSel" class="pick" aria-label="Profile" hidden></select>
+          <select id="portfolioSel" class="pick" aria-label="Portfolio" hidden></select>
           <button type="button" id="btnUpdatePrices" class="dt-addsel">Update</button>
         </div>
       </div>
@@ -271,12 +271,12 @@
     </div>
 
     <div class="card tablescroll" id="tradesCard" hidden>
-      <!-- which of the two kinds of profile this is decides what else this tab offers (see
-           applyProfileSource): a Parqet one only says where its transactions come from; a manual
+      <!-- which of the two kinds of portfolio this is decides what else this tab offers (see
+           applyPortfolioSource): a Parqet one only says where its transactions come from; a manual
            one gets the import above the list, an Edit per row, and the add row at its foot.
-           #txImport, the table and #txAdd move into #emptyProfile while the profile has nothing
-           yet (showEmptyProfile) —
-           a new profile's first entry is exactly when #app, and this tab with it, is hidden -->
+           #txImport, the table and #txAdd move into #emptyPortfolio while the portfolio has nothing
+           yet (showEmptyPortfolio) —
+           a new portfolio's first entry is exactly when #app, and this tab with it, is hidden -->
       <div class="txnote" id="txSourceNote" hidden></div>
       <div id="txImport" class="txtools" hidden>
         <form id="trImportForm" class="configrow">
@@ -296,7 +296,7 @@
           <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th><th id="txDelHead" class="txdel" hidden></th>
         </tr></thead>
         <tbody></tbody>
-        <!-- the add row (manual profiles only), each field under the column it fills. The fields
+        <!-- the add row (manual portfolios only), each field under the column it fills. The fields
              belong to #txForm below by their form attribute — a form cannot wrap a table row.
              Instrument: "Choose…", "+ New instrument…" (opens #instDialog), then the registry's
              priced instruments. Now % carries the price hint; Amount and Net follow the input. -->
@@ -363,31 +363,31 @@
     </div>
 
     <!-- settings that act on the server rather than on the view; each POSTs to start.sh, so a page
-         served any other way gets an error back from it (see createProfile) -->
+         served any other way gets an error back from it (see createPortfolio) -->
     <div class="card" id="configCard" hidden>
-      <!-- renames the label only; the profile's name, shown alongside, stays as it is -->
-      <form id="profileLabelForm" class="configrow">
-        <label for="profileLabel">Current profile</label>
-        <input type="text" id="profileLabel" required>
+      <!-- renames the label only; the portfolio's name, shown alongside, stays as it is -->
+      <form id="portfolioLabelForm" class="configrow">
+        <label for="portfolioLabel">Current portfolio</label>
+        <input type="text" id="portfolioLabel" required>
         <button type="submit" class="dt-addsel">Rename</button>
-        <span class="muted" id="profileFolder"></span>
-        <span class="muted" id="profileSource"></span>
-        <span id="profileLabelMsg"></span>
+        <span class="muted" id="portfolioFolder"></span>
+        <span class="muted" id="portfolioSource"></span>
+        <span id="portfolioLabelMsg"></span>
       </form>
-      <form id="newProfileForm" class="configrow">
-        <label for="newProfileName">Create new profile</label>
-        <input type="text" id="newProfileName" placeholder="Name, e.g. Family Trust" required>
-        <select id="newProfileSource" class="pick" aria-label="Controlled by">
+      <form id="newPortfolioForm" class="configrow">
+        <label for="newPortfolioName">Create new portfolio</label>
+        <input type="text" id="newPortfolioName" placeholder="Name, e.g. Family Trust" required>
+        <select id="newPortfolioSource" class="pick" aria-label="Controlled by">
           <option value="manual">Manual transactions</option>
           <option value="parqet">by Parqet</option>
         </select>
         <button type="submit" class="dt-addsel">Create</button>
-        <span class="err" id="newProfileErr"></span>
+        <span class="err" id="newPortfolioErr"></span>
       </form>
-      <!-- the user's other profiles, each a link to it and a Delete (see renderOtherProfiles) -->
-      <div id="otherProfiles" class="configrow" hidden>
-        <label>Other profiles</label>
-        <div id="otherProfileList" class="proflist"></div>
+      <!-- the user's other portfolios, each a link to it and a Delete (see renderOtherPortfolios) -->
+      <div id="otherPortfolios" class="configrow" hidden>
+        <label>Other portfolios</label>
+        <div id="otherPortfolioList" class="proflist"></div>
       </div>
       <!-- who is logged in (see server.py's /me), hidden until that is known -->
       <form id="logoutForm" class="configrow" hidden>

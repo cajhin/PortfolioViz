@@ -33,4 +33,4 @@ sqlite3 -bail "$db" < scripts/schema.sql >/dev/null
 sqlite3 -bail "$db" < scripts/seed.sql
 echo "created $db: $(sqlite3 "$db" 'SELECT count(*) FROM instrument') instruments, sqlite $(sqlite3 --version | cut -d' ' -f1)"
 echo "next — fetch the price history:"
-echo "  python3 scripts/update_prices.py --from $(sqlite3 "$db" "SELECT json_extract(value, '$') FROM setting WHERE profile = '' AND key = 'timelineStart'")"
+echo "  python3 scripts/update_prices.py --from $(sqlite3 "$db" "SELECT json_extract(value, '$') FROM setting WHERE portfolio = '' AND key = 'timelineStart'")"

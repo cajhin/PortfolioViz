@@ -905,8 +905,8 @@ function renderTrades() {
   document.getElementById('tradesHead').textContent =
     `${TRADES.length} Trades (${fmtMoney(feesTotal)} Fees)` +
     (cashRows.length ? ` · ${cashRows.length} cash bookings` : '');
-  // a manual profile's rows each name the ledger row they came from, and can be edited by it
-  const deletable = PROFILE_SOURCE === 'manual';
+  // a manual portfolio's rows each name the ledger row they came from, and can be edited by it
+  const deletable = PORTFOLIO_SOURCE === 'manual';
   document.getElementById('txDelHead').hidden = !deletable;
   const tb = document.querySelector('#tblTrades tbody');
   tb.replaceChildren(...rows.map(t => {
@@ -941,7 +941,7 @@ function renderTrades() {
   applySort('tblTrades');
 }
 
-// The profile's watchlist: registry instruments it tracks with no matching holding, open or
+// The portfolio's watchlist: registry instruments it tracks with no matching holding, open or
 // closed — the point of a row here with nothing to trade against it (see watchedInstruments).
 let WATCH_DRAWN_FOR = null;
 function renderWatch() {
@@ -1975,7 +1975,7 @@ function benchmarkCandidates() {
   [...ITEMS, ...CLOSED].forEach(d => {
     if (!seen.has(d.identifier)) seen.set(d.identifier, d);
   });
-  // every instrument on the profile's watchlist gets a shot too — the same pool renderWatch()
+  // every instrument on the portfolio's watchlist gets a shot too — the same pool renderWatch()
   // lists under "Watch": comparing against a name you don't own is exactly what that tab is for
   watchedInstruments()
     .filter(inst => !seen.has(inst.id) && !seen.has(inst.isin))
@@ -3429,12 +3429,12 @@ function load(...texts) {
   show(VIEW);
 }
 
-// Three rounds. The profile is not knowable until the global settings (which name the default
-// profile) is in hand, and the benchmark's own file is not knowable until the merged settings
+// Three rounds. The portfolio is not knowable until the global settings (which name the default
+// portfolio) is in hand, and the benchmark's own file is not knowable until the merged settings
 // (which name the benchmark by ISIN) and the registry (which maps that ISIN to a file) are. Only
 // the positions CSV is required; every other text may come back empty and ingest() copes.
 // A required text that fails rejects with the status as its message and the server's own reason —
-// the response body, e.g. "the database has no profiles yet" — as its `detail`. A 401 is no
+// the response body, e.g. "the database has no portfolios yet" — as its `detail`. A 401 is no
 // failure: nobody is logged in, and the login page takes over.
 const toLogin = () => {
   location.href = 'login.html?next=' + encodeURIComponent(location.pathname.split('/').pop() + location.search);
@@ -3449,9 +3449,9 @@ const get = (path, required) => !path ? Promise.resolve('')
 
 Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), get(SECTOR_COLORS_PATH)])
   .then(([baseConfigText, ...rest]) => {
-    resolveProfile(baseConfigText);
-    renderProfilePicker();
-    return get(PROFILE_CONFIG_PATH()).then(profileText => [mergeConfig(baseConfigText, profileText), ...rest]);
+    resolvePortfolio(baseConfigText);
+    renderPortfolioPicker();
+    return get(PORTFOLIO_CONFIG_PATH()).then(portfolioText => [mergeConfig(baseConfigText, portfolioText), ...rest]);
   })
   .then(([configText, instrumentsText, sourcesText, sectorColorsText]) => Promise.all([
     configText, get(CSV_PATH(), true), get(TRADES_PATH()), instrumentsText, sourcesText,
@@ -3466,17 +3466,17 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
     refreshManualTools();
   })
   .catch(err => {
-    if (err && err.message === EMPTY_PROFILE_MSG) { showEmptyProfile(); return; }
-    // a 404 for a profile the server does not list is no failure: there is none of that name yet
+    if (err && err.message === EMPTY_PORTFOLIO_MSG) { showEmptyPortfolio(); return; }
+    // a 404 for a portfolio the server does not list is no failure: there is none of that name yet
     // (or none at all) — offer to pick or create one. Anything else gets the loader and its reason.
     if (err && err.message === '404') {
-      PROFILES.then(list => list && !list.some(p => p.name === PROFILE) ? showNoProfile(list) : showLoader(err));
+      PORTFOLIOS.then(list => list && !list.some(p => p.name === PORTFOLIO) ? showNoPortfolio(list) : showLoader(err));
       return;
     }
     showLoader(err);
   });
 
-// The data could not be loaded, and it is not just a missing profile: say what failed, and offer
+// The data could not be loaded, and it is not just a missing portfolio: say what failed, and offer
 // the file picker.
 function showLoader(err) {
   document.getElementById('loader').hidden = false;
@@ -3511,28 +3511,28 @@ fetch('host', { cache: 'no-store' })
   })
   .catch(() => { /* not server.py — nothing to mark */ });
 
-// The profile picker above the Update button. The list comes from server.py's /profiles route
-// (one entry per profile in the database), so a page served any other way just hides it. Picking
-// one reloads with ?profile= — PROFILE is fixed for a page's lifetime, the same way the CSVs are,
-// and the URL keeps the choice bookmarkable and lets two profiles sit in two tabs. New profiles
-// are made on the Config tab (see createProfile), not here.
-const gotoProfile = name => {
+// The portfolio picker above the Update button. The list comes from server.py's /portfolios route
+// (one entry per portfolio in the database), so a page served any other way just hides it. Picking
+// one reloads with ?portfolio= — PORTFOLIO is fixed for a page's lifetime, the same way the CSVs are,
+// and the URL keeps the choice bookmarkable and lets two portfolios sit in two tabs. New portfolios
+// are made on the Config tab (see createPortfolio), not here.
+const gotoPortfolio = name => {
   const q = new URLSearchParams(location.search);
-  q.set('profile', name);
+  q.set('portfolio', name);
   location.search = q.toString();
 };
-// PROFILES is that list once it is in — or null, served without /profiles — for whoever else
-// needs to know which profiles exist (see showNoProfile).
-let PROFILES = Promise.resolve(null);
-function renderProfilePicker() {
-  const sel = document.getElementById('profileSel');
-  document.getElementById('profileFolder').textContent = `name: ${PROFILE}`;
-  document.getElementById('profileLabel').value = PROFILE;    // until /profiles brings the label
-  PROFILES = fetch('profiles', { cache: 'no-store' })
+// PORTFOLIOS is that list once it is in — or null, served without /portfolios — for whoever else
+// needs to know which portfolios exist (see showNoPortfolio).
+let PORTFOLIOS = Promise.resolve(null);
+function renderPortfolioPicker() {
+  const sel = document.getElementById('portfolioSel');
+  document.getElementById('portfolioFolder').textContent = `name: ${PORTFOLIO}`;
+  document.getElementById('portfolioLabel').value = PORTFOLIO;    // until /portfolios brings the label
+  PORTFOLIOS = fetch('portfolios', { cache: 'no-store' })
     .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
     .then(list => {
-      const me = list.find(p => p.name === PROFILE);
-      // a profile that does not exist gets no entry of its own — a blank one stands in, so the
+      const me = list.find(p => p.name === PORTFOLIO);
+      // a portfolio that does not exist gets no entry of its own — a blank one stands in, so the
       // first real pick is still a change
       const blank = me ? [] : [Object.assign(document.createElement('option'), { value: '', textContent: '—' })];
       sel.replaceChildren(...blank, ...list.map(p => {
@@ -3541,58 +3541,58 @@ function renderProfilePicker() {
         o.textContent = p.label || p.name;
         return o;
       }));
-      sel.value = me ? PROFILE : '';
+      sel.value = me ? PORTFOLIO : '';
       sel.hidden = !list.length;
-      renderOtherProfiles(list);
+      renderOtherPortfolios(list);
       if (!me) return list;
-      document.getElementById('profileLabel').value = me.label || PROFILE;
-      // every server.py that knows about profile kinds says one; none at all means the running
+      document.getElementById('portfolioLabel').value = me.label || PORTFOLIO;
+      // every server.py that knows about portfolio kinds says one; none at all means the running
       // server predates this page — say so, rather than let "no source" read as Parqet
       if (!('source' in me)) staleServer();
-      else applyProfileSource(me.source, me.label);
+      else applyPortfolioSource(me.source, me.label);
       return list;
     })
     .catch(() => { sel.hidden = true; return null; });
-  sel.addEventListener('change', () => gotoProfile(sel.value));
+  sel.addEventListener('change', () => gotoPortfolio(sel.value));
 }
 
-// A profile is controlled by Parqet or manually (its "source", which server.py reports). That decides the Transactions tab: a Parqet profile's
+// A portfolio is controlled by Parqet or manually (its "source", which server.py reports). That decides the Transactions tab: a Parqet portfolio's
 // list is read-only, with a note saying where it comes from; a manual one gets the import, a
-// delete per row and the add form. server.py and the scripts refuse a Parqet profile regardless, so
-// hiding the tools here is a courtesy, not the guard. Unknown (no /profiles to ask) shows neither.
-let PROFILE_SOURCE = null;
-function applyProfileSource(source, label) {
-  PROFILE_SOURCE = source === 'manual' ? 'manual' : 'parqet';
-  const manual = PROFILE_SOURCE === 'manual';
+// delete per row and the add form. server.py and the scripts refuse a Parqet portfolio regardless, so
+// hiding the tools here is a courtesy, not the guard. Unknown (no /portfolios to ask) shows neither.
+let PORTFOLIO_SOURCE = null;
+function applyPortfolioSource(source, label) {
+  PORTFOLIO_SOURCE = source === 'manual' ? 'manual' : 'parqet';
+  const manual = PORTFOLIO_SOURCE === 'manual';
   document.getElementById('txImport').hidden = !manual;
   document.getElementById('txAdd').hidden = !manual;
   document.getElementById('txAddRow').hidden = !manual;
   const note = document.getElementById('txSourceNote');
   note.hidden = manual;
-  note.textContent = `All ${label || PROFILE} transactions are imported from Parqet. Create a ` +
-    `'manual' profile to edit transactions or import Trade Republic exports.`;
+  note.textContent = `All ${label || PORTFOLIO} transactions are imported from Parqet. Create a ` +
+    `'manual' portfolio to edit transactions or import Trade Republic exports.`;
   // the delete column depends on this, and the list may already be drawn without it
   TRADES_DRAWN_FOR = null;
   if (VIEW === 'trades' && ITEMS.length) renderTrades();
   refreshManualTools();
-  document.getElementById('profileSource').textContent =
+  document.getElementById('portfolioSource').textContent =
     manual ? '· manual — transactions entered or imported here' : '· controlled by Parqet — no manual changes';
-  document.getElementById('emptyProfileHow').innerHTML = manual
+  document.getElementById('emptyPortfolioHow').innerHTML = manual
     ? 'Import a Trade Republic transaction export, or add transactions by hand, below.'
     : 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.';
 }
 
-// The Config tab's "Other profiles": every profile the user may open but this one, each a link to
+// The Config tab's "Other portfolios": every portfolio the user may open but this one, each a link to
 // it and — where they may change it — a Delete. That purges it on the server (all its data, for
-// good), so it asks first; the current profile is not offered, so the page never
+// good), so it asks first; the current portfolio is not offered, so the page never
 // deletes what it is showing.
-function renderOtherProfiles(list) {
-  const others = list.filter(p => p.name !== PROFILE);
-  document.getElementById('otherProfiles').hidden = !others.length;
-  document.getElementById('otherProfileList').replaceChildren(...others.map(p => {
+function renderOtherPortfolios(list) {
+  const others = list.filter(p => p.name !== PORTFOLIO);
+  document.getElementById('otherPortfolios').hidden = !others.length;
+  document.getElementById('otherPortfolioList').replaceChildren(...others.map(p => {
     const row = document.createElement('div');
     const link = Object.assign(document.createElement('a'), { href: '#', textContent: p.label || p.name });
-    link.addEventListener('click', e => { e.preventDefault(); gotoProfile(p.name); });
+    link.addEventListener('click', e => { e.preventDefault(); gotoPortfolio(p.name); });
     const what = Object.assign(document.createElement('span'), { className: 'muted',
       textContent: `${p.name} · ${p.source}${p.write === false ? ' · read only' : ''}` });
     row.append(link, what);
@@ -3600,17 +3600,17 @@ function renderOtherProfiles(list) {
     const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel', textContent: 'Delete' });
     const msg = Object.assign(document.createElement('span'), { className: 'err' });
     btn.addEventListener('click', async () => {
-      if (!confirm(`Delete profile "${p.label || p.name}" (${p.name}) and all its data — positions, ` +
+      if (!confirm(`Delete portfolio "${p.label || p.name}" (${p.name}) and all its data — positions, ` +
                    'transactions, settings? This cannot be undone.')) return;
       btn.disabled = true;
       msg.textContent = '';
       try {
-        const r = await fetch(`profile-delete?profile=${encodeURIComponent(p.name)}`, { method: 'POST' });
+        const r = await fetch(`portfolio-delete?portfolio=${encodeURIComponent(p.name)}`, { method: 'POST' });
         if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : (await r.text()).trim() || routeFailure(r));
         row.remove();
-        [...document.getElementById('profileSel').options].find(o => o.value === p.name)?.remove();
-        if (!document.getElementById('otherProfileList').children.length)
-          document.getElementById('otherProfiles').hidden = true;
+        [...document.getElementById('portfolioSel').options].find(o => o.value === p.name)?.remove();
+        if (!document.getElementById('otherPortfolioList').children.length)
+          document.getElementById('otherPortfolios').hidden = true;
       } catch (err) {
         msg.textContent = `Could not delete: ${err.message}`;
         btn.disabled = false;
@@ -3622,13 +3622,13 @@ function renderOtherProfiles(list) {
 }
 
 // server.py is a long-running process, so it can be older than the page it serves — and then
-// lacks routes this page relies on. Two ways that shows: /profiles lacks a field every current
+// lacks routes this page relies on. Two ways that shows: /portfolios lacks a field every current
 // server sends; or a route answers 404, which from server.py means "no such route" — routeFailure
 // turns that into the same advice instead of a bare "File not found".
 const STALE_MSG = 'The server is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
 function staleServer() {
-  document.getElementById('profileSource').textContent = '· ' + STALE_MSG;
-  document.getElementById('emptyProfileHow').textContent = STALE_MSG;
+  document.getElementById('portfolioSource').textContent = '· ' + STALE_MSG;
+  document.getElementById('emptyPortfolioHow').textContent = STALE_MSG;
   reportError('server', STALE_MSG);
 }
 const routeFailure = r => r.status === 404 ? STALE_MSG : r.status === 401 ? 'Logged out — reload to log in again.'
@@ -3649,21 +3649,21 @@ document.getElementById('logoutForm').addEventListener('submit', async e => {
   location.href = 'login.html';
 });
 
-// The Config tab's first row: renames the current profile's label — its name,
-// and so the ?profile= in every URL, stays as it is. The picker's own entry follows without a
+// The Config tab's first row: renames the current portfolio's label — its name,
+// and so the ?portfolio= in every URL, stays as it is. The picker's own entry follows without a
 // reload; nothing else on the page shows the label.
-document.getElementById('profileLabelForm').addEventListener('submit', async e => {
+document.getElementById('portfolioLabelForm').addEventListener('submit', async e => {
   e.preventDefault();
-  const msg = document.getElementById('profileLabelMsg');
-  const label = document.getElementById('profileLabel').value.trim();
+  const msg = document.getElementById('portfolioLabelMsg');
+  const label = document.getElementById('portfolioLabel').value.trim();
   if (!label) return;
   msg.className = '';
   msg.textContent = '';
   try {
-    const r = await fetch(`profile-label?profile=${encodeURIComponent(PROFILE)}`,
+    const r = await fetch(`portfolio-label?portfolio=${encodeURIComponent(PORTFOLIO)}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label }) });
     if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : r.statusText || `HTTP ${r.status}`);
-    const opt = [...document.getElementById('profileSel').options].find(o => o.value === PROFILE);
+    const opt = [...document.getElementById('portfolioSel').options].find(o => o.value === PORTFOLIO);
     if (opt) opt.textContent = label;
     msg.className = 'muted';
     msg.textContent = 'Saved';
@@ -3673,66 +3673,66 @@ document.getElementById('profileLabelForm').addEventListener('submit', async e =
   }
 });
 
-// The Config tab's "Create new profile": derives the profile's name from the label typed ("Family
+// The Config tab's "Create new portfolio": derives the portfolio's name from the label typed ("Family
 // Trust" → family-trust), has server.py create it, empty, and switches to it. Empty until its first refresh — the page shows
-// showEmptyProfile's note there.
-async function createProfile(label) {
-  const err = document.getElementById('newProfileErr');
+// showEmptyPortfolio's note there.
+async function createPortfolio(label) {
+  const err = document.getElementById('newPortfolioErr');
   err.textContent = '';
   const name = label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   if (!name) { err.textContent = `"${label}" has no letters or digits to name a directory after.`; return; }
   try {
-    const source = document.getElementById('newProfileSource').value;
-    const r = await fetch('profiles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const source = document.getElementById('newPortfolioSource').value;
+    const r = await fetch('portfolios', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({ name, label, source }) });
     // statusText, not the body: send_error's body is an HTML page, its status line the message
     if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : r.statusText || `HTTP ${r.status}`);
-    gotoProfile(name);
+    gotoPortfolio(name);
   } catch (e) {
-    err.textContent = `Could not create profile "${label}": ${e.message}`;
+    err.textContent = `Could not create portfolio "${label}": ${e.message}`;
   }
 }
-document.getElementById('newProfileForm').addEventListener('submit', e => {
+document.getElementById('newPortfolioForm').addEventListener('submit', e => {
   e.preventDefault();
-  const label = document.getElementById('newProfileName').value.trim();
-  if (label) createProfile(label);
+  const label = document.getElementById('newPortfolioName').value.trim();
+  if (label) createPortfolio(label);
 });
 
-// The step before showEmptyProfile, in the same panel: the profile asked for does not exist —
+// The step before showEmptyPortfolio, in the same panel: the portfolio asked for does not exist —
 // none does yet, on a new database, or just not this name. The picker (when there is anything to
-// pick) and the Config tab's "Create new profile" form move in; creating one switches to it, and
-// being new it is empty, so showEmptyProfile takes over from there.
-function showNoProfile(list) {
-  document.getElementById('emptyProfileMsg').hidden = true;
-  const msg = document.getElementById('noProfileMsg');
-  msg.textContent = list.length ? `There is no profile "${PROFILE}". Pick one, or create a new one.`
-                                : 'There are no profiles yet. Create the first one:';
+// pick) and the Config tab's "Create new portfolio" form move in; creating one switches to it, and
+// being new it is empty, so showEmptyPortfolio takes over from there.
+function showNoPortfolio(list) {
+  document.getElementById('emptyPortfolioMsg').hidden = true;
+  const msg = document.getElementById('noPortfolioMsg');
+  msg.textContent = list.length ? `There is no portfolio "${PORTFOLIO}". Pick one, or create a new one.`
+                                : 'There are no portfolios yet. Create the first one:';
   msg.hidden = false;
-  const slot = document.getElementById('emptyProfileSlot');
-  if (list.length) slot.appendChild(document.getElementById('profileSel'));
-  slot.appendChild(document.getElementById('newProfileForm'));
-  document.getElementById('emptyProfile').hidden = false;
+  const slot = document.getElementById('emptyPortfolioSlot');
+  if (list.length) slot.appendChild(document.getElementById('portfolioSel'));
+  slot.appendChild(document.getElementById('newPortfolioForm'));
+  document.getElementById('emptyPortfolio').hidden = false;
 }
 
-// A profile with no open position — new, not yet refreshed — has nothing for #app to draw, so it
+// A portfolio with no open position — new, not yet refreshed — has nothing for #app to draw, so it
 // stays hidden and this note stands in for it. The picker moves in with it, or there would be no
 // way out short of editing the URL.
-function showEmptyProfile() {
-  document.getElementById('emptyProfileName').textContent = PROFILE;
-  if (!PROFILE_SOURCE) document.getElementById('emptyProfileHow').textContent = 'Fill it, then reload.';
-  const slot = document.getElementById('emptyProfileSlot');
-  slot.appendChild(document.getElementById('profileSel'));
+function showEmptyPortfolio() {
+  document.getElementById('emptyPortfolioName').textContent = PORTFOLIO;
+  if (!PORTFOLIO_SOURCE) document.getElementById('emptyPortfolioHow').textContent = 'Fill it, then reload.';
+  const slot = document.getElementById('emptyPortfolioSlot');
+  slot.appendChild(document.getElementById('portfolioSel'));
   slot.appendChild(document.getElementById('txImport'));
   // the list itself, empty: its header and add row are how the first transaction gets in
   slot.appendChild(document.getElementById('tblTrades'));
   slot.appendChild(document.getElementById('txAdd'));
   refreshManualTools();
-  document.getElementById('emptyProfile').hidden = false;
+  document.getElementById('emptyPortfolio').hidden = false;
 }
 
 // The Transactions tab's "Import Trade Republic file": the export goes to server.py's /import-tr route,
-// which keeps it under the profile's exports/ and runs import_tr.py on it. That script's own
+// which keeps it under the portfolio's exports/ and runs import_tr.py on it. That script's own
 // report — how many rows were new, how many already imported, anything it could not place — is
 // shown as-is; a reload then picks up the rebuilt CSVs, the same as after Update.
 document.getElementById('trImportForm').addEventListener('submit', async e => {
@@ -3745,7 +3745,7 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
   log.hidden = false;
   log.textContent = `Importing ${file.name}…`;
   try {
-    const r = await fetch(`import-tr?profile=${encodeURIComponent(PROFILE)}&name=${encodeURIComponent(file.name)}`,
+    const r = await fetch(`import-tr?portfolio=${encodeURIComponent(PORTFOLIO)}&name=${encodeURIComponent(file.name)}`,
                           { method: 'POST', body: file });
     const text = (await r.text()).trim();
     // a route-level refusal (send_error) comes back as an HTML page — its status line says it
@@ -3759,7 +3759,7 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
 });
 document.getElementById('manualReload').addEventListener('click', () => reloadOnTransactions());
 
-// Every change to a manual profile rebuilds its CSVs on the server, and a reload is what brings
+// Every change to a manual portfolio rebuilds its CSVs on the server, and a reload is what brings
 // them in (the same as after Update) — back onto this tab, so the list shows the change at once.
 function reloadOnTransactions() {
   const q = new URLSearchParams(location.search);
@@ -3770,13 +3770,13 @@ function reloadOnTransactions() {
 
 // "Add transaction": buys and sells entered by hand, for a virtual demo portfolio. server.py's
 // /manual-tx route runs manual_tx.py, which validates (instrument in the registry, no sale beyond
-// what is held, no future date), writes the profile's manual_ledger.csv and rebuilds its CSVs.
+// what is held, no future date), writes the portfolio's manual_ledger.csv and rebuilds its CSVs.
 // The instruments offered are the registry's priced ones — a virtual position is tracked by its
 // price series — plus "+ New instrument…", which registers one first (see the dialog below). The
 // price is prefilled with that series' close on the date picked, editable after.
 //
-// Two things must be in hand before this can draw: the profile's kind (from /profiles, see
-// applyProfileSource) and the registry (from ingest). Either can land first, so both call this and
+// Two things must be in hand before this can draw: the portfolio's kind (from /portfolios, see
+// applyPortfolioSource) and the registry (from ingest). Either can land first, so both call this and
 // it simply waits for the other.
 const NEW_INSTRUMENT = '+new';            // not an ISIN, so never confused with one
 const TX_FORM_KEY = 'portfolioviz.txForm';   // date and type, kept across the reload an add causes
@@ -3788,7 +3788,7 @@ function txOption(inst) {
   return o;
 }
 function refreshManualTools() {
-  if (PROFILE_SOURCE !== 'manual' || !INSTRUMENTS.size) return;
+  if (PORTFOLIO_SOURCE !== 'manual' || !INSTRUMENTS.size) return;
   const sel = document.getElementById('txIsin');
   if (sel.options.length) return;
   const priced = [...new Set(INSTRUMENTS.values())]
@@ -3879,7 +3879,7 @@ document.getElementById('txIsin').addEventListener('change', e => {
 async function postManualTx(query, tx, msg = document.getElementById('txMsg')) {
   msg.textContent = '';
   try {
-    const r = await fetch(`manual-tx?profile=${encodeURIComponent(PROFILE)}${query}`,
+    const r = await fetch(`manual-tx?portfolio=${encodeURIComponent(PORTFOLIO)}${query}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tx || {}) });
     const text = (await r.text()).trim();
     if (!r.ok) throw new Error(text && !text.startsWith('<') ? text.split('\n').pop() : routeFailure(r));
@@ -3901,7 +3901,7 @@ document.getElementById('txForm').addEventListener('submit', e => {
         shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
 });
 
-// A row's Edit, in a manual profile's list (see renderTrades): an editor row opens under it, one
+// A row's Edit, in a manual portfolio's list (see renderTrades): an editor row opens under it, one
 // at a time. A buy or sell entered by hand can be changed — date, type, shares, price, fee; its
 // instrument stays (delete and add again for another). An imported row is what the broker booked,
 // so it can only be deleted — set aside, so re-importing the same export does not revive it.
@@ -4096,8 +4096,8 @@ document.getElementById('instForm').addEventListener('submit', async e => {
 // route, the only thing here that isn't a plain static file. A reload afterwards is simpler and
 // more honest than trying to invalidate every cache (SERIES_CACHE, AS_OF_CACHE, …) this page
 // keeps: a fresh load re-fetches the CSVs the script just rewrote, the same way opening the page
-// after running it by hand always has. Only this profile's instruments are fetched — what it holds,
-// has ever held, watches, or benchmarks against (see update_prices.py --profile).
+// after running it by hand always has. Only this portfolio's instruments are fetched — what it holds,
+// has ever held, watches, or benchmarks against (see update_prices.py --portfolio).
 //
 // Recorded here, in real wall-clock time, is the only place an actual fetch *time* exists at
 // all — a stored close only ever carries the trading date. renderHeaderTotals reads this back to put
@@ -4111,7 +4111,7 @@ document.getElementById('btnUpdatePrices').addEventListener('click', async () =>
   btn.disabled = true;
   btn.textContent = 'Updating…';
   try {
-    const r = await fetch(`update-prices?profile=${encodeURIComponent(PROFILE)}`, { method: 'POST' });
+    const r = await fetch(`update-prices?portfolio=${encodeURIComponent(PORTFOLIO)}`, { method: 'POST' });
     const text = await r.text();
     if (!r.ok) throw new Error(text.trim().split('\n').pop() || `HTTP ${r.status}`);
     try { localStorage.setItem(LAST_FETCH_KEY, new Date().toISOString()); }

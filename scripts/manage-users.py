@@ -4,17 +4,17 @@ manage-accounts.py.
 
     manage-users.py add     <user>                          # asks for the password
     manage-users.py passwd  <user>                          # asks for the new one; logs them out
-    manage-users.py grant   <user> <profile>... [--read-only]
-    manage-users.py revoke  <user> <profile>...
+    manage-users.py grant   <user> <portfolio>... [--read-only]
+    manage-users.py revoke  <user> <portfolio>...
     manage-users.py delete  <user>
     manage-users.py list-users
-    manage-users.py list-profiles                           # every profile, and who may open it
+    manage-users.py list-portfolios                           # every portfolio, and who may open it
 
-server.py lets nobody in without a login, and shows a user only the profiles granted to them —
-scripts/db.py's `user_profile`. Anyone who can reach the page can also create a user there
-("Create account"), who then sees only the profiles they create. Every profile that existed
+server.py lets nobody in without a login, and shows a user only the portfolios granted to them —
+scripts/db.py's `user_portfolio`. Anyone who can reach the page can also create a user there
+("Create account"), who then sees only the portfolios they create. Every portfolio that existed
 before, or that a script made (an agent's account, a Parqet refresh), is granted here. A grant
-lets the user change the profile too (rename, import, transactions), unless --read-only.
+lets the user change the portfolio too (rename, import, transactions), unless --read-only.
 
 A password is read from the terminal, never the command line (it would land in the shell's
 history); piped in, its first line is the password. Every answer is one JSON object; on error
@@ -61,31 +61,31 @@ def passwd(name):
     return {"user": name}
 
 
-def grant(name, profiles, read_only=False):
+def grant(name, portfolios, read_only=False):
     existing(name)
-    missing = [p for p in profiles if not db.profile(p)]
+    missing = [p for p in portfolios if not db.portfolio(p)]
     if missing:
-        raise Refusal(f"no profile {', '.join(map(repr, missing))}",
-                      "manage-users.py list-profiles lists them")
+        raise Refusal(f"no portfolio {', '.join(map(repr, missing))}",
+                      "manage-users.py list-portfolios lists them")
     with db.tx():
-        for p in profiles:
+        for p in portfolios:
             db.grant(name, p, not read_only)
-    return {"user": name, "profiles": {p: db.access(name, p) for p in profiles}}
+    return {"user": name, "portfolios": {p: db.access(name, p) for p in portfolios}}
 
 
-def revoke(name, profiles):
+def revoke(name, portfolios):
     existing(name)
     with db.tx():
-        gone = [p for p in profiles if db.revoke(name, p)]
+        gone = [p for p in portfolios if db.revoke(name, p)]
     return {"user": name, "revoked": gone}
 
 
-def list_profiles():
+def list_portfolios():
     users = db.users()
-    return {"profiles": [{"name": p["name"], "label": p["label"], "source": p["source"],
+    return {"portfolios": [{"name": p["name"], "label": p["label"], "source": p["source"],
                           "allow_cli": bool(p["allow_cli"]),
-                          "users": {u["name"]: u["profiles"][p["name"]] for u in users if p["name"] in u["profiles"]}}
-                         for p in db.profiles()]}
+                          "users": {u["name"]: u["portfolios"][p["name"]] for u in users if p["name"] in u["portfolios"]}}
+                         for p in db.portfolios()]}
 
 
 def delete(name):
@@ -96,11 +96,11 @@ def delete(name):
 def configure(sub):
     for cmd in ("add", "passwd", "delete"):
         sub.add_parser(cmd).add_argument("user")
-    g = sub.add_parser("grant"); g.add_argument("user"); g.add_argument("profile", nargs="+")
+    g = sub.add_parser("grant"); g.add_argument("user"); g.add_argument("portfolio", nargs="+")
     g.add_argument("--read-only", action="store_true")
-    r = sub.add_parser("revoke"); r.add_argument("user"); r.add_argument("profile", nargs="+")
+    r = sub.add_parser("revoke"); r.add_argument("user"); r.add_argument("portfolio", nargs="+")
     sub.add_parser("list-users")
-    sub.add_parser("list-profiles")
+    sub.add_parser("list-portfolios")
 
 
 def dispatch(a):
@@ -109,13 +109,13 @@ def dispatch(a):
     if a.cmd == "passwd":
         return passwd(a.user)
     if a.cmd == "grant":
-        return grant(a.user, a.profile, a.read_only)
+        return grant(a.user, a.portfolio, a.read_only)
     if a.cmd == "revoke":
-        return revoke(a.user, a.profile)
+        return revoke(a.user, a.portfolio)
     if a.cmd == "delete":
         return delete(a.user)
-    if a.cmd == "list-profiles":
-        return list_profiles()
+    if a.cmd == "list-portfolios":
+        return list_portfolios()
     return {"users": db.users()}
 
 
