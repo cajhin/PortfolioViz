@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""Fetch daily price history into gen_prices/, driven by registry/price_sources.csv.
+"""Fetch daily price history into the database, driven by the registry's price sources.
 
-Nothing about *how* to fetch an instrument lives in the fetched file any more — the registry is
-the single place that maps an instrument to a source, a symbol and a quote currency, so you can
-answer "what am I tracking, and from where?" by reading one table instead of opening every series.
+Nothing about *how* to fetch an instrument lives in its series — the registry (table
+price_source) is the single place that maps an instrument to a source, a symbol and a quote
+currency, so "what am I tracking, and from where?" is one table, not every series.
 
     python3 scripts/update_prices.py                       # update every instrument in the registry
     python3 scripts/update_prices.py --profile main        # just what that profile holds/watches/benchmarks
     python3 scripts/update_prices.py roche                 # just this one (slug or id)
     python3 scripts/update_prices.py roche --from 2019-01-01   # also backfill, from that date
 
-The registry and gen_prices/ are shared by every profile, so --profile narrows the run rather
-than redirecting it: the instruments in private-profiles/<name>/'s positions and activities (open
-and closed alike — a closed position's series keeps extending), its profile.json watchlist, and
-its benchmark. _latest.csv is then merged into, not rewritten, so other profiles' rows survive.
+The registry and the prices are shared by every profile, so --profile narrows the run rather
+than redirecting it: the instruments in that profile's positions and activities (open and closed
+alike — a closed position's series keeps extending), its watchlist, and its benchmark.
 
 One row per instrument, keyed by its registry `id` — not by ISIN, since a synthetic instrument
 (a benchmark, a second listing kept as its own row for a thin ISIN) may not have one. If a listing
-needs a second source, register it as a second instrument (see registry/instruments.csv) rather
+needs a second source, register it as a second instrument (table instrument) rather
 than adding a fallback row here; nothing here picks between two sources for one instrument.
 
 Prices are converted to the portfolio currency on write, through the `fx_symbol` the registry
@@ -25,88 +24,42 @@ names, and the untouched quote is kept alongside in `close_raw`. Converting here
 the browser keeps the page's arithmetic single-currency, and keeping the raw means a bad FX day
 can be recomputed rather than re-fetched.
 
-A live price fresher than any close is kept apart from the closes, in _live.csv (see live_price):
+A live price fresher than any close is kept apart from the closes, in live_price (see live_price()):
 a US stock's pre-market price from Yahoo, a European one's gettex mid while its home session is
 open (Yahoo's European prices run ~15 minutes late). It is never written into a series — a
 pre-market price is not a close — and the next run outside those windows drops it again.
 
-Written per instrument:  gen_prices/<id>-<slug>.csv   date,close,close_raw,quote_currency,source
-Written once per run:    gen_prices/_latest.csv       id,date,close,source
-                         gen_prices/_live.csv         id,date,at,price,price_raw,quote_currency,source
-FX series are cached in  gen_fx/<PAIR>.csv            date,rate
+Written per instrument:  table price        id,date,close,close_raw,quote_currency,source
+                         table live_price   id,date,at,price,price_raw,quote_currency,source
+FX series are cached in  table fx_rate      pair,date,rate
+The newest close per instrument is the view latest_close — nothing to write.
 """
-import csv, io, json, os, subprocess, sys, time
+import json, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-SCRIPTS = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
-PROFILES = os.path.join(ROOT, "private-profiles")
-DIR = os.path.join(ROOT, "gen_prices")
-FX_DIR = os.path.join(ROOT, "gen_fx")
-REGISTRY = os.path.join(ROOT, "registry")
+import db
+from db import portfolio_currency, timeline_start
+
 UA = "Mozilla/5.0"
 FALLBACK_START = "2019-08-20"
 PLACEHOLDER_RUN = 5   # a shorter identical run is coincidence, not a dormant listing
 MAX_WORKERS = 4
 
 
-def config():
-    try:
-        with open(os.path.join(ROOT, "config.json")) as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return {}
-
-
-def timeline_start():
-    # config.json is maintained by agents, not this script — fall back quietly if it is missing
-    # or malformed rather than block a data refresh over a settings file
-    return config().get("timelineStart") or FALLBACK_START
-
-
-def portfolio_currency():
-    return config().get("currency") or "EUR"
-
-
 def profile_instruments(name):
     """Every id a profile has any use for a series of: held ever, watched, or benchmarked."""
-    d = os.path.join(PROFILES, name)
-    if not os.path.isfile(os.path.join(d, "positions.csv")):
-        sys.exit(f"no profile {name!r} — expected {d}/positions.csv")
-    ids = set()
-    for f in ("positions.csv", "activities.csv"):
-        path = os.path.join(d, f)
-        if os.path.exists(path):
-            with open(path) as fh:
-                ids |= {r["identifier"] for r in csv.DictReader(fh) if r.get("identifier")}
-    try:
-        with open(os.path.join(d, "profile.json")) as fh:
-            own = json.load(fh)
-    except (OSError, ValueError):
-        own = {}
+    if not db.profile(name):
+        sys.exit(f"no profile {name!r}")
+    ids = {r["identifier"] for r in db.rows(
+        "SELECT identifier FROM position WHERE profile = ? UNION SELECT identifier FROM activity WHERE profile = ?",
+        (name, name)) if r["identifier"]}
+    own = db.settings(name)
     ids |= set(own.get("watchlist") or [])
-    bench = own.get("benchmarkIsin") or config().get("benchmarkIsin")
+    bench = own.get("benchmarkIsin") or db.config().get("benchmarkIsin")
     if bench:
         ids.add(bench)
     return ids
-
-
-def read_registry(name):
-    path = os.path.join(REGISTRY, name)
-    if not os.path.exists(path):
-        sys.exit(f"missing {path} — the registry is the source of truth for what to fetch")
-    with open(path) as fh:
-        return list(csv.DictReader(fh))
-
-
-def read_series(path):
-    """Existing rows as {date: row}. Tolerates the old two-column format."""
-    if not os.path.exists(path):
-        return {}
-    with open(path) as fh:
-        body = "".join(l for l in fh if not l.startswith("#"))
-    return {r["date"]: r for r in csv.DictReader(io.StringIO(body)) if r.get("date")}
 
 
 def as_stamp(day):
@@ -173,23 +126,18 @@ FX_CACHE = {}
 
 
 def fx_series(pair, since):
-    """Daily rates for a Yahoo FX symbol (EURUSD=X), cached on disk and in memory."""
+    """Daily rates for a Yahoo FX symbol (EURUSD=X), cached in the database and in memory."""
     if pair in FX_CACHE:
         return FX_CACHE[pair]
-    os.makedirs(FX_DIR, exist_ok=True)
-    path = os.path.join(FX_DIR, pair.replace("=X", "") + ".csv")
-    rows = {d: float(r["rate"]) for d, r in read_series(path).items()}
+    rows = db.fx(pair)
     start = max(rows) if rows else since
     try:
-        rows.update(fetch(pair, as_stamp(start)))
+        fresh = fetch(pair, as_stamp(start))
     except LookupError as err:
         print(f"  fx {pair}: {err}")
-    if rows:
-        with open(path, "w", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(["date", "rate"])
-            for d in sorted(rows):
-                w.writerow([d, rows[d]])
+        fresh = {}
+    db.write_fx(pair, fresh)
+    rows.update(fresh)
     FX_CACHE[pair] = rows
     return rows
 
@@ -282,8 +230,7 @@ def live_price(inst, src, meta, rates):
 
 def update_one(inst, src, backfill=None):
     iid, slug = inst["id"], inst["slug"]
-    path = os.path.join(DIR, f"{iid}-{slug}.csv" if slug else f"{iid}.csv")
-    rows = read_series(path)
+    rows = db.series_dates(iid)
 
     symbol, ccy = src["symbol"].strip(), (src["quote_currency"] or portfolio_currency()).strip()
 
@@ -299,30 +246,21 @@ def update_one(inst, src, backfill=None):
         fresh, meta = {}, {}
 
     rates = fx_series(src["fx_symbol"], timeline_start()) if src["fx_symbol"] else None
-    added = 0
+    home = portfolio_currency()
+    new = []
     for date, raw in fresh.items():
-        close = raw if ccy == portfolio_currency() else to_portfolio_ccy(raw, ccy, rates, date)
-        if close is None:
-            continue
-        if date not in rows:
-            added += 1
-        rows[date] = {"date": date, "close": close, "close_raw": raw,
-                      "quote_currency": ccy, "source": symbol}
+        close = raw if ccy == home else to_portfolio_ccy(raw, ccy, rates, date)
+        if close is not None:
+            new.append({"date": date, "close": close, "close_raw": raw,
+                        "quote_currency": ccy, "source": symbol})
+    added = sum(1 for r in new if r["date"] not in rows)
+    rows |= {r["date"] for r in new}
 
     if not rows:
         print(f"  {iid} [{slug}]: nothing stored")
         return None
-    os.makedirs(DIR, exist_ok=True)
-    with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["date", "close", "close_raw", "quote_currency", "source"])
-        w.writeheader()
-        for date in sorted(rows):
-            r = rows[date]
-            w.writerow({k: r.get(k, "") for k in
-                        ["date", "close", "close_raw", "quote_currency", "source"]})
-    span = f"{min(rows)} → {max(rows)}"
-    print(f"  {iid} [{slug}]: {len(rows)} rows, {span} (+{added} new)")
-    last = rows[max(rows)]
+    db.write_series(iid, new)
+    print(f"  {iid} [{slug}]: {len(rows)} rows, {min(rows)} → {max(rows)} (+{added} new)")
     try:
         live = live_price(inst, src, meta, rates) if meta else None
     except (LookupError, KeyError, IndexError, TypeError) as err:
@@ -330,45 +268,7 @@ def update_one(inst, src, backfill=None):
         live = None
     if live:
         print(f"  {iid} [{slug}]: live {live['price']} ({live['source']}, {live['at']})")
-    return {"id": iid, "date": last["date"], "close": last["close"], "source": last["source"]}, live
-
-
-def write_latest(latest, merge=False):
-    """The freshest close per instrument — what the page reads instead of a hand-kept price file.
-
-    merge keeps the rows of instruments this run did not touch — a --profile run covers only a
-    slice of the registry, and the other profiles still read this same file."""
-    path = os.path.join(DIR, "_latest.csv")
-    if merge and os.path.exists(path):
-        with open(path) as fh:
-            kept = {r["id"]: r for r in csv.DictReader(fh) if r.get("id")}
-        kept.update({r["id"]: r for r in latest})
-        latest = list(kept.values())
-    with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["id", "date", "close", "source"])
-        w.writeheader()
-        w.writerows(sorted(latest, key=lambda r: r["id"]))
-    print(f"{path}: {len(latest)} instruments")
-
-
-def write_live(live, done, merge=False):
-    """The live price per instrument, where there is one fresher than its close (see live_price).
-
-    Every instrument this run fetched (`done`) either gets its new row or loses its old one — a
-    pre-market price must not outlive the session that superseded it. With merge, instruments
-    this run did not touch keep theirs, as in write_latest."""
-    path = os.path.join(DIR, "_live.csv")
-    kept = {}
-    if merge and os.path.exists(path):
-        with open(path) as fh:
-            kept = {r["id"]: r for r in csv.DictReader(fh) if r.get("id") and r["id"] not in done}
-    kept.update({r["id"]: r for r in live})
-    fields = ["id", "date", "at", "price", "price_raw", "quote_currency", "source"]
-    with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader()
-        w.writerows(sorted(kept.values(), key=lambda r: r["id"]))
-    print(f"{path}: {len(kept)} live prices")
+    return iid, live
 
 
 def main():
@@ -386,20 +286,16 @@ def main():
     if len(args) > 1 or (args and profile):
         sys.exit(f"usage: {sys.argv[0]} [<slug|id> | --profile NAME] [--from YYYY-MM-DD]")
 
-    instruments = {r["id"]: r for r in read_registry("instruments.csv")}
-    sources = {}
-    for s in read_registry("price_sources.csv"):
-        if s["id"] in sources:
-            sys.exit(f"registry/price_sources.csv: duplicate row for {s['id']!r} — "
-                     f"one row per instrument now; register a second instrument instead")
-        sources[s["id"]] = s
+    # one price_source row per instrument is the table's own key — no duplicate to refuse here
+    instruments = {r["id"]: r for r in db.instruments()}
+    sources = db.sources()
 
     wanted = list(instruments.values())
     if args:
-        key = args[0].removesuffix(".csv")
+        key = args[0]
         wanted = [i for i in instruments.values() if key in (i["id"], i["slug"])]
         if not wanted:
-            sys.exit(f"no instrument matching {key!r} in registry/instruments.csv")
+            sys.exit(f"no instrument matching {key!r} in the registry")
     if profile:
         relevant = profile_instruments(profile)
         wanted = [i for i in instruments.values() if i["id"] in relevant or i["isin"] in relevant]
@@ -417,25 +313,21 @@ def main():
         print(f"  {inst['id']} [{inst['slug']}]: {src['note'] or 'manual, no symbol'} — skipped")
 
     # every fx pair the jobs below will need, fetched here and not in the pool: fx_series()
-    # caches in memory and rewrites gen_fx/<PAIR>.csv on every call, and two worker threads
-    # racing the same pair would duplicate the fetch and could interleave the write
+    # caches in memory, and two worker threads racing the same pair would duplicate the fetch
     for pair in sorted({src["fx_symbol"] for _, src in jobs if src["fx_symbol"]}):
         fx_series(pair, timeline_start())
 
-    latest, live = [], []
+    stored, live = 0, []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = [pool.submit(update_one, inst, src, backfill) for inst, src in jobs]
         for future in as_completed(futures):
-            row, now = future.result() or (None, None)
-            if row:
-                latest.append(row)
+            iid, now = future.result() or (None, None)
+            stored += bool(iid)
             if now:
                 live.append(now)
-    # a partial run — one profile, or one instrument — merges into _latest.csv rather than
-    # replacing it, so every other instrument keeps its row
-    if latest:
-        write_latest(latest, merge=bool(profile or args))
-    write_live(live, {inst["id"] for inst, _ in jobs}, merge=bool(profile or args))
+    # every instrument this run fetched gets its live row replaced or dropped; the rest keep theirs
+    db.set_live(live, {inst["id"] for inst, _ in jobs})
+    print(f"{stored} instruments stored, {len(live)} live prices")
 
 
 if __name__ == "__main__":

@@ -15,8 +15,8 @@
 <div class="verttitle" id="vertTitle" aria-hidden="true">Portfolio Viz</div>
 <div class="wrap">
   <div id="loader" class="loader" hidden>
-    <div>Could not read <code id="csvPath">positions.csv</code> — missing, or opened from <code>file://</code>, where browsers block local file reads.</div>
-    <div>Pick the file, or serve the folder with <code>./start.sh</code>.</div>
+    <div>Could not read <code id="csvPath">api/positions</code> — no such profile, or the page is not served by <code>./start.sh</code> (opened from <code>file://</code>, say).</div>
+    <div>Serve it with <code>./start.sh</code>, or pick a positions CSV by hand.</div>
     <input type="file" id="file" accept=".csv,text/csv">
     <div class="err" id="err"></div>
   </div>
@@ -113,7 +113,7 @@
             <button type="button" id="rngD" aria-pressed="false">D</button>
           </div>
           <!-- Two ends of one range, and each shows a real date when it is at its default: From
-               sits at config.json's timelineStart, to at today. min/value here are the pre-load
+               sits at the timelineStart setting, to at today. min/value here are the pre-load
                fallbacks for that config value; syncAsOfControls() overwrites both once fetched. -->
           <div class="asof-group">
             <label class="asof">From
@@ -135,8 +135,8 @@
         </div>
         <div class="chartbar-right">
           <span id="showEuroSlot"></span>
-          <!-- Fixed text, unlike the tiles and tooltips that name the benchmark from config.json's
-               benchmarkLabel: this is a compact switch, and it matches the short "vs. World" the
+          <!-- Fixed text, unlike the tiles and tooltips that name the benchmark from the
+               benchmarkLabel setting: this is a compact switch, and it matches the short "vs. World" the
                map and bar tooltips already use for the same comparison. -->
           <label class="modeswitch"><input type="checkbox" id="relMode"><span id="relModeLabel">vs. World</span></label>
           <div class="seg" role="group" aria-label="Chart type">
@@ -240,7 +240,7 @@
       </header>
       <div class="cp-sub">Hue top to bottom, saturation left to right. Picking a cell saves it in
         this browser, so it stays picked here even after a reload — but it won't follow you to
-        another browser or machine, which still see <code>registry/sector_colors.csv</code>'s own
+        another browser or machine, which still see the registry's own
         colours.</div>
       <div class="cp-grid" id="cpGrid"></div>
     </dialog>
@@ -362,7 +362,7 @@
     <!-- settings that act on the server rather than on the view; each POSTs to start.sh, so a page
          served any other way gets an error back from it (see createProfile) -->
     <div class="card" id="configCard" hidden>
-      <!-- renames the label only (profile.json); the folder, shown alongside, keeps its name -->
+      <!-- renames the label only; the profile's name, shown alongside, stays as it is -->
       <form id="profileLabelForm" class="configrow">
         <label for="profileLabel">Current profile</label>
         <input type="text" id="profileLabel" required>

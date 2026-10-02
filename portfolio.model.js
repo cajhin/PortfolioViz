@@ -10,14 +10,14 @@
 
    Sections, in order:
 
-     files                paths of config.json, the registry and the CSVs the page reads
+     files                the api/ routes the page reads: settings, registry, prices, profile
      state                every mutable global, and who is allowed to write it
-     CSV                  parsing, and the "# key=value" header lines some files carry
+     CSV                  parsing, and the "# key=value" header lines an old series file carried
      the trade log        TRADE_INDEX — one position's activities, the input to almost everything
      FIFO lots            the shared share-retirement walk every cost-basis figure is built on
      colour from name     a position's hue, derived from its own name
      XIRR                 cash flows out of the trade log, and the bisection solver over them
-     price series         gen_prices/*.csv, the "last close at or before" lookup, and pricePath
+     price series         api/prices, the "last close at or before" lookup, and pricePath
      volatility           sigma of daily log returns, annualised — rolling window and EWMA
      splits               undoing Parqet's post-split restatement of historical share counts
      trade vs. now        what the price has done since a trade, on today's split scale
@@ -32,53 +32,58 @@
    identifier (the same ISIN can live in two portfolios with separate histories), and money
    figures are always pre-tax unless the name says otherwise.
 
-   Three input directories, by lifecycle — the distinction is worth preserving:
-     private-profiles/<p>/ IMPORTED  one profile's holdings, regenerated wholesale by the refresh
-                                     task; never hand-edited (bar its own profile.json)
-     registry/             CURATED   what exists and where its prices come from; never overwritten
-     gen_prices/           DERIVED   reproducible from registry/price_sources.csv alone
+   Every input comes out of data/portfolio.db through server.py's api/ routes, each in the shape
+   of the CSV or JSON file it replaced. Three kinds of data, by lifecycle — worth preserving:
+     a profile's own   IMPORTED  its positions/activities/cash, replaced wholesale by a Parqet
+                                 refresh or rebuilt from its ledger; plus its own settings
+     the registry      CURATED   what exists and where its prices come from; never overwritten
+     the prices        DERIVED   reproducible from the registry's price sources alone
    Only the first is per profile. The registry and the price series are shared by every profile —
    an instrument is the same thing whoever holds it — so a profile sees just the slice of the
    registry it holds or watches (see watchedInstruments).
-   Every close in gen_prices/ is already in the portfolio currency — update_prices.py
-   converts on write and keeps the untouched quote alongside — so nothing here does FX.
-   gen_prices/ also outranks the export on price: anywhere _latest.csv is fresher than Parqet's own
-   lastPriceDate, build() takes its close and recomputes the position's current value from it.
+   Every stored close is already in the portfolio currency — update_prices.py converts on write
+   and keeps the untouched quote alongside — so nothing here does FX. The prices also outrank the
+   export: anywhere api/latest is fresher than Parqet's own lastPriceDate, build() takes its close
+   and recomputes the position's current value from it.
    ============================================================================================= */
 
 /* ---------- files ---------- */
-const CONFIG_PATH = 'config.json';   // tunable settings an agent maintains — see its own comments
-// One directory per profile: its Parqet export plus a profile.json whose keys override config.json's
-// (see mergeConfig). Which one is read is PROFILE below — the ?profile= URL parameter, else
-// config.json's defaultProfile — so these are functions of it rather than fixed strings.
-const profilePath = file => `private-profiles/${PROFILE}/${file}`;
-const PROFILE_CONFIG_PATH = () => profilePath('profile.json');
-const CSV_PATH = () => profilePath('positions.csv');
-const TRADES_PATH = () => profilePath('activities.csv');
+// Everything below comes out of data/portfolio.db through server.py's api/ routes (scripts/api.py),
+// each in the shape of the file it replaced — the same CSV header, the same JSON — so the parsing
+// here never changed when the files went.
+const CONFIG_PATH = 'api/config';    // the global settings — `python3 scripts/db.py config` edits them
+// Per profile: its positions and activities (a Parqet export, or rebuilt from its ledger) plus its
+// own settings, whose keys override the global ones (see mergeConfig). Which profile is read is
+// PROFILE below — the ?profile= URL parameter, else the defaultProfile setting — so these are
+// functions of it rather than fixed strings.
+const profilePath = route => `api/${route}?profile=${encodeURIComponent(PROFILE)}`;
+const PROFILE_CONFIG_PATH = () => profilePath('profile');
+const CSV_PATH = () => profilePath('positions');
+const TRADES_PATH = () => profilePath('activities');
 // A TR-imported or manual profile's cash, booking by booking (written by import_tr.py's rebuild).
 // A Parqet profile has none — its export carries no cash history — and the page then shows none.
-const CASH_PATH = () => profilePath('cash.csv');
-// registry/ is curated: what exists, and what each instrument is called. It is keyed by ISIN and
-// is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
+const CASH_PATH = () => profilePath('cash');
+// The registry is curated: what exists, and what each instrument is called. It is keyed by ISIN
+// and is deliberately NOT derived from the Parqet export — an instrument may be listed here that no
 // portfolio holds (a benchmark, a watchlist name) and still be charted.
-const INSTRUMENTS_PATH = 'registry/instruments.csv';
-const PRICE_SOURCES_PATH = 'registry/price_sources.csv';
+const INSTRUMENTS_PATH = 'api/instruments';
+const PRICE_SOURCES_PATH = 'api/price-sources';
 // Hand- or picker-assigned sector colours — an override layer, not a full palette: a sector
-// absent from this file still gets the built-in golden-angle/hand-picked hue in portfolio.view.js.
+// absent from this table still gets the built-in golden-angle/hand-picked hue in portfolio.view.js.
 // Read there, not by ingest() below, since colour is a view concern, not model state.
-const SECTOR_COLORS_PATH = 'registry/sector_colors.csv';
-// gen_prices/ is derived: reproducible from registry/price_sources.csv by update_prices.py.
-// _latest.csv is the freshest close per instrument, and it is the price of record for every
+const SECTOR_COLORS_PATH = 'api/sector-colors';
+// Prices are derived: reproducible from the registry's price sources by update_prices.py.
+// api/latest is the freshest close per instrument, and it is the price of record for every
 // position it covers — the Parqet export is a snapshot from whenever it was pulled, so its quotes
 // are usually the older pair. build() takes the close and recomputes the position's value with it.
-const LATEST_PATH = 'gen_prices/_latest.csv';
-// _live.csv is a price fresher than any close — a US stock's pre-market, a European one's gettex
-// mid during its session — where update_prices.py found one. The file stays apart from the closes,
-// so a pre-market price never lands in a series on disk; the page puts it in as the series' last
+const LATEST_PATH = 'api/latest';
+// api/live is a price fresher than any close — a US stock's pre-market, a European one's gettex
+// mid during its session — where update_prices.py found one. It is stored apart from the closes,
+// so a pre-market price never lands in a stored series; the page puts it in as the series' last
 // point instead (see withLive), on today's date, and makes it the position's lastPrice too. Both
 // have to move together: anchorFactor() divides lastPrice by the series close on lastPriceDate, and
 // either one alone would shift a whole chart by the overnight move.
-const LIVE_PATH = 'gen_prices/_live.csv';
+const LIVE_PATH = 'api/live';
 
 /* ---------- state ----------
    Every mutable global on the page. Only ingest() and build() below, and the control handlers
@@ -95,7 +100,7 @@ const LIVE_PATH = 'gen_prices/_live.csv';
    PROFILE is settled once at startup (see resolveProfile) and never changes without a reload;
    WATCHLIST is that profile's own list of instruments it tracks without holding.
    TIMELINE_START / BENCH_LABEL start at sensible defaults and are overwritten by ingest() from
-   config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
+   the settings — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
     LIVE = new Map(),             // instrument id → its live price, see LIVE_PATH
@@ -113,7 +118,7 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
     TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World',
     PROFILE = new URLSearchParams(location.search).get('profile') || '',
     WATCHLIST = new Set(),                             // ids from the profile's "watchlist" key
-    CASH = [];                                         // cash.csv rows, oldest first — see cashBalance
+    CASH = [];                                         // api/cash rows, oldest first — see cashBalance
 
 /* ---------- CSV ---------- */
 function parseCSV(text) {
@@ -276,8 +281,8 @@ function cashSummary(date = null) {
   return [...by.values()];
 }
 
-// The profile named in the URL wins; failing that, config.json's defaultProfile, then "main".
-// Called by the view once config.json is in hand, before any profile file is asked for.
+// The profile named in the URL wins; failing that, the defaultProfile setting, then "main".
+// Called by the view once the settings are in hand, before any profile route is asked for.
 function resolveProfile(configText) {
   if (PROFILE) return PROFILE;
   let cfg = {};
@@ -285,8 +290,8 @@ function resolveProfile(configText) {
   return (PROFILE = cfg.defaultProfile || 'main');
 }
 
-// config.json with the profile's own keys laid over it, back as text so ingest() and
-// benchSeriesPath() read one settings file exactly as before. Flat keys, so a shallow merge is the
+// The global settings with the profile's own keys laid over it, back as text so ingest() and
+// benchSeriesPath() read one settings text exactly as before. Flat keys, so a shallow merge is the
 // whole job. `currency` is the one key a profile cannot override: update_prices.py converts every
 // series into it on write, and those series are shared by all profiles.
 function mergeConfig(configText, profileText) {
@@ -309,8 +314,8 @@ function watchedInstruments() {
 }
 
 // The benchmark is an instrument like any other now, so its series has no dedicated path — it is
-// resolved from config.json's benchmarkIsin against the registry. The view calls this before its
-// second fetch round, since the file to ask for is not knowable until both of those are in hand.
+// resolved from the benchmarkIsin setting against the registry. The view calls this before its
+// second fetch round, since the series to ask for is not knowable until both of those are in hand.
 // Parsing stays here rather than in the view: the model never reads the DOM, and the view never
 // parses a CSV.
 function benchSeriesPath(configText, instrumentsText) {
@@ -319,7 +324,7 @@ function benchSeriesPath(configText, instrumentsText) {
   if (!isin) return '';
   const row = (instrumentsText ? parseCSV(instrumentsText) : [])
     .find(r => r.id === isin || r.isin === isin);
-  return row && row.slug ? `gen_prices/${row.id}-${row.slug}.csv` : '';
+  return row ? seriesPath(row.id) : '';
 }
 
 // The money that has actually left the account and stayed out: everything paid in, less everything
@@ -336,36 +341,34 @@ function netCapital(rows = TRADES) {
 
 /* ---------- price series ---------- */
 const SERIES_CACHE = new Map();
-// The series file for a position: "<isin>-<slug>", both straight off the registry row. The slug
-// is carried there rather than derived from the display name, so renaming a position on screen
-// can never silently point the chart at a different file (or at none).
-const seriesSlug = d => {
+// The series for a position is its registry row's id — never derived from the display name, so
+// renaming a position on screen can never silently point the chart at a different series.
+const seriesKey = d => {
   const inst = INSTRUMENTS.get(d.identifier) || INSTRUMENTS.get(d.name);
-  if (!inst || !inst.slug) return '';
-  return `${inst.id}-${inst.slug}`;
+  return inst ? inst.id : '';
 };
+const seriesPath = id => `api/prices?id=${encodeURIComponent(id)}`;
 
-async function loadSeries(slug) {
-  if (!slug) return null;
-  if (SERIES_CACHE.has(slug)) return SERIES_CACHE.get(slug);
+async function loadSeries(key) {
+  if (!key) return null;
+  if (SERIES_CACHE.has(key)) return SERIES_CACHE.get(key);
   let out = null;
   try {
-    const r = await fetch(`gen_prices/${slug}.csv`, { cache: 'no-store' });
+    const r = await fetch(seriesPath(key), { cache: 'no-store' });
     if (r.ok) {
       const file = splitMeta(await r.text());
       // raw/ccy are the quote before update_prices.py converted it — carried so a price can be
       // shown in the currency it actually trades in alongside the portfolio-currency figure.
-      // Absent from a hand-maintained file, so every reader has to tolerate 0 and ''.
+      // Absent from an old hand-maintained series, so every reader has to tolerate 0 and ''.
       const rows = parseCSV(file.body)
         .map(x => ({ date: x.date, close: num(x.close),
                      raw: num(x.close_raw), ccy: x.quote_currency || '' }))
         .filter(x => x.date && x.close > 0)
         .sort((a, b) => a.date < b.date ? -1 : 1);
-      const live = [...LIVE.entries()].find(([id]) => slug.startsWith(id + '-'));   // slug is "<id>-<slug>"
-      if (rows.length) out = { rows: withLive(rows, live && live[1]), meta: file.meta };
+      if (rows.length) out = { rows: withLive(rows, LIVE.get(key)), meta: file.meta };
     }
   } catch { /* no series for this position */ }
-  SERIES_CACHE.set(slug, out);
+  SERIES_CACHE.set(key, out);
   return out;
 }
 
@@ -380,10 +383,10 @@ function withLive(rows, live) {
   return live.asof === last.date ? [...rows.slice(0, -1), row] : [...rows, row];
 }
 
-// The synchronous half of loadSeries: whatever is already cached for this slug, or null. For a
+// The synchronous half of loadSeries: whatever is already cached for this key, or null. For a
 // caller that cannot await — a pointerenter handler building a tooltip — and would rather draw
 // nothing than block the hover.
-const seriesIfLoaded = slug => SERIES_CACHE.get(slug) || null;
+const seriesIfLoaded = key => SERIES_CACHE.get(key) || null;
 
 // This position's own price across a window, as a percentage from the window's first close — the
 // figures behind the sparkline in the map's tooltip. Null when there is no cached series, or too
@@ -405,7 +408,7 @@ const seriesIfLoaded = slug => SERIES_CACHE.get(slug) || null;
 // and with it any gap between it and the next session: anything drawn or quoted from it would be
 // missing exactly the move the percentage beside it reports. Anchor and window must be one row.
 function priceWindow(d, fromStr, toStr) {
-  const series = seriesIfLoaded(seriesSlug(d));
+  const series = seriesIfLoaded(seriesKey(d));
   if (!series) return null;
   const all = series.rows;
   const lo = fromStr ? Math.max(0, lastIndexAtOrBefore(all, fromStr)) : 0;
@@ -612,7 +615,7 @@ function asOfIrr(lots, cur, dateStr) {
 
 /* ---------- as of: the portfolio between two past dates ---------- */
 // Parqet's own last known price is the ground truth for what a position is worth "today", but the
-// closes in gen_prices/ come from a different provider whose level can sit a little apart from it.
+// the stored closes come from a different provider whose level can sit a little apart from it.
 // This is the multiplier that lines that series up with Parqet, so a reconstruction of today
 // reproduces the live map exactly. Every reader of a prices series applies it.
 function anchorFactor(d, series) {
@@ -667,7 +670,7 @@ async function computeAsOf(dateStr, fromStr = null) {
   }).filter(h => h.sharesAtD > 1e-9);                   // not yet bought, or already sold out, by then
 
   const seriesFor = new Map(await Promise.all(
-    held.map(async h => [h.d, await loadSeries(seriesSlug(h.d))])));
+    held.map(async h => [h.d, await loadSeries(seriesKey(h.d))])));
 
   const out = [];
   const missing = new Set();
@@ -770,7 +773,7 @@ function valueOverTime(d, series, displayRows) {
 // deposit is structurally incapable of moving it. Hold nothing but one instrument and this traces
 // that instrument's own chart exactly, whatever the contributions were, which is the point.
 //
-// Price return: dividends are deliberately excluded. gen_prices/ carries Yahoo's raw close, so every
+// Price return: dividends are deliberately excluded. The stored series carry Yahoo's raw close, so every
 // other line on the detail chart is a price return too — adding payouts back on this line alone
 // would lift it above the rest by roughly the dividend yield, for a reason that is not performance.
 //
@@ -789,7 +792,7 @@ async function portfolioSeries(filter = null, cacheKey = 'ALL') {
   if (SERIES_INDEX_CACHE.has(cacheKey)) return SERIES_INDEX_CACHE.get(cacheKey);
   const source = [...ITEMS, ...CLOSED].filter(d => !filter || filter(d));
   const items = (await Promise.all(source.map(async d => {
-    const series = await loadSeries(seriesSlug(d));
+    const series = await loadSeries(seriesKey(d));
     if (!series || !series.rows.length) return null;
     return { deals: splitAdjustedDeals(d), series, factor: anchorFactor(d, series) };
   }))).filter(Boolean);
@@ -861,7 +864,7 @@ async function computeAsOfRealized(dateStr, fromStr = null) {
   const priceAtFrom = new Map();
   if (fromStr) await Promise.all(source.map(async d => {
     if (!survivingLots(splitAdjustedDeals(d), { until: fromStr }).length) return;
-    const series = await loadSeries(seriesSlug(d));
+    const series = await loadSeries(seriesKey(d));
     const close = series && seriesCloseAt(series.rows, fromStr);
     if (close != null) priceAtFrom.set(d, close * anchorFactor(d, series));
   }));
@@ -938,7 +941,7 @@ const benchClose = iso => {
   return (lastAtOrBefore(BENCH, iso.slice(0, 10)) || BENCH[0]).close;
 };
 const benchNow = () => BENCH.length ? BENCH[BENCH.length - 1].close : NaN;
-// BENCH_LABEL itself lives in the state block above, since ingest() overwrites it from config.json
+// BENCH_LABEL itself lives in the state block above, since ingest() overwrites it from the settings
 
 // The counterfactual for a position you still hold: only the lots that survived, each mirrored in
 // the benchmark from its own buy date. Realised results are the bar's business, so sold lots leave
@@ -1067,7 +1070,7 @@ function splitFactor(d) {
 //
 // The position — a trade is only comparable to the last price of the holding it belongs to, found
 // by portfolio *and* identifier like everything else here. A closed position works too: Parqet
-// stops quoting one at the sale, and gen_prices/_latest.csv fills that in above.
+// stops quoting one at the sale, and api/latest fills that in above.
 //
 // The sign is deliberately the same for both directions: the number answers "what has the price
 // done since", which is one question however the trade went. Whether that counts as a *good*
@@ -1098,7 +1101,7 @@ function tradeVsNow(t) {
 
 /* ---------- display names ---------- */
 // No fund flag comes out of Parqet — assetType is "security" for stocks and ETFs alike — so read it
-// off the full name. Overridable later by a column in registry/instruments.csv if a fund hides it.
+// off the full name. Overridable later by a column in the registry if a fund hides it.
 const FUND_RE = /\b(UCITS|ETF|ETC|ETN|Fonds|Fund|Fd|Index|Ind\.?\s?Fd|SICAV|Investmentfonds)\b/i;
 const isFund = d => FUND_RE.test(d.name || '');
 
@@ -1158,8 +1161,8 @@ function build(rows) {
   });
 
   items.forEach(d => {
-    // gen_prices/ is the price of record wherever it is fresher than the export, which is the normal
-    // case: positions.csv is a snapshot from whenever Parqet was last pulled, while
+    // the stored closes are the price of record wherever they are fresher than the export, which is
+    // the normal case: the positions are a snapshot from whenever Parqet was last pulled, while
     // update_prices.py runs on its own schedule and usually carries several more sessions.
     //
     // Taking the quote means taking the value with it. This used to apply to sold positions only,
@@ -1287,12 +1290,12 @@ function totals(rows) {
 const EMPTY_PROFILE_MSG = 'no rows with a positive value';
 
 /* ---------- ingest ----------
-   config.json (already merged with the profile's own, see mergeConfig) plus the eight CSVs in —
-   cash.csv the seventh, absent for a Parqet profile; _live.csv the eighth, absent outside a
+   the settings (already merged with the profile's own, see mergeConfig) plus the eight CSV texts
+   in — cash the seventh, empty for a Parqet profile; live the eighth, empty outside a
    pre-market or a European session — the whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
 function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText, cashText, liveText) {
-  // malformed or missing config.json keeps the built-in defaults rather than failing the page —
+  // malformed or missing settings keep the built-in defaults rather than failing the page —
   // same "absent input degrades gracefully" rule every other file here follows
   let benchIsin = '';
   try {
@@ -1323,8 +1326,7 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
     .filter(r => r.id)
     .map(r => [r.id, r]));
 
-  // the last close update_prices.py stored per instrument — same shape the hand-kept
-  // parqet_prices.csv used to supply, now a by-product of the fetch instead of a chore
+  // the last close update_prices.py stored per instrument — a by-product of the fetch
   PRICES = new Map((latestText ? parseCSV(latestText) : [])
     .filter(r => r.id && r.close !== '' && r.date)
     .map(r => [r.id, { price: num(r.close), asof: r.date, symbol: r.source }]));

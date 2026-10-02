@@ -64,7 +64,7 @@ function fmt(shape) {
 const ccySymbol = () => fmt('money0').formatToParts(0).find(part => part.type === 'currency').value;
 // The symbol for a quote currency that isn't the portfolio's.
 //
-// Only an all-uppercase code is handed to Intl. Not every code in registry/price_sources.csv is
+// Only an all-uppercase code is handed to Intl. Not every quote currency in the registry is
 // ISO 4217: a London listing quotes in GBp — pence — and Intl does not reject that, it matches
 // GBP case-insensitively and hands back "£". Printing a pence figure behind a pound sign would be
 // wrong by a factor of a hundred, so a minor-unit code stands in for its own symbol instead. The
@@ -447,7 +447,7 @@ function sparkMarks(d, path, x, y) {
 // it is there. renderMap also calls this for everything on screen, which in practice means the
 // first hover already has it.
 function warmSeries(d) {
-  loadSeries(seriesSlug(d));
+  loadSeries(seriesKey(d));
 }
 
 function attachTip(items, nodes) {
@@ -520,9 +520,9 @@ function legendPie(items) {
   );
 }
 
-// registry/sector_colors.csv is an override layer on top of the built-in SECTOR_HUE/SECTOR_TINT
+// The registry's sector colours (api/sector-colors) are an override layer on top of the built-in SECTOR_HUE/SECTOR_TINT
 // defaults (see SECTOR_COLOR_OVERRIDE, above sectorHue) — a sector with no row here just keeps
-// whatever the defaults already gave it. This is the curated, committed starting point every
+// whatever the defaults already gave it. This is the curated, shared starting point every
 // browser sees before it has picked any colours of its own — see loadSectorColors below for what
 // takes over once it has.
 function applySectorColors(text) {
@@ -548,9 +548,9 @@ function saveSectorColors() {
 
 // Renamed labels (see startRenaming, on the Positions table). Keyed by identifier (the ISIN),
 // same reason every other by-instrument lookup here is — a display name only means anything tied
-// to which instrument it's for. localStorage only: registry/instruments.csv's own "display"
-// column is the curated, committed source of truth for a name (see CLAUDE.md), and nothing in the
-// browser can write back to it — this is a per-viewer relabelling, not an edit to that file.
+// to which instrument it's for. localStorage only: the registry's own "display"
+// column is the curated source of truth for a name (see CLAUDE.md), and nothing in the
+// browser can write back to it — this is a per-viewer relabelling, not an edit to the registry.
 const LABEL_OVERRIDES_KEY = 'portfolioviz.labelOverrides';
 let LABEL_OVERRIDES = new Map();
 function loadLabelOverrides() {
@@ -1047,7 +1047,7 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
   // date fields and the note under the map to say, and saying it a third time up here left the
   // one fact this line exists for competing for the space.
   //
-  // asOf itself is a trading date, not a fetch time — gen_prices only ever carries a date, so
+  // asOf itself is a trading date, not a fetch time — a stored close only ever carries a date, so
   // there is no real hour:minute in it, and printing one anyway would just be that date's UTC
   // midnight read back in the browser's own timezone (00:00 UTC lands at 02:00 in Germany's
   // summer offset, for instance — a made-up time, not a real one). A real time only exists when
@@ -1323,7 +1323,7 @@ const SECTOR_ORDER = ['Optical', 'Hyperscaler', 'Semiconductors', 'Cybersecurity
 // meant to read as a shade of it rather than a different colour (see sectorFill/sectorTint below).
 const SECTOR_HUE = { Optical: 30, Other: 210, Diverse: 240 };
 // A hand- or picker-assigned override, keyed by sector name — loaded by loadSectorColors (from
-// localStorage, or registry/sector_colors.csv the first time a browser has none) and added to by
+// localStorage, or the registry's sector colours the first time a browser has none) and added to by
 // pickSectorColor. Takes over both hue and saturation for a sector the moment it has an entry —
 // SECTOR_HUE/SECTOR_TINT below are only the built-in fallback for a sector nobody has picked a
 // colour for yet.
@@ -1809,7 +1809,7 @@ function renderClosed(over = null) {
 
         // what the shares did after the sale, read from your side — a rise since selling is a
         // loss to you, so the grade is inverted. Closed positions get it too, now that
-        // gen_prices/_latest.csv supplies the price Parqet stopped publishing at the sale.
+        // api/latest supplies the price Parqet stopped publishing at the sale.
         if (!d.isTax && !d.isDiv && d.sinceKnown && d.grossProceeds > 0) {
           // absolute: did the price fall after the sale? benchmark: did selling and holding the
           // index beat holding on? Both are graded so that green means the sale was right.
@@ -2648,9 +2648,9 @@ function renderDetail() {
     return;
   }
   if (!drawn) {
-    const slug = seriesSlug(d);
-    body.innerHTML = `<div class="empty">no data — add <code>gen_prices/${slug || '…'}.csv</code>` +
-      ` and run <code>python3 scripts/update_prices.py ${slug || '…'} --from ${TIMELINE_START}</code></div>`;
+    const key = seriesKey(d);
+    body.innerHTML = `<div class="empty">no data — ${key ? '' : 'register the instrument, then '}run` +
+      ` <code>python3 scripts/update_prices.py ${key || '…'} --from ${TIMELINE_START}</code></div>`;
     return;
   }
   const title = document.getElementById('dtTitle');
@@ -2727,7 +2727,7 @@ function renderDetail() {
           return;
         }
         const cand = benchmarkCandidates().find(c => c.identifier === val);
-        const ser = await loadSeries(seriesSlug(cand));
+        const ser = await loadSeries(seriesKey(cand));
         if (!ser) { vals.textContent = `${defaultVals} — no price history for ${cand.label}`; return; }
         extras[s.entryIndex] = { label: cand.label, identifier: cand.identifier, series: ser, isBenchSlot };
         renderDetail();
@@ -2918,7 +2918,7 @@ async function openDetail(d) {
 
   // extras always starts with just the real benchmark — a fresh chart shows what it always has,
   // and isDefaultBench keeps it on the fast in-memory BENCH path rather than a fetch
-  DETAIL = { d, series: await loadSeries(seriesSlug(d)), alignDate: null,
+  DETAIL = { d, series: await loadSeries(seriesKey(d)), alignDate: null,
              range: (DETAIL && DETAIL.range) || 'buy', customRange: null,
              extras: [{ isDefaultBench: true }] };
   renderDetail();
@@ -2943,10 +2943,10 @@ async function openSectorDetail(name, members) {
   // Every member gets its own comparison line alongside the sector's blended one, the same shape
   // a hand-picked "+ compare" entry is (label/identifier/series) — so the sector chart doubles as
   // "each of these stocks, on the one chart" rather than only the basket's own combined line.
-  // Fetched in parallel (loadSeries caches per slug, so nothing already open pays for this twice)
+  // Fetched in parallel (loadSeries caches per instrument, so nothing already open pays for this twice)
   // and simply left out for anything with no price history, same as any other line here would be.
   const memberSeries = (await Promise.all(members.map(async m => {
-    const series = await loadSeries(seriesSlug(m));
+    const series = await loadSeries(seriesKey(m));
     // firstActivity: when this member was actually first bought — drawDetail uses it to cross
     // this line over the sector's own at that date and to dash the stretch before it
     return series ? { label: m.label, identifier: m.identifier, series, firstActivity: m.firstActivity } : null;
@@ -3002,7 +3002,7 @@ addCompareBtn.addEventListener('click', () => {
       // console. Every load is cached, so a second [All] on another position is instant.
       const cands = benchmarkCandidates().filter(c => c.identifier !== DETAIL.d.identifier);
       const [pf, ...sers] = await Promise.all(
-        [portfolioSeries(), ...cands.map(c => loadSeries(seriesSlug(c)))]);
+        [portfolioSeries(), ...cands.map(c => loadSeries(seriesKey(c)))]);
       DETAIL.extras = [{ label: 'Portfolio', identifier: PORTFOLIO_ID, series: pf }].concat(
         cands.map((c, i) => sers[i] && { label: c.label, identifier: c.identifier, series: sers[i] })
              .filter(Boolean));
@@ -3011,7 +3011,7 @@ addCompareBtn.addEventListener('click', () => {
     }
     const cand = benchmarkCandidates().find(c => c.identifier === val);
     if (!cand) return;
-    const ser = await loadSeries(seriesSlug(cand));
+    const ser = await loadSeries(seriesKey(cand));
     if (!ser) return;   // the chart is already open; nowhere to report "no data" but the console
     DETAIL.extras.push({ label: cand.label, identifier: cand.identifier, series: ser });
     renderDetail();
@@ -3139,7 +3139,7 @@ const isWeekend = dateStr => [0, 6].includes(new Date(dateStr + 'T00:00:00Z').ge
 // a start after the end, or a ✕ offering to clear something already clear.
 //
 // Both ends read as a real date when nothing is picked, rather than one of them going blank: the
-// range starts life at config.json's timelineStart → today, which is the widest window the page
+// range starts life at the timelineStart setting → today, which is the widest window the page
 // has data for. Null is still how "at the default" is stored — AS_FROM null means "at or before
 // timelineStart", AS_OF null means "today" — so the cheap whole-history path is what runs until
 // the user actually narrows the window.
@@ -3333,7 +3333,7 @@ document.getElementById('asOfClear').addEventListener('click', () => {
 // manual day/month-length bookkeeping needed). The value updates immediately on every step for
 // a responsive field; the actual re-render is debounced, so holding a key doesn't fire a burst
 // of chart rebuilds while scrubbing fast.
-// read at call time, never cached: this runs at parse time, before config.json's fetch (in the
+// read at call time, never cached: this runs at parse time, before the settings' fetch (in the
 // startup chain, far below) has resolved TIMELINE_START to its real value
 let asOfRenderTimer = null;
 function shiftAsOf(days, months) {
@@ -3416,12 +3416,12 @@ function load(...texts) {
   ingest(...texts);
   // renamed labels are a view-only concern (see LABEL_OVERRIDES) — applied here, right after the
   // model rebuilds ITEMS/CLOSED from the fresh CSVs, so every reader of d.label downstream sees
-  // them rather than whatever registry/instruments.csv itself says
+  // them rather than whatever the registry itself says
   applyLabelOverrides(ITEMS);
   applyLabelOverrides(CLOSED);
   // headers are static markup, so this is wired once rather than after every render
   ['tbl', 'tblClosedPositions', 'tblTrades', 'tblWatch'].forEach(makeSortable);
-  // config.json only ever changes one thing a browser has no other way to pick up early: the date
+  // the settings only ever change one thing a browser has no other way to pick up early: the date
   // pickers' own native floor — which syncAsOfControls writes, along with the rest of their state,
   // from the range as it now stands. (The mode switch's own text is fixed; see portfolio.html.)
   syncAsOfControls();
@@ -3429,7 +3429,7 @@ function load(...texts) {
   show(VIEW);
 }
 
-// Three rounds. The profile's directory is not knowable until config.json (which names the default
+// Three rounds. The profile is not knowable until the global settings (which name the default
 // profile) is in hand, and the benchmark's own file is not knowable until the merged settings
 // (which name the benchmark by ISIN) and the registry (which maps that ISIN to a file) are. Only
 // the positions CSV is required; every other text may come back empty and ingest() copes.
@@ -3463,8 +3463,8 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
   });
 
-// The fallback when the positions CSV can't be fetched: pick that one file by hand. config.json
-// and the other five CSVs are simply absent — ingest() treats each missing text as empty (an
+// The fallback when the positions can't be fetched: pick a positions CSV by hand. The settings
+// and the other texts are simply absent — ingest() treats each missing text as empty (an
 // empty table, or the built-in default settings), so the page comes up with no trades, names,
 // benchmark or sectors, and the figures that need them are left out.
 document.getElementById('file').addEventListener('change', e => {
@@ -3489,7 +3489,7 @@ fetch('host', { cache: 'no-store' })
   .catch(() => { /* not server.py — nothing to mark */ });
 
 // The profile picker above the Update button. The list comes from server.py's /profiles route
-// (one entry per private-profiles/<name>/), so a page served any other way just hides it. Picking
+// (one entry per profile in the database), so a page served any other way just hides it. Picking
 // one reloads with ?profile= — PROFILE is fixed for a page's lifetime, the same way the CSVs are,
 // and the URL keeps the choice bookmarkable and lets two profiles sit in two tabs. New profiles
 // are made on the Config tab (see createProfile), not here.
@@ -3500,7 +3500,7 @@ const gotoProfile = name => {
 };
 function renderProfilePicker() {
   const sel = document.getElementById('profileSel');
-  document.getElementById('profileFolder').textContent = `folder: private-profiles/${PROFILE}/`;
+  document.getElementById('profileFolder').textContent = `name: ${PROFILE}`;
   document.getElementById('profileLabel').value = PROFILE;    // until /profiles brings the label
   fetch('profiles', { cache: 'no-store' })
     .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
@@ -3525,8 +3525,7 @@ function renderProfilePicker() {
   sel.addEventListener('change', () => gotoProfile(sel.value));
 }
 
-// A profile is controlled by Parqet or manually (profile.json's "source"; server.py reads it, and
-// treats anything but "manual" as Parqet). That decides the Transactions tab: a Parqet profile's
+// A profile is controlled by Parqet or manually (its "source", which server.py reports). That decides the Transactions tab: a Parqet profile's
 // list is read-only, with a note saying where it comes from; a manual one gets the import, a
 // delete per row and the add form. server.py and the scripts refuse a Parqet profile regardless, so
 // hiding the tools here is a courtesy, not the guard. Unknown (no /profiles to ask) shows neither.
@@ -3564,7 +3563,7 @@ function staleServer() {
 }
 const routeFailure = r => r.status === 404 ? STALE_MSG : `${r.status} ${r.statusText}`;
 
-// The Config tab's first row: renames the current profile's label (profile.json) — the folder,
+// The Config tab's first row: renames the current profile's label — its name,
 // and so the ?profile= in every URL, stays as it is. The picker's own entry follows without a
 // reload; nothing else on the page shows the label.
 document.getElementById('profileLabelForm').addEventListener('submit', async e => {
@@ -3588,9 +3587,8 @@ document.getElementById('profileLabelForm').addEventListener('submit', async e =
   }
 });
 
-// The Config tab's "Create new profile": derives the directory name from the label typed ("Family
-// Trust" → family-trust), has server.py create private-profiles/<name>/ with an empty export and a
-// profile.json, and switches to it. Empty until its first refresh — the page shows
+// The Config tab's "Create new profile": derives the profile's name from the label typed ("Family
+// Trust" → family-trust), has server.py create it, empty, and switches to it. Empty until its first refresh — the page shows
 // showEmptyProfile's note there.
 async function createProfile(label) {
   const err = document.getElementById('newProfileErr');
@@ -3725,7 +3723,7 @@ async function prefillTxPrice() {
   const hint = document.getElementById('txHint');
   if (!isin || isin === NEW_INSTRUMENT || !day) { hint.textContent = ''; return; }
   const token = ++PREFILL_TOKEN;
-  const series = await loadSeries(seriesSlug({ identifier: isin }));
+  const series = await loadSeries(seriesKey({ identifier: isin }));
   if (token !== PREFILL_TOKEN) return;                 // a newer pick is on its way
   const i = series ? lastIndexAtOrBefore(series.rows, day) : -1;
   if (i < 0) { hint.textContent = 'no price on file for that date'; return; }
@@ -3863,7 +3861,7 @@ function openTxEditor(tr, t) {
    ISIN — the best guess goes in the symbol field, the rest are offered there. The sector starts at
    "Other" (Yahoo's own sector is only mentioned). Every field stays editable: check the symbol's name in the
    list, since Yahoo's ISIN search has been wrong before. Adding registers the instrument in
-   registry/ and fetches its prices (via /instrument), which takes a few seconds; the page then
+   registry and fetches its prices (via /instrument), which takes a few seconds; the page then
    knows it without a reload, and it is selected in the add form. */
 const instDialog = document.getElementById('instDialog');
 const fillOptions = (id, values) => document.getElementById(id).replaceChildren(...values.map(v => {
@@ -4000,7 +3998,7 @@ document.getElementById('instForm').addEventListener('submit', async e => {
 // has ever held, watches, or benchmarks against (see update_prices.py --profile).
 //
 // Recorded here, in real wall-clock time, is the only place an actual fetch *time* exists at
-// all — gen_prices only ever carries the trading date. renderHeaderTotals reads this back to put
+// all — a stored close only ever carries the trading date. renderHeaderTotals reads this back to put
 // a real hour:minute on the "Last update" stamp, but only trusts it for the trading day it was
 // taken on (see there) — a page that's only ever loaded, never clicked Update, has none of this
 // and the stamp just shows the date on its own.
@@ -4030,10 +4028,10 @@ document.getElementById('btnUpdatePrices').addEventListener('click', async () =>
 // a hover tip with the full name, today's level, and today's high/low. Reusable — call again with
 // a different element id/symbol/name to add a second index; nothing here is specific to NDX.
 //
-// Deliberately outside the registry/gen_prices pipeline every other price on this page goes
+// Deliberately outside the registry/prices pipeline every other price on this page goes
 // through: fetched via server.py's /live-index route (a browser can't call Yahoo's chart API
 // directly — no CORS allowance there, the same reason update_prices.py runs server-side rather
-// than from here), and never written to gen_prices or localStorage. A reload starts from nothing;
+// than from here), and never written to the database or localStorage. A reload starts from nothing;
 // while the tab stays open, it refetches every 5 minutes. A page served any other way (file://, a
 // plain static server with no /live-index route) just fails quietly and shows nothing here.
 const LIVE_INDEX_REFRESH_MS = 5 * 60 * 1000;
@@ -4276,7 +4274,7 @@ function renderLiveIndex(elId, symbol, name) {
    watchlist of markets to eyeball is exactly the kind of thing that doesn't need one. */
 const LIVE_TICKERS_KEY = 'portfolioviz.liveTickers';
 // EUNL.DE, not a made-up index ticker — the exact same MSCI World ETF this portfolio already
-// tracks (registry/price_sources.csv), so "World" here reads live and intraday the way the
+// tracks (the registry's price sources), so "World" here reads live and intraday the way the
 // others do, rather than picking a different, unrelated instrument for the same name.
 const DEFAULT_LIVE_TICKERS = [
   { label: 'World', symbol: 'EUNL.DE' },

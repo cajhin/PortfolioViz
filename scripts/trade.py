@@ -35,17 +35,17 @@ Only accounts set up for command-line trading can be traded; any other is refuse
 call safe to repeat: a second call with the same id answers with the first one's result instead of
 trading twice. --reason is kept with the trade.
 """
-import argparse, contextlib, csv, fcntl, io, json, os, re, subprocess, sys, time, urllib.parse, uuid
+import argparse, contextlib, fcntl, io, json, os, re, subprocess, sys, time, urllib.parse, uuid
 from datetime import date, datetime, timedelta, timezone
 
 import import_tr
 import manual_tx
-from import_tr import num, read_csv, write_csv
+import db
+from import_tr import num
 from update_prices import GETTEX_MAX_AGE_MIN, gettex_quote
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
-PROFILES = os.path.join(ROOT, "private-profiles")
 ACCOUNT = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 
@@ -70,22 +70,19 @@ def quiet(fn, *args, **kw):
 
 # ---------- accounts ----------
 
-def account_dir(name, must_exist=True):
+def account(name, must_exist=True):
+    """The account's name, checked — an account is a profile."""
     if not ACCOUNT.match(name or ""):
         raise Refusal(f"{name!r} is not an account name",
                       "lowercase letters, digits, - and _, starting with a letter or digit")
-    d = os.path.join(PROFILES, name)
-    if must_exist and not os.path.isdir(d):
+    if must_exist and not db.profile(name):
         raise Refusal(f"no account {name!r}", "check the name — accounts are set up by their owner")
-    return d
+    return name
 
 
-def profile(d):
-    try:
-        with open(os.path.join(d, "profile.json")) as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return {}
+def profile(name):
+    """The account's settings, as its profile.json used to hold them."""
+    return db.profile_config(name) or {}
 
 
 def require_cli(name):
@@ -95,19 +92,22 @@ def require_cli(name):
     bound = os.environ.get("TRADE_ACCOUNT")
     if bound and name != bound:
         raise Refusal(f"this session trades account {bound!r} only, not {name!r}")
-    d = account_dir(name)
-    cfg = profile(d)
+    cfg = profile(account(name))
     if cfg.get("source") != "manual" or cfg.get("allow-cli") is not True:
         raise Refusal(f"account {name!r} is not open to the command line",
                       "only accounts set up for command-line trading can be traded")
-    return d
+    return name
 
 
 @contextlib.contextmanager
-def locked(d):
+def locked(name):
     """One change at a time per account: two callers at once (two agents, or one and the page)
-    would otherwise each read the ledger, add their row, and the second write lose the first."""
-    with open(os.path.join(d, ".lock"), "w") as fh:
+    would otherwise each read the ledger, add their row, and the second write lose the first.
+    A lock file, not a database transaction: a trade looks prices up (and may fetch a new
+    instrument's history, which writes to the database) before it books."""
+    path = os.path.join(os.path.dirname(db.DB_PATH), "locks", f"{name}.lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             yield
@@ -126,9 +126,7 @@ def now():
 # ---------- instruments ----------
 
 def registry():
-    rows = read_csv(os.path.join(ROOT, "registry", "instruments.csv"))
-    sources = {r["id"]: r for r in read_csv(os.path.join(ROOT, "registry", "price_sources.csv"))}
-    return rows, sources
+    return db.instruments(), db.sources()
 
 
 def resolve(text, register=True):
@@ -200,13 +198,8 @@ def instrument(row, sources, registered=False):
 
 
 def series(inst):
-    path = os.path.join(ROOT, "gen_prices", f"{inst['id']}-{inst['slug']}.csv")
-    if not os.path.exists(path):
-        return []
-    with open(path) as fh:
-        body = "".join(l for l in fh if not l.startswith("#"))
-    return sorted(((r["date"], num(r["close"])) for r in csv.DictReader(io.StringIO(body))
-                   if r.get("date") and num(r.get("close")) > 0))
+    """(date, close) oldest first."""
+    return [(r["date"], r["close"]) for r in db.series(inst["id"]) if (r["close"] or 0) > 0]
 
 
 def fetch_prices(inst):
@@ -256,15 +249,14 @@ def sale_tax(rows, isin, shares, value, fee):
     return round(max(gain, 0) * TAX_RATE, 2), round(gain, 2)
 
 
-def cash_of(d):
+def cash_of(name):
     """The account's cash now — every booking's effect, as the last rebuild wrote it."""
-    path = os.path.join(d, "cash.csv")
-    return round(sum(num(c["amount"]) for c in read_csv(path)), 2) if os.path.exists(path) else 0.0
+    return round(sum(num(c["amount"]) for c in db.profile_rows(name, "cash")), 2)
 
 
-def held(d, isin):
+def held(name, isin):
     """Shares of `isin` in the account now."""
-    _, rows = manual_tx.manual_rows(d)
+    rows = manual_tx.manual_rows(name)
     return round(sum(num(r["shares"]) for r in rows if r["symbol"] == isin and r["type"] in ("BUY", "SELL")), 6)
 
 
@@ -365,20 +357,20 @@ def latest_close(inst):
 
 
 def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="", oid=None):
-    d = require_cli(name)
-    with locked(d):
-        path, rows = manual_tx.manual_rows(d)
+    require_cli(name)
+    with locked(name):
+        rows = manual_tx.manual_rows(name)
         tid = f"manual-{oid}" if oid else None
         if tid:
             prior = next((r for r in rows if r["transaction_id"] == tid), None)
             if prior:
-                return {"repeat": True, **trade_view(prior), "cash": cash_of(d)}
+                return {"repeat": True, **trade_view(prior), "cash": cash_of(name)}
         inst = resolve(inst_text, register=(side == "buy"))
         if not series(inst):
             fetch_prices(inst)           # a first buy of a new instrument: its history, for valuing it later
         px = venue_price(inst, side)
         price = px["price"]
-        cash = cash_of(d)
+        cash = cash_of(name)
         if side == "buy":
             if ((eur or 0) > 0) == ((shares or 0) > 0):
                 raise Refusal("give either --eur or --shares, as a positive number")
@@ -396,7 +388,7 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
                               f"the account holds €{cash:.2f}",
                               f"buy for at most --eur {cash:.2f}, or sell something first")
         else:
-            have = held(d, inst["isin"])
+            have = held(name, inst["isin"])
             if all_:
                 shares = have
             elif not (shares or 0) > 0:
@@ -414,10 +406,11 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
         if side == "sell" and tax:
             row["tax"] = f"{-tax:.2f}"         # signed as TR books a sale's tax: money going out
         rows.append(row)
-        write_csv(path, manual_tx.FIELDS, sorted(rows, key=lambda r: r["datetime"]))
-        quiet(import_tr.rebuild, name, d)
+        with db.tx():                    # the trade and the rebuild it causes, together
+            manual_tx.save(name, rows)
+            quiet(import_tr.rebuild, name)
         out = {**trade_view(row), "name": inst["name"], "venue": px["venue"],
-               "price_age_min": px["price_age_min"], "cash": cash_of(d)}
+               "price_age_min": px["price_age_min"], "cash": cash_of(name)}
         out.update(bid=px["bid"], ask=px["ask"])
         for k in ("spread_pct", "last", "surcharge_pct"):
             if k in px:
@@ -468,12 +461,12 @@ def live_mark(isin):
     return mark
 
 
-def summary(name, d):
+def summary(name):
     """The account as it stands: cash, positions at their current value (see live_mark), and the
     result against the money put in — cash included, the one fair way to set two accounts side by
     side."""
-    positions = [p for p in read_csv(os.path.join(d, "positions.csv")) if p["isSold"] == "0"]
-    cash_rows = read_csv(os.path.join(d, "cash.csv")) if os.path.exists(os.path.join(d, "cash.csv")) else []
+    positions = [p for p in db.profile_rows(name, "position") if p["isSold"] == "0"]
+    cash_rows = db.profile_rows(name, "cash")
     cash = sum(num(c["amount"]) for c in cash_rows)
     net_in = sum(num(c["amount"]) for c in cash_rows if c["kind"] in ("deposit", "withdrawal"))
     latest = import_tr.latest_prices()
@@ -494,7 +487,7 @@ def summary(name, d):
                          "cost": round(num(p["purchaseValue"]), 2), "gain": round(value - num(p["purchaseValue"]), 2)})
     invested = sum(h["value"] for h in holdings)
     total = invested + cash
-    return {"account": name, "label": profile(d).get("label") or name, "date": today(),
+    return {"account": name, "label": profile(name).get("label") or name, "date": today(),
             "cash": round(cash, 2), "positions": holdings,
             "value_positions": round(invested, 2), "value_total": round(total, 2),
             "net_deposits": round(net_in, 2),
@@ -503,12 +496,11 @@ def summary(name, d):
 
 
 def status(name):
-    return summary(name, require_cli(name))
+    return summary(require_cli(name))
 
 
 def history(name):
-    d = require_cli(name)
-    _, rows = manual_tx.manual_rows(d)
+    rows = manual_tx.manual_rows(require_cli(name))
     return {"account": name,
             "transactions": [trade_view(r) if r["category"] == "TRADING" else
                              {"id": r["transaction_id"].removeprefix("manual-"), "date": r["date"],

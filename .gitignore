@@ -1,15 +1,16 @@
-# Data, by lifecycle. Committed only where it is small, curated, and not reproducible.
-#
-#   private-profiles/  IMPORTED — one directory per profile; regenerate via REFRESH_PARQET_DATA.md.
-#                          Ignored: holds real position values and share counts.
-#   gen_prices/ DERIVED  — regenerate via update_prices.py. Ignored: bulk, and reproducible from
-#   gen_fx/     DERIVED    registry/price_sources.csv alone.
-#   registry/   CURATED  — COMMITTED. Two small tables no import can rebuild. Note that
-#                          instruments.csv does enumerate which instruments are held.
+# All data lives in data/portfolio.db (see scripts/db.py). Not committed: it holds real position
+# values, and `scripts/db.py backup` keeps it on the NAS instead.
+data/
+
+# The files the data came from before the database, kept under backup/ as the record of what was
+# migrated. Only the registry and config.json were ever committed; the
+# rest — private-profiles/, gen_prices/, gen_fx/ — holds real values or is bulk, and stays ignored.
+# An import file (a Trade Republic export, a staged Parqet refresh) is a CSV under
+# private-profiles/<p>/exports/, and ignored the same way.
 *.csv
 gen_prices/
 gen_fx/
-!registry/*.csv
+!backup/registry/*.csv
 
 # Any directory named private* — private-profiles/ today, and a catch-all for anything else added
 # under that naming convention later, so a new folder is safe by default rather than needing its

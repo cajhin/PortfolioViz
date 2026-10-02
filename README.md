@@ -3,13 +3,15 @@ Coded by (and for) Claude, I only made the design decisions.
 
 To init:
 1. enable Parqet Claude connector (either via Parqet or Claude web)
-2. clone repo
-3. config.json contains a few settings; adjust timeline start to your liking (default 1.1.2019; careful, 30 years back will need to pull a lot of price history that is probably irrelevant to today's stock market)
-4. run Claude in repo; tell it to REFRESH_PARQET_DATA.md; this pulls all port transactions into private-profiles/main/ (private*/ is in .gitignore). For more profiles, use "Create new profile" on the Config tab: it creates an empty private-profiles/<name>/ with a profile.json (label, watchlist, optional benchmark); then fill it from Parqet (have Claude refresh that profile) or make it manual and import a Trade Republic transaction export on the same tab (re-importing an overlapping export only adds what is new), or enter buys and sells by hand on the Transactions tab to track a virtual demo portfolio (new instruments are registered from there too, by ISIN and Yahoo symbol)
+2. clone repo; run `scripts/sqlite-install.sh` — installs sqlite3 if missing and creates the database (data/portfolio.db, not in git) with the base registry and settings
+3. settings live in the database: `python3 scripts/db.py config` shows them, `python3 scripts/db.py config set timelineStart '"2019-01-01"'` changes one; adjust timeline start to your liking (default 1.1.2019; careful, 30 years back will need to pull a lot of price history that is probably irrelevant to today's stock market)
+4. run Claude in repo; tell it to REFRESH_PARQET_DATA.md; this pulls all port transactions into the profile main. For more profiles, use "Create new profile" on the Config tab (label, watchlist, optional benchmark); then fill it from Parqet (have Claude refresh that profile) or make it manual and import a Trade Republic transaction export on the same tab (re-importing an overlapping export only adds what is new), or enter buys and sells by hand on the Transactions tab to track a virtual demo portfolio (new instruments are registered from there too, by ISIN and Yahoo symbol)
 5. run start.sh for local webserver
 6. click [Update]; this pulls all missing daily EOB ticks for 1.1.2019..today for the current profile's stocks from Yahoo (thank you Y).
 
-Demo accounts for AI agents (or for you, from a terminal): `scripts/manage-accounts.py --help` to create and fund them, `scripts/trade.py --help` to trade. Accounts are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
+Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete profile goes with `scripts/manage-accounts.py purge <profile> --yes` (backs up first).
+
+Demo accounts for AI agents (or for you, from a terminal): `scripts/manage-accounts.py --help` to create and fund them (admin only), `scripts/trade.py --help` to trade (all an agent gets). Accounts are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
 
 Notes:
 - you can tell Claude directly to analyze the known data (like 'calc the max downdraw for all my stocks' or 'how many successful trades did i do in 2025?')

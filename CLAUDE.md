@@ -1,60 +1,80 @@
 # Working in this repo
 
-One page that draws a portfolio out of CSVs exported from Parqet. No build step, no dependencies,
-no framework — served from a local directory and opened in a browser.
+One page that draws a portfolio out of data imported from Parqet or Trade Republic. No build step,
+no dependencies, no framework — served from a local directory and opened in a browser. All data
+lives in one SQLite database, `data/portfolio.db`.
 
 ```
 portfolio.html          markup only; loads the css and the two scripts, in that order
 portfolio.css
 portfolio.model.js      data and arithmetic — never touches the DOM
 portfolio.view.js       everything that reads or writes the page
-config.json             settings — timeline start, portfolio currency, benchmark ISIN, default profile
 check_portfolio.js      regression check for both scripts (see below)
 start.sh                checks the port, runs scripts/server.py, opens the page
 scripts/                every Python script; each finds the repo as its own folder's parent, so it
                           runs from any working directory, and the others import from one another
-  server.py               the page's server: the repo's files on localhost, plus every route the
-                            page needs a backend for — most just run one of the scripts below
-  update_prices.py        fetches price history per registry/price_sources.csv
+  db.py                   THE way into the database — every script imports it, none opens the DB
+                            itself; also its CLI: settings, registry rows, read-only queries, backup
+  schema.sql              the database's tables; seed.sql the base a new one starts from
+  sqlite-install.sh       sets a host up: installs sqlite3 if missing, creates the database
+  api.py                  the api/ routes the page reads — each in the shape of the file it replaced
+  server.py               the page's server: the repo's files on localhost, the api/ routes, plus
+                            every route the page writes through — most just run a script below
+  update_prices.py        fetches price history per the registry's price sources
   import_tr.py            imports a Trade Republic transaction export into a manual profile, and
-                            rebuilds a manual profile's CSVs from its ledgers
+                            rebuilds a manual profile's positions/activities/cash from its ledger
+  import_parqet.py        imports a Parqet refresh (two CSVs) into a Parqet profile
   manual_tx.py            adds/edits/deletes a transaction in a manual profile (the page's backend)
   trade.py                trades a demo account from the command line — live only, JSON out
-  manage-accounts.py      creates demo accounts, moves their cash, lists them — same style
+  manage-accounts.py      creates demo accounts, moves their cash, lists them, purges an obsolete
+                            profile — same style; admin only, never given to an agent
   add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
                             "+ New instrument…"; also looks up Yahoo symbols for an ISIN
-REFRESH_PARQET_DATA.md  how to pull fresh CSVs from Parqet — a task for an agent with the MCP tools
-registry/*.csv          CURATED — instruments.csv, price_sources.csv; committed, not regenerable
-private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.csv, plus its own
-                          profile.json; gitignored, regenerate the CSVs. A TR-fed profile also
-                          has tr_ledger.csv (every TR row imported, by transaction_id),
-                          manual_ledger.csv (hand-entered rows, same format), tr_deleted.csv
-                          (imported rows deleted on the page) — its real source; positions.csv,
-                          activities.csv and cash.csv are rebuilt from these — and exports/
-gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv (newest close)
-                          and _live.csv (a fresher live price: US pre-market from Yahoo, EU gettex
-                          mid in-session — the page makes it each series' last point, but it is
-                          never written into a series file); gitignored
-gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
+REFRESH_PARQET_DATA.md  how to pull fresh data from Parqet — a task for an agent with the MCP tools
+data/portfolio.db       ALL the data — gitignored; backed up by hand (`scripts/db.py backup`)
+private-profiles/<p>/exports/   import files only: the Trade Republic exports and staged Parqet
+                          refreshes that were imported, kept as the record; gitignored
+backup/                 the files the data came from before the database (config.json, registry/,
+                          gen_prices/, gen_fx/, private-profiles/) — read by nothing; only
+                          config.json and registry/ are committed
 ```
 
-The three data directories differ by **lifecycle**, and that is the distinction to preserve:
-`private-profiles/<p>/` is overwritten wholesale by the refresh task (all but its `profile.json`), `registry/` is hand- or agent-maintained
-and must never be clobbered by an import, and `gen_prices/` + `gen_fx/` are reproducible from
-`registry/price_sources.csv` alone.
+The database's tables (`scripts/schema.sql`) fall into three groups that differ by
+**lifecycle**, and that is the distinction to preserve:
 
-`registry/instruments.csv` gives every instrument an `id`, equal to its ISIN, and is the single
-answer to "what exists and what is it called". `registry/price_sources.csv` is the single answer to "where do this instrument's prices
-come from" — keyed by that same `id`, **one row per instrument**, no fallback or priority. A thin
-listing that needs a second source is registered as a second instrument instead (`instruments.csv`
-gets its own row, its own `id`, its own slug — e.g. a `hynix-frankfurt` alongside `hynix`), so
-`price_sources.csv` never has to choose between two rows for one thing. Prices are converted to the
+- **a profile's own** (IMPORTED) — `profile` (label, source, allow_cli), its keys in `setting`,
+  `ledger`, and `position`/`activity`/`cash`. A Parqet profile's positions and activities are
+  replaced wholesale by each refresh; a manual profile's `ledger` is its real source — every TR
+  row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
+  hand-entered or traded row (origin `manual`) — and `position`/`activity`/`cash` are rebuilt from
+  it on every change.
+- **the registry** (CURATED) — `instrument`, `price_source`, `sector_color`, plus the global
+  `setting`s. Hand- or agent-maintained, never clobbered by an import, not regenerable — losing it
+  would cost real work, so back the database up.
+- **the prices** (DERIVED) — `price`, `fx_rate`, `live_price`, and the view `latest_close` (newest
+  close per instrument). Reproducible from `price_source` alone. `live_price` is a fresher price
+  than any close (US pre-market from Yahoo, EU gettex mid in-session): the page makes it each
+  series' last point, but it is never written into `price`.
+
+Changes go through the scripts, never raw SQL: `db.py`'s own CLI for settings and registry rows
+(`config`, `upsert`, `delete`), `add_instrument.py` to register an instrument, `import_tr.py` /
+`import_parqet.py` / `manual_tx.py` for profiles. `db.py query` is read-only. The page reads only
+through the `api/` routes, which answer in the old files' shapes (same CSV header, same JSON), so
+its parsing never changed. Profile tables keep numbers as the text that was written; prices are
+real numbers.
+
+`instrument` gives every instrument an `id`, equal to its ISIN, and is the single answer to "what
+exists and what is it called". `price_source` is the single answer to "where do this instrument's
+prices come from" — keyed by that same `id`, **one row per instrument**, no fallback or priority.
+A thin listing that needs a second source is registered as a second instrument instead (its own
+`instrument` row, its own `id`, its own slug — e.g. a `hynix-frankfurt` alongside `hynix`), so
+`price_source` never has to choose between two rows for one thing. Prices are converted to the
 portfolio currency **on write**, with the original kept in `close_raw`; nothing in the browser does
 FX. An instrument may be listed with no matching Parqet holding — that is how a benchmark or a
 watchlist name gets charted. Parqet's cash accounts are not tracked: `build()` drops the export's
 cash rows, since they carry no dated balance history and no past date could be reconstructed for
 them. A TR-imported or manual profile *does* have that history — every booking — so its rebuild
-writes `cash.csv` (each booking's cash effect, by account), and the page shows the balance on a
+writes `cash` (each booking's cash effect, by account), and the page shows the balance on a
 date in a Cash tile of its own and counts it into **nothing else**: not the Current value /
 "Value on" tile, not Invested, no gain, return or IRR, no benchmark, no map area. Moving
 money to the broker is not an investment. Cash may go negative (a demo buy is never refused for
@@ -62,32 +82,34 @@ want of a deposit). Reconstructed TR cash matches Parqet's balance for the same 
 cent, apart from TR's tax refunds, which Parqet leaves out.
 
 **Profiles.** The page can show several portfolios (profiles of the same person — no access
-control). Only `private-profiles/<p>/` is per profile; `registry/`, `gen_prices/`, `gen_fx/` and the
-browser's localStorage are shared, since an instrument is the same thing whoever holds it. So the
-registry is the union of every profile's instruments, and a profile sees only its slice: what its
-CSVs hold (open or closed), its `profile.json` `watchlist`, and its benchmark. Being in the
+control). Only a profile's own tables are per profile; the registry, the prices and the browser's
+localStorage are shared, since an instrument is the same thing whoever holds it. So the registry
+is the union of every profile's instruments, and a profile sees only its slice: what its
+positions and activities hold (open or closed), its `watchlist` setting, and its benchmark. Being in the
 registry without being held is **not** enough to show up in a profile's watchlist — that would leak
-every other profile's holdings into it. The page picks the profile from `?profile=`, else
-`config.json`'s `defaultProfile`; `profile.json` keys override `config.json`'s (flat, shallow —
+every other profile's holdings into it. The page picks the profile from `?profile=`, else the
+global `defaultProfile` setting; a profile's own settings override the global ones (flat, shallow —
 `label`, `watchlist`, `benchmarkIsin`, `benchmarkLabel`, `timelineStart`), except `currency`, which
 stays shared because the price series are converted into it on write. The Update button runs
 `scripts/update_prices.py --profile <p>`, fetching only that profile's instruments.
 
-A profile is controlled **either** by Parqet **or** manually, and `profile.json`'s `source` says
-which: `"parqet"` — refreshed by REFRESH_PARQET_DATA.md, never imported into — or `"manual"` — fed
+A profile is controlled **either** by Parqet **or** manually, and its `source` says
+which: `parqet` — refreshed by REFRESH_PARQET_DATA.md (`import_parqet.py`), never imported into
+otherwise — or `manual` — fed
 by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand (`manual_tx.py`,
 for virtual demo portfolios; booked under portfolio "Manual", so never merged with a real
 position), both on the Transactions tab, never refreshed from Parqet. That tab's "+ New
-instrument…" writes to the **committed** `registry/` (via `add_instrument.py`) — so a page action
-can leave a git change there, which is meant: the registry is the shared catalog. A missing `source` counts as Parqet, the side that refuses imports; server.py,
-`import_tr.py` and the page all hold to it, so `main` cannot be overwritten by a stray import. Its conversion follows Parqet's conventions and was checked
-against Parqet's own import of the same account; its docstring lists them.
+instrument…" writes to the registry (via `add_instrument.py`), the shared catalog. server.py,
+`import_tr.py`, `manual_tx.py`, `import_parqet.py` and the page all check the source, so `main`
+cannot be overwritten by a stray import. The TR conversion follows Parqet's conventions and was
+checked against Parqet's own import of the same account; its docstring lists them.
 
 **Agent accounts.** `scripts/manage-accounts.py` creates demo accounts, moves their cash and lists
 them; `scripts/trade.py` trades them. Each one's `--help` is its whole interface, and every answer
-is one JSON object. Both touch only profiles whose `profile.json` has `"allow-cli": true` (which
-`manage-accounts.py create` sets); the scripts cannot tell an agent from a human, so that flag is
-the boundary — and splitting the two lets an agent be handed trading alone. An agent's session is also
+is one JSON object. Both touch only profiles with `allow_cli` set (which `manage-accounts.py
+create` sets); the scripts cannot tell an agent from a human, so that flag is the boundary — and
+splitting the two lets an agent be handed trading alone: `manage-accounts.py` is admin only. Its
+`purge` removes any obsolete profile (not the default one) after backing the database up. An agent's session is also
 bound to its own account: its `start-agent` sets `TRADE_ACCOUNT`, and `trade.py` refuses any other
 (the agent cannot override it — a command not starting with trade.py's path is not allowed). Each
 agent folder under `agents/` has its own config dir, so agents share no memory. It is **live only**: no date can be given. A trade executes at once at a live price: gettex's ask
@@ -100,14 +122,24 @@ costs a €10 fee, on top of the spread — gettex's own, or 1% each way at the 
 no bid/ask; a sale also pays 20% tax on its gain. Cash can
 never go below zero: buys (fee included) and withdrawals are refused past it. The rules, with
 examples, are `trading-rules.md` — keep it in step with `trade.py`'s FEE_FIXED/TAX_RATE. `buy --eur` is the total that leaves the account,
-fee included. Trades land in `manual_ledger.csv` like hand-entered ones (their `--reason` in its
+fee included. Trades land in the ledger like hand-entered ones (their `--reason` in its
 description), so the page shows and can edit them — the one way round these rules; leave them
 alone if accounts are to be compared.
 
-`config.json` is committed, not generated — an agent edits it directly to change the as-of
-picker's earliest date, the portfolio currency, or which ISIN is the benchmark. `ingest()` reads it
-(falling back to built-in defaults if it's missing or malformed) and `update_prices.py` reads
-`timelineStart`/`currency` too, so the page and the fetcher move together. Keep it to flat keys.
+The global settings (`python3 scripts/db.py config`, `... config set <key> '<json>'`) are what
+an agent changes for the as-of picker's earliest date (`timelineStart`), the portfolio `currency`,
+the benchmark (`benchmarkIsin`, `benchmarkLabel`) or the `defaultProfile`; `--profile <p>` does the
+same for one profile's own. `ingest()` reads them (falling back to built-in defaults for a missing
+key) and `update_prices.py` reads `timelineStart`/`currency` too, so the page and the fetcher move
+together. Keep them flat.
+
+**The database.** A new host runs `scripts/sqlite-install.sh` (sqlite3, then the database from
+`schema.sql` + `seed.sql`), then `update_prices.py --from <timelineStart>`. `python3 scripts/db.py
+seed > scripts/seed.sql` refreshes that seed from the current registry and settings. Backups are
+by hand: `python3 scripts/db.py backup` writes a consistent, timestamped copy to the NAS
+(`/Volumes/nas/bkp/portfolioviz` on macOS, `/mnt/nas/bkp/portfolioviz` on Linux) — copying the
+file itself while the server runs is not safe. `$PORTFOLIO_DB` points every script at another
+database file, e.g. a copy to try something on.
 
 The two scripts are classic `<script>` tags sharing one global scope — no modules, no imports.
 `portfolio.model.js` loads first and declares the state; `portfolio.view.js` reads it. The
@@ -129,8 +161,9 @@ Each script opens with a map of its sections and the invariant it holds to — r
 you will usually only need to open one of the two.
 
 **Check your change against the baseline.** The page has no tests in the usual sense, but
-`check_portfolio.js` runs both scripts headlessly against the real CSVs and records every computed
-figure and every rendered tooltip. Around any edit:
+`check_portfolio.js` runs both scripts headlessly against the real data — the `api/` routes answered
+by `scripts/api.py`, the same code the server uses — and records every computed figure and every
+rendered tooltip. Around any edit:
 
 ```bash
 node check_portfolio.js --save     # before: record what the code does today
@@ -147,11 +180,9 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-`private-profiles/`, `gen_prices/`, `gen_fx/` and `check_baseline*.json` hold real position values and are gitignored
-— never commit them, and don't paste figures from them into commit messages or issues.
-
-`registry/*.csv` is the exception and **is** committed: two small tables no import can rebuild, and
-losing them would cost real work. They carry no amounts — only what each instrument is and where
-its prices come from — though `instruments.csv` does enumerate which instruments are held. The
-`.gitignore` reads `*.csv` and then negates that one directory, so a new CSV anywhere else is
-ignored by default.
+`data/`, `private-profiles/`, `backup/`'s old data files and `check_baseline*.json` hold real
+position values and are gitignored — never commit them, and don't paste figures from them into
+commit messages or issues. Nothing in the database is committed, the registry included:
+`scripts/seed.sql` (no amounts — only what each instrument is and where its prices come from,
+though it does enumerate which instruments are held) is the committed base, and the NAS backup
+the rest. The `.gitignore` reads `*.csv`, so a new CSV anywhere is ignored by default.

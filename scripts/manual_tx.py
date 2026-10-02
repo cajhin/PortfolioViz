@@ -7,21 +7,21 @@
     python3 scripts/manual_tx.py <profile> cash <YYYY-MM-DD> deposit|withdrawal <amount>
     python3 scripts/manual_tx.py <profile> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
 
-Rows go to private-profiles/<profile>/manual_ledger.csv in the same format as a Trade Republic
-export row, so import_tr.py's one conversion turns both ledgers into the profile's positions.csv
-and activities.csv — which every change here rebuilds. Prices are per share in the portfolio
+Rows go to the profile's ledger (origin 'manual') in the same format as a Trade Republic export
+row, so import_tr.py's one conversion turns both ledgers into the profile's positions,
+activities and cash — which every change here rebuilds, in the same transaction. Prices are per share in the portfolio
 currency, the fee is on top (a buy costs shares × price + fee, a sale brings shares × price − fee).
 
-The instrument must be in registry/instruments.csv: a virtual position is only worth tracking if
+The instrument must be in the registry: a virtual position is only worth tracking if
 it has a price series to track it by. No change — add, edit or delete — may leave the holding
 short at any point in its history. Cash, on the other hand, may go negative: a buy is never
 refused for want of a deposit, the balance just shows what was overspent.
 """
-import csv, os, sys, uuid
+import sys, uuid
 from datetime import date, datetime, timedelta
 
-from import_tr import (LEDGER, MANUAL_LEDGER, TR_DELETED, num, manual_profile_dir, read_csv,
-                       rebuild, registry_names, write_csv)
+import db
+from import_tr import num, rebuild, registry_names, require_manual
 
 FIELDS = ["datetime", "date", "account_type", "category", "type", "asset_class", "name", "symbol",
           "shares", "price", "amount", "fee", "tax", "currency", "original_amount",
@@ -53,7 +53,7 @@ def make_row(rows, day, isin, kind, shares, price, fee, tid=None, keep_at=None):
         sys.exit(f"{day} is in the future")
     inst = registry_names().get(isin)
     if not inst:
-        sys.exit(f"{isin} is not in registry/instruments.csv — add it there first, so it has prices")
+        sys.exit(f"{isin} is not in the registry — add it there first, so it has prices")
     if kind not in ("buy", "sell"):
         sys.exit(f"type must be buy or sell, not {kind!r}")
     shares, price, fee = num(shares), num(price), num(fee)
@@ -78,7 +78,7 @@ CASH_TYPES = {"deposit": "CUSTOMER_INBOUND", "withdrawal": "CUSTOMER_OUTBOUND_RE
 
 def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
     """A deposit to, or withdrawal from, the "Manual" portfolio's cash — the TR export's own types
-    for the same thing, so the one conversion books it (into cash.csv, see import_tr.cash_rows)."""
+    for the same thing, so the one conversion books it (into cash, see import_tr.cash_rows)."""
     try:
         when = datetime.strptime(day, "%Y-%m-%d").date()
     except ValueError:
@@ -99,44 +99,49 @@ def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
             "transaction_id": tid or f"manual-{uuid.uuid4()}"}
 
 
-def cash(d, day, kind, amount):
-    path, rows = manual_rows(d)
+def cash(profile, day, kind, amount):
+    rows = manual_rows(profile)
     rows.append(make_cash_row(rows, day, kind, amount))
-    write_csv(path, FIELDS, sorted(rows, key=lambda r: r["datetime"]))
+    save(profile, rows)
     print(f"added: {day} {kind} {num(amount):g}")
 
 
-def edit_cash(d, tid, day, kind, amount):
-    path, rows = manual_rows(d)
+def edit_cash(profile, tid, day, kind, amount):
+    rows = manual_rows(profile)
     old = next((r for r in rows if r["transaction_id"] == tid and r["category"] == "CASH"), None)
     if not old:
         sys.exit("only deposits and withdrawals entered by hand can be edited this way")
     rest = [r for r in rows if r is not old]
     rest.append(make_cash_row(rest, day, kind, amount, tid=tid,
                               keep_at=old["datetime"] if old["date"] == day else None))
-    write_csv(path, FIELDS, sorted(rest, key=lambda r: r["datetime"]))
+    save(profile, rest)
     print(f"edited: {day} {kind} {num(amount):g}")
 
 
-def manual_rows(d):
-    path = os.path.join(d, MANUAL_LEDGER)
-    return path, (read_csv(path) if os.path.exists(path) else [])
+def manual_rows(profile):
+    """The profile's hand-entered rows, oldest first."""
+    return db.ledger(profile, "manual")
 
 
-def add(d, day, isin, kind, shares, price, fee):
-    path, rows = manual_rows(d)
+def save(profile, rows):
+    """The hand-entered rows as they now stand, all of them, oldest first."""
+    db.replace_ledger(profile, "manual", sorted(rows, key=lambda r: r["datetime"]))
+
+
+def add(profile, day, isin, kind, shares, price, fee):
+    rows = manual_rows(profile)
     row, inst = make_row(rows, day, isin, kind, shares, price, fee)
     rows.append(row)
     never_short(rows, isin)
-    write_csv(path, FIELDS, sorted(rows, key=lambda r: r["datetime"]))
+    save(profile, rows)
     print(f"added: {day} {kind} {num(shares):g} × {inst.get('display') or isin} at {num(price):g}"
           + (f" + fee {num(fee):g}" if num(fee) else ""))
 
 
-def edit(d, tid, day, kind, shares, price, fee):
+def edit(profile, tid, day, kind, shares, price, fee):
     """A hand-entered row rewritten in place — same id, same instrument. An imported row is a copy
     of what the broker booked, so it is not edited: delete it instead."""
-    path, rows = manual_rows(d)
+    rows = manual_rows(profile)
     old = next((r for r in rows if r["transaction_id"] == tid and r["category"] != "CASH"), None)
     if not old:
         sys.exit("only buys and sells entered by hand can be edited — an imported one can be deleted")
@@ -145,59 +150,42 @@ def edit(d, tid, day, kind, shares, price, fee):
                          keep_at=old["datetime"] if old["date"] == day else None)
     rest.append(row)
     never_short(rest, old["symbol"])
-    write_csv(path, FIELDS, sorted(rest, key=lambda r: r["datetime"]))
+    save(profile, rest)
     print(f"edited: {day} {kind} {num(shares):g} × {inst.get('display') or old['symbol']} at {num(price):g}"
           + (f" + fee {num(fee):g}" if num(fee) else ""))
 
 
-def delete(d, tid):
-    """A hand-entered row is removed outright. An imported one stays in tr_ledger.csv — so the next
-    import of an overlapping export still recognises it as seen — and is listed in tr_deleted.csv,
-    which the rebuild leaves out. Deleting that line by hand restores it."""
-    path, rows = manual_rows(d)
+def delete(profile, tid):
+    """A hand-entered row is removed outright. An imported one stays in the ledger — so the next
+    import of an overlapping export still recognises it as seen — marked deleted, which the
+    rebuild leaves out. Clearing that mark (ledger.deleted) restores it."""
+    rows = manual_rows(profile)
     keep = [r for r in rows if r["transaction_id"] != tid]
     if len(keep) < len(rows):
         gone = next(r for r in rows if r["transaction_id"] == tid)
         never_short(keep, gone["symbol"])          # a buy that a later sale still needs stays
-        write_csv(path, FIELDS, keep)
+        save(profile, keep)
         print(f"deleted {tid}")
         return
-    ledger = os.path.join(d, LEDGER)
-    if os.path.exists(ledger) and any(r["transaction_id"] == tid for r in read_csv(ledger)):
-        gone_path = os.path.join(d, TR_DELETED)
-        gone = read_csv(gone_path) if os.path.exists(gone_path) else []
-        if all(r["transaction_id"] != tid for r in gone):
-            write_csv(gone_path, ["transaction_id"], gone + [{"transaction_id": tid}])
-        print(f"deleted imported {tid} (listed in {TR_DELETED}; a re-import will not bring it back)")
+    if db.mark_deleted(profile, tid):
+        print(f"deleted imported {tid} (marked deleted; a re-import will not bring it back)")
         return
     sys.exit(f"no transaction {tid!r} in this profile")
 
 
 def main():
     args = sys.argv[1:]
-    if len(args) >= 2 and args[1] == "add" and len(args) in (7, 8):
-        profile = args[0]
-        d = manual_profile_dir(profile)
-        add(d, *args[2:7], args[7] if len(args) == 8 else "0")
-    elif len(args) in (7, 8) and args[1] == "edit":
-        profile = args[0]
-        d = manual_profile_dir(profile)
-        edit(d, args[2], *args[3:7], args[7] if len(args) == 8 else "0")
-    elif len(args) == 5 and args[1] == "cash":
-        profile = args[0]
-        d = manual_profile_dir(profile)
-        cash(d, *args[2:5])
-    elif len(args) == 6 and args[1] == "edit-cash":
-        profile = args[0]
-        d = manual_profile_dir(profile)
-        edit_cash(d, *args[2:6])
-    elif len(args) == 3 and args[1] == "delete":
-        profile = args[0]
-        d = manual_profile_dir(profile)
-        delete(d, args[2])
-    else:
+    commands = {("add", 7): add, ("add", 8): add, ("edit", 7): edit, ("edit", 8): edit,
+                ("cash", 5): cash, ("edit-cash", 6): edit_cash, ("delete", 3): delete}
+    fn = commands.get((args[1], len(args))) if len(args) >= 2 else None
+    if not fn:
         sys.exit(__doc__.strip().split("\n\n")[1])
-    rebuild(profile, d)
+    rest = args[2:] + (["0"] if fn in (add, edit) and len(args) == 7 else [])   # no fee given
+    # the change and the rebuild it causes land together, or (on any refusal) not at all
+    with db.tx():
+        profile = require_manual(args[0])
+        fn(profile, *rest)
+        rebuild(profile)
 
 
 if __name__ == "__main__":

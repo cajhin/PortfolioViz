@@ -7,7 +7,8 @@
  *   node check_portfolio.js --profile test [--save]   the same, for another profile
  *
  * How it works: the scripts portfolio.html loads are concatenated in page order and run in a vm
- * context against a mini DOM defined below and the real CSVs in private-profiles/<profile>/ and gen_prices/. Add a
+ * context against a mini DOM defined below and the real data: data/portfolio.db, read through the same
+ * scripts/api.py that server.py answers the page's api/ routes with. Add a
  * <script src> to the page and it is picked up here automatically. It then dumps
  *
  *   - every computed field of every open and closed position, in both modes,
@@ -28,6 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const { spawnSync } = require('child_process');
 
 const ROOT = __dirname;
 const PAGE = path.join(ROOT, 'portfolio.html');
@@ -135,7 +137,14 @@ const sandbox = {
     // gets an empty-but-valid payload rather than a 404. refresh() treats "no ticks yet" as a
     // silent no-op (its own openIdx/lastIdx check), so this produces no console noise at all,
     // instead of a caught error that only ever says the same harmless thing on every run.
-    if (p.startsWith('/live-index')) return { ok: true, status: 200, json: async () => ({ times: [], closes: [] }) };
+    if (p.replace(/^\//, '').startsWith('live-index')) return { ok: true, status: 200, json: async () => ({ times: [], closes: [] }) };
+    // the data routes server.py answers out of the database — the same code (scripts/api.py)
+    // answers them here, so this checks what the page really gets; exit 4 is its 404
+    if (p.startsWith('api/')) {
+      const res = spawnSync('python3', [path.join(ROOT, 'scripts', 'api.py'), p], { encoding: 'utf8' });
+      if (res.status !== 0 && res.status !== 4) throw new Error(`api.py ${p}: ${res.stderr}`);
+      return { ok: res.status === 0, status: res.status === 0 ? 200 : 404, text: async () => res.stdout };
+    }
     const f = path.join(ROOT, p);
     return fs.existsSync(f)
       ? { ok: true, status: 200, text: async () => fs.readFileSync(f, 'utf8') }
@@ -171,7 +180,7 @@ function hoverAll(nodes, rows, tag, out) {
 (async () => {
   await new Promise(res => setTimeout(res, 600));            // let the fetch chain settle
   const h = sandbox.__hooks;
-  if (!h.items().length && !h.closed().length && !h.cash().length) { console.error(`no positions loaded — are the CSVs in private-profiles/${PROFILE_ARG || '<default>'}/ ?`); process.exit(2); }
+  if (!h.items().length && !h.closed().length && !h.cash().length) { console.error(`no positions loaded — is profile ${PROFILE_ARG || '<default>'} in data/portfolio.db?`); process.exit(2); }
   const out = {};
 
   for (const mode of ['abs', 'rel']) {
@@ -228,7 +237,7 @@ function hoverAll(nodes, rows, tag, out) {
       h.renderTrades();
       const trRows = tbody('#tblTrades tbody').children;
       // the watchlist: registry instruments with no holding behind them, and the only view whose
-      // "last close" comes from gen_prices/_latest.csv rather than from a position
+      // "last close" comes from api/latest rather than from a position
       h.renderWatch();
       const wRows = tbody('#tblWatch tbody').children;
       out[`${tag}/watch`] = {

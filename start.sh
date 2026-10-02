@@ -1,13 +1,15 @@
 #!/bin/sh
-# Serve this directory so portfolio.html can fetch the CSVs — fetch is blocked on file://.
+# Serve this directory so portfolio.html can fetch its data — fetch is blocked on file://.
 #
 #   ./start.sh          serve on 8000 and open the page
 #   ./start.sh 8080     serve on another port
 #   ./start.sh -n       don't open a browser
 #
 # The server itself, and every route the page uses, is scripts/server.py — this only checks the
-# port and opens the browser. Bound to 127.0.0.1 on purpose: private-profiles/ and gen_prices/ hold
-# real position values, and the server has no access control at all. Ctrl-C to stop.
+# port and opens the browser. Bound to 127.0.0.1 on purpose: the database behind its api/ routes
+# holds real position values, and the server has no access control at all. Ctrl-C to stop.
+#
+# Needs data/portfolio.db — scripts/sqlite-install.sh creates it on a new host.
 
 set -eu
 
@@ -30,6 +32,8 @@ fi
 cd "$(dirname "$0")"
 
 command -v python3 >/dev/null 2>&1 || { echo "start.sh: python3 not found" >&2; exit 1; }
+[ -e "${PORTFOLIO_DB:-data/portfolio.db}" ] || {
+    echo "start.sh: no ${PORTFOLIO_DB:-data/portfolio.db} — run scripts/sqlite-install.sh first" >&2; exit 1; }
 
 if command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "start.sh: port $port is already in use — pass another one, e.g. $0 $((port + 1))" >&2
