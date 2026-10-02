@@ -1,5 +1,5 @@
 #!/bin/sh
-# Serve this directory so portfolio.html can fetch its data — fetch is blocked on file://.
+# Serve the page (web/) so portfolio.html can fetch its data — fetch is blocked on file://.
 #
 #   ./start.sh          serve on 8000 and open the page
 #   ./start.sh 8080     serve on another port

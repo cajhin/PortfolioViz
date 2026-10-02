@@ -3,11 +3,12 @@
 
     python3 scripts/server.py [PORT]      # 8000 by default; start.sh runs this
 
-Serves the repo directory (this file's folder's parent) on 127.0.0.1 only: the data behind the
-api/ routes holds real position values, and there is no access control at all. Most routes run one
+Serves the page's own files (web/) on 127.0.0.1 only: the data behind the api/ routes holds real
+position values, and there is no access control at all. Nothing else in the repo is served — not
+the database, not the import files. Most routes run one
 of the other scripts and hand back what it printed; the logic lives there.
 """
-import http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.request
+import functools, http.server, json, os, re, socket, subprocess, sys, urllib.parse, urllib.request
 
 import sqlite3
 
@@ -16,6 +17,7 @@ import db
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
+WEB = os.path.join(ROOT, "web")                  # the static half: the page and its css and scripts
 
 # The non-static routes this server answers.
 #
@@ -363,6 +365,5 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 if __name__ == "__main__":
-    os.chdir(ROOT)                  # what the static half serves
-    http.server.test(HandlerClass=QuietHandler, port=int(sys.argv[1]) if len(sys.argv) > 1 else 8000,
-                     bind="127.0.0.1")
+    http.server.test(HandlerClass=functools.partial(QuietHandler, directory=WEB),
+                     port=int(sys.argv[1]) if len(sys.argv) > 1 else 8000, bind="127.0.0.1")

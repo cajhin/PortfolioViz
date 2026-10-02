@@ -32,7 +32,8 @@ const vm = require('vm');
 const { spawnSync } = require('child_process');
 
 const ROOT = __dirname;
-const PAGE = path.join(ROOT, 'portfolio.html');
+const WEB = path.join(ROOT, 'web');                         // the page and its scripts
+const PAGE = path.join(WEB, 'portfolio.html');
 const SAVE = process.argv.includes('--save');
 // no --profile means the page's own default (config.json's defaultProfile), against the plain
 // baseline; a named one gets a baseline of its own, since each profile's figures differ
@@ -46,7 +47,7 @@ const BASELINE = path.join(ROOT, PROFILE_ARG ? `check_baseline.${PROFILE_ARG}.js
 const SCRIPTS = [...fs.readFileSync(PAGE, 'utf8').matchAll(/<script src="([^"]+)"><\/script>/g)]
   .map(m => m[1]);
 if (!SCRIPTS.length) { console.error(`no <script src> tags found in ${PAGE}`); process.exit(2); }
-const src = SCRIPTS.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n;\n') + `
+const src = SCRIPTS.map(f => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\n;\n') + `
 ;globalThis.__hooks = {
   items: () => ITEMS, closed: () => CLOSED, pf: () => PF, cash: () => CASH,
   totals, computeAsOf, computeAsOfRealized, openDetail, detail: () => DETAIL,
@@ -145,7 +146,7 @@ const sandbox = {
       if (res.status !== 0 && res.status !== 4) throw new Error(`api.py ${p}: ${res.stderr}`);
       return { ok: res.status === 0, status: res.status === 0 ? 200 : 404, text: async () => res.stdout };
     }
-    const f = path.join(ROOT, p);
+    const f = path.join(WEB, p);                              // the static half, as server.py serves it
     return fs.existsSync(f)
       ? { ok: true, status: 200, text: async () => fs.readFileSync(f, 'utf8') }
       : { ok: false, status: 404, text: async () => '' };

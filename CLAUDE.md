@@ -5,10 +5,11 @@ no dependencies, no framework — served from a local directory and opened in a 
 lives in one SQLite database, `data/portfolio.db`.
 
 ```
-portfolio.html          markup only; loads the css and the two scripts, in that order
-portfolio.css
-portfolio.model.js      data and arithmetic — never touches the DOM
-portfolio.view.js       everything that reads or writes the page
+web/                    the page — all the server serves besides its routes
+  portfolio.html          markup only; loads the css and the two scripts, in that order
+  portfolio.css
+  portfolio.model.js      data and arithmetic — never touches the DOM
+  portfolio.view.js       everything that reads or writes the page
 check_portfolio.js      regression check for both scripts (see below)
 start.sh                checks the port, runs scripts/server.py, opens the page
 scripts/                every Python script; each finds the repo as its own folder's parent, so it
@@ -18,7 +19,7 @@ scripts/                every Python script; each finds the repo as its own fold
   schema.sql              the database's tables; seed.sql the base a new one starts from
   sqlite-install.sh       sets a host up: installs sqlite3 if missing, creates the database
   api.py                  the api/ routes the page reads — each in the shape of the file it replaced
-  server.py               the page's server: the repo's files on localhost, the api/ routes, plus
+  server.py               the page's server: web/ on localhost, the api/ routes, plus
                             every route the page writes through — most just run a script below
   update_prices.py        fetches price history per the registry's price sources
   import_tr.py            imports a Trade Republic transaction export into a manual profile, and
