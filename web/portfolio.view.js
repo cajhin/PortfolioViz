@@ -3543,6 +3543,7 @@ function renderProfilePicker() {
       }));
       sel.value = me ? PROFILE : '';
       sel.hidden = !list.length;
+      renderOtherProfiles(list);
       if (!me) return list;
       document.getElementById('profileLabel').value = me.label || PROFILE;
       // every server.py that knows about profile kinds says one; none at all means the running
@@ -3579,6 +3580,45 @@ function applyProfileSource(source, label) {
   document.getElementById('emptyProfileHow').innerHTML = manual
     ? 'Import a Trade Republic transaction export, or add transactions by hand, below.'
     : 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.';
+}
+
+// The Config tab's "Other profiles": every profile the user may open but this one, each a link to
+// it and — where they may change it — a Delete. That purges it on the server (all its data, after
+// a backup there), so it asks first; the current profile is not offered, so the page never
+// deletes what it is showing.
+function renderOtherProfiles(list) {
+  const others = list.filter(p => p.name !== PROFILE);
+  document.getElementById('otherProfiles').hidden = !others.length;
+  document.getElementById('otherProfileList').replaceChildren(...others.map(p => {
+    const row = document.createElement('div');
+    const link = Object.assign(document.createElement('a'), { href: '#', textContent: p.label || p.name });
+    link.addEventListener('click', e => { e.preventDefault(); gotoProfile(p.name); });
+    const what = Object.assign(document.createElement('span'), { className: 'muted',
+      textContent: `${p.name} · ${p.source}${p.write === false ? ' · read only' : ''}` });
+    row.append(link, what);
+    if (p.write === false) return row;
+    const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel', textContent: 'Delete' });
+    const msg = Object.assign(document.createElement('span'), { className: 'err' });
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Delete profile "${p.label || p.name}" (${p.name}) and all its data — positions, ` +
+                   'transactions, settings? A backup of the database is kept on the server.')) return;
+      btn.disabled = true;
+      msg.textContent = '';
+      try {
+        const r = await fetch(`profile-delete?profile=${encodeURIComponent(p.name)}`, { method: 'POST' });
+        if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : (await r.text()).trim() || routeFailure(r));
+        row.remove();
+        [...document.getElementById('profileSel').options].find(o => o.value === p.name)?.remove();
+        if (!document.getElementById('otherProfileList').children.length)
+          document.getElementById('otherProfiles').hidden = true;
+      } catch (err) {
+        msg.textContent = `Could not delete: ${err.message}`;
+        btn.disabled = false;
+      }
+    });
+    row.append(btn, msg);
+    return row;
+  }));
 }
 
 // server.py is a long-running process, so it can be older than the page it serves — and then

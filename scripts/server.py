@@ -53,6 +53,9 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # refresh or import, granted to its creator. 409 if it already exists.
 # POST /profile-label?profile=NAME {label} — the Config tab's rename: only the label changes. The
 # name never does — it is what URLs, baselines and the refresh task refer to the profile by.
+# POST /profile-delete?profile=NAME — the Config tab's Delete, for a profile the user may change:
+# manage-accounts.py purge, after a backup of the whole database to data/purged/. The default
+# profile is refused there.
 #
 # POST /import-tr?profile=NAME&name=FILE.csv — the Config tab's "Import Trade Republic file":
 # the body is the export itself. Kept in private-profiles/<name>/exports/ (the record of what
@@ -247,6 +250,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if parsed.path == "/profile-delete":
+            self.delete_profile((urllib.parse.parse_qs(parsed.query).get("profile") or [""])[0])
+            return
         if parsed.path == "/instrument":
             self.add_instrument()
             return
@@ -315,6 +321,22 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def delete_profile(self, profile):
+        if not self.may_change(profile):
+            self.send_text(404 if not self.may_open(profile) else 403, f"you may not delete {profile}")
+            return
+        proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manage-accounts.py"), "purge", profile,
+                               "--yes", "--backup-dir", os.path.join(ROOT, "data", "purged")],
+                              capture_output=True, text=True, timeout=120)
+        try:
+            out = json.loads(proc.stdout)
+        except ValueError:
+            out = {"ok": False, "error": (proc.stdout + proc.stderr).strip()}
+        if not out.get("ok"):
+            self.send_text(400, out.get("error") or "failed")
+            return
+        self.send_json(out)
 
     def add_instrument(self):
         data = self.rfile.read(int(self.headers.get("Content-Length") or 0))   # before any refusal

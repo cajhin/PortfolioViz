@@ -384,6 +384,11 @@
         <button type="submit" class="dt-addsel">Create</button>
         <span class="err" id="newProfileErr"></span>
       </form>
+      <!-- the user's other profiles, each a link to it and a Delete (see renderOtherProfiles) -->
+      <div id="otherProfiles" class="configrow" hidden>
+        <label>Other profiles</label>
+        <div id="otherProfileList" class="proflist"></div>
+      </div>
       <!-- who is logged in (see server.py's /me), hidden until that is known -->
       <form id="logoutForm" class="configrow" hidden>
         <label>Logged in as</label>
