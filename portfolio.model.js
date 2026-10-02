@@ -72,6 +72,13 @@ const SECTOR_COLORS_PATH = 'registry/sector_colors.csv';
 // position it covers — the Parqet export is a snapshot from whenever it was pulled, so its quotes
 // are usually the older pair. build() takes the close and recomputes the position's value with it.
 const LATEST_PATH = 'gen_prices/_latest.csv';
+// _live.csv is a price fresher than any close — a US stock's pre-market, a European one's gettex
+// mid during its session — where update_prices.py found one. The file stays apart from the closes,
+// so a pre-market price never lands in a series on disk; the page puts it in as the series' last
+// point instead (see withLive), on today's date, and makes it the position's lastPrice too. Both
+// have to move together: anchorFactor() divides lastPrice by the series close on lastPriceDate, and
+// either one alone would shift a whole chart by the overnight move.
+const LIVE_PATH = 'gen_prices/_live.csv';
 
 /* ---------- state ----------
    Every mutable global on the page. Only ingest() and build() below, and the control handlers
@@ -91,6 +98,7 @@ const LATEST_PATH = 'gen_prices/_latest.csv';
    config.json — kept as ordinary globals, not a nested CONFIG object, so every reader still just
    reads a plain name the way it does for everything else here. */
 let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(), SECTORS = new Map(),
+    LIVE = new Map(),             // instrument id → its live price, see LIVE_PATH
     INSTRUMENTS = new Map(),      // registry rows, keyed by ISIN
     SOURCES = new Map(),          // instrument id → its price source row, for the Source column
     BENCH = [], CCY = 'EUR',
@@ -353,11 +361,23 @@ async function loadSeries(slug) {
                      raw: num(x.close_raw), ccy: x.quote_currency || '' }))
         .filter(x => x.date && x.close > 0)
         .sort((a, b) => a.date < b.date ? -1 : 1);
-      if (rows.length) out = { rows, meta: file.meta };
+      const live = [...LIVE.entries()].find(([id]) => slug.startsWith(id + '-'));   // slug is "<id>-<slug>"
+      if (rows.length) out = { rows: withLive(rows, live && live[1]), meta: file.meta };
     }
   } catch { /* no series for this position */ }
   SERIES_CACHE.set(slug, out);
   return out;
+}
+
+// A series with today's live price as its last point (see LIVE_PATH): appended after the newest
+// close, or in place of today's own — a European close for today is Yahoo's delayed price, which
+// the live one supersedes. Older than the newest close, it is ignored. `live` marks the row.
+function withLive(rows, live) {
+  if (!live || !rows.length) return rows;
+  const last = rows[rows.length - 1];
+  if (live.asof < last.date) return rows;
+  const row = { date: live.asof, close: live.price, raw: live.raw, ccy: live.ccy, live: true };
+  return live.asof === last.date ? [...rows.slice(0, -1), row] : [...rows, row];
 }
 
 // The synchronous half of loadSeries: whatever is already cached for this slug, or null. For a
@@ -1166,6 +1186,22 @@ function build(rows) {
       d.ret = d.pur > 0 ? d.gain / d.pur * 100 : 0;
       d.state = !(d.pur > 0) || Math.abs(d.gain) < 0.005 ? 'flat' : (d.gain > 0 ? 'gain' : 'loss');
     }
+    // a live price newer than the close is the position's price now — see LIVE_PATH. A sold one
+    // takes it too: its series ends on the live point all the same, and lastPrice has to match it
+    const live = LIVE.get(d.identifier);
+    if (live && (!d.lastPriceDate || live.asof >= d.lastPriceDate)) {
+      d.lastPrice = live.price;
+      d.lastPriceDate = live.asof;
+      d.livePrice = live.price;
+      d.liveAt = live.at;
+      d.liveSource = live.source;
+    }
+    if (live && d.livePrice && !d.sold && d.shares > 0) {
+      d.cur = d.shares * live.price;
+      d.gain = d.cur - d.pur;
+      d.ret = d.pur > 0 ? d.gain / d.pur * 100 : 0;
+      d.state = !(d.pur > 0) || Math.abs(d.gain) < 0.005 ? 'flat' : (d.gain > 0 ? 'gain' : 'loss');
+    }
     d.label = displayName(d);
     d.fund = isFund(d);
     d.years = holdingYears(d.firstActivity);
@@ -1251,10 +1287,11 @@ function totals(rows) {
 const EMPTY_PROFILE_MSG = 'no rows with a positive value';
 
 /* ---------- ingest ----------
-   config.json (already merged with the profile's own, see mergeConfig) plus the seven CSVs in —
-   cash.csv the seventh, absent for a Parqet profile — the whole model out. Called by load() in portfolio.view.js,
+   config.json (already merged with the profile's own, see mergeConfig) plus the eight CSVs in —
+   cash.csv the seventh, absent for a Parqet profile; _live.csv the eighth, absent outside a
+   pre-market or a European session — the whole model out. Called by load() in portfolio.view.js,
    which renders what this leaves behind; nothing here touches the page. */
-function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText, cashText) {
+function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText, cashText, liveText) {
   // malformed or missing config.json keeps the built-in defaults rather than failing the page —
   // same "absent input degrades gracefully" rule every other file here follows
   let benchIsin = '';
@@ -1291,10 +1328,15 @@ function ingest(configText, text, tradesText, instrumentsText, sourcesText, benc
   PRICES = new Map((latestText ? parseCSV(latestText) : [])
     .filter(r => r.id && r.close !== '' && r.date)
     .map(r => [r.id, { price: num(r.close), asof: r.date, symbol: r.source }]));
-  BENCH = (benchText ? parseCSV(splitMeta(benchText).body) : [])
+  LIVE = new Map((liveText ? parseCSV(liveText) : [])
+    .filter(r => r.id && num(r.price) > 0 && r.date)
+    .map(r => [r.id, { price: num(r.price), asof: r.date, at: r.at, source: r.source,
+                       raw: num(r.price_raw), ccy: r.quote_currency || '' }]));
+  // the benchmark ends on its live price too, so "vs. the index" compares like with like today
+  BENCH = withLive((benchText ? parseCSV(splitMeta(benchText).body) : [])
     .map(r => ({ date: r.date, close: num(r.close) }))
     .filter(r => r.date && r.close > 0)
-    .sort((a, b) => a.date < b.date ? -1 : 1);
+    .sort((a, b) => a.date < b.date ? -1 : 1), LIVE.get((INSTRUMENTS.get(benchIsin) || {}).id));
   TRADES = tradesText ? parseCSV(tradesText) : [];
   CASH = (cashText ? parseCSV(cashText) : [])
     .map(c => ({ ...c, amount: num(c.amount) }))

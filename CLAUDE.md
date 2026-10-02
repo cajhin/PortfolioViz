@@ -29,7 +29,10 @@ private-profiles/<p>/   IMPORTED — one profile's positions.csv + activities.cs
                           manual_ledger.csv (hand-entered rows, same format), tr_deleted.csv
                           (imported rows deleted on the page) — its real source; positions.csv,
                           activities.csv and cash.csv are rebuilt from these — and exports/
-gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv; gitignored
+gen_prices/*.csv        DERIVED — <isin>-<slug>.csv per instrument, plus _latest.csv (newest close)
+                          and _live.csv (a fresher live price: US pre-market from Yahoo, EU gettex
+                          mid in-session — the page makes it each series' last point, but it is
+                          never written into a series file); gitignored
 gen_fx/*.csv            DERIVED — one file per currency pair, for the conversion on write
 ```
 

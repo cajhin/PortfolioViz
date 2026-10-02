@@ -41,6 +41,7 @@ from datetime import date, datetime, timedelta, timezone
 import import_tr
 import manual_tx
 from import_tr import num, read_csv, write_csv
+from update_prices import GETTEX_MAX_AGE_MIN, gettex_quote
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
@@ -318,7 +319,6 @@ GETTEX_HOURS = (8, 22)                    # local time, Mon–Fri
 # instead: a buy FALLBACK_SPREAD above that price, a sale as much below it. On purpose more than
 # gettex's spread usually is, so that the fallback is never the cheaper venue to aim for.
 FALLBACK_SPREAD = 0.01
-GETTEX_MAX_AGE_MIN = 15                   # a market maker's quote is re-stamped only when it changes
 BERLIN = None
 
 
@@ -329,30 +329,6 @@ def gettex_open(now=None):
         BERLIN = ZoneInfo("Europe/Berlin")
     t = (now or datetime.now(timezone.utc)).astimezone(BERLIN)
     return t.weekday() < 5 and GETTEX_HOURS[0] <= t.hour < GETTEX_HOURS[1]
-
-
-def gettex_quote(isin):
-    """gettex's bid and ask for an ISIN, with the age of the quote — or None when onvista has none.
-    Stocks and funds (ETFs among them) live under different onvista addresses."""
-    import add_instrument
-    for kind in ("stocks", "funds"):
-        try:
-            raw = add_instrument.yahoo(f"https://api.onvista.de/api/v1/{kind}/ISIN:{isin}/snapshot")
-        except Exception:
-            continue
-        for q in (raw.get("quoteList") or {}).get("list", []):
-            if (q.get("market") or {}).get("name") != "gettex":
-                continue
-            bid, ask = num(q.get("bid")), num(q.get("ask"))
-            stamp = max(q.get("datetimeBid") or "", q.get("datetimeAsk") or "")
-            if not (bid > 0 and ask >= bid and stamp) or q.get("isoCurrency") != "EUR":
-                return None
-            at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-            age = (datetime.now(timezone.utc) - at).total_seconds() / 60
-            return {"bid": bid, "ask": ask, "age_min": round(age, 1),
-                    "spread_pct": round((ask - bid) / ((ask + bid) / 2) * 100, 2)}
-        return None
-    return None
 
 
 def venue_price(inst, side, closes=None):

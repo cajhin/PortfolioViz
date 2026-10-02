@@ -25,8 +25,14 @@ names, and the untouched quote is kept alongside in `close_raw`. Converting here
 the browser keeps the page's arithmetic single-currency, and keeping the raw means a bad FX day
 can be recomputed rather than re-fetched.
 
+A live price fresher than any close is kept apart from the closes, in _live.csv (see live_price):
+a US stock's pre-market price from Yahoo, a European one's gettex mid while its home session is
+open (Yahoo's European prices run ~15 minutes late). It is never written into a series — a
+pre-market price is not a close — and the next run outside those windows drops it again.
+
 Written per instrument:  gen_prices/<id>-<slug>.csv   date,close,close_raw,quote_currency,source
 Written once per run:    gen_prices/_latest.csv       id,date,close,source
+                         gen_prices/_live.csv         id,date,at,price,price_raw,quote_currency,source
 FX series are cached in  gen_fx/<PAIR>.csv            date,rate
 """
 import csv, io, json, os, subprocess, sys, time
@@ -107,9 +113,9 @@ def as_stamp(day):
     return int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
 
 
-def fetch(symbol, since):
-    url = ("https://query1.finance.yahoo.com/v8/finance/chart/"
-           f"{symbol}?period1={since}&period2={int(time.time())}&interval=1d")
+def chart(symbol, query):
+    """Yahoo's chart answer for a symbol: its one result, meta and bars."""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?{query}"
     out = subprocess.run(["curl", "-s", "--max-time", "40", "-H", f"User-Agent: {UA}", url],
                          capture_output=True, text=True).stdout
     try:
@@ -118,13 +124,23 @@ def fetch(symbol, since):
         result = None
     if not result:
         raise LookupError(f"no data for {symbol} — response was {out[:160]!r}")
-    quote = result[0]["indicators"]["quote"][0]
-    stamps = result[0].get("timestamp") or []
+    return result[0]
+
+
+def fetch(symbol, since):
+    return fetch_with_meta(symbol, since)[0]
+
+
+def fetch_with_meta(symbol, since):
+    """Daily closes by date, and Yahoo's meta for the listing (its sessions, among others)."""
+    result = chart(symbol, f"period1={since}&period2={int(time.time())}&interval=1d")
+    quote = result["indicators"]["quote"][0]
+    stamps = result.get("timestamp") or []
     closes = quote.get("close") or []
     volumes = quote.get("volume") or [None] * len(closes)
     rows = [(datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d"), round(c, 6), v)
             for t, c, v in zip(stamps, closes, volumes) if c is not None]
-    return {d: c for d, c, _ in drop_placeholder_lead(rows, symbol)}
+    return {d: c for d, c, _ in drop_placeholder_lead(rows, symbol)}, result.get("meta") or {}
 
 
 def drop_placeholder_lead(rows, symbol=""):
@@ -200,6 +216,70 @@ def to_portfolio_ccy(close, quote_ccy, rates, date):
     return round(close / rate, 6)
 
 
+GETTEX_MAX_AGE_MIN = 15                   # a market maker's quote is re-stamped only when it changes
+PRE_MARKET_MAX_AGE_MIN = 30               # a thin pre-market can go quiet for a while
+
+
+def gettex_quote(isin):
+    """gettex's bid and ask for an ISIN, with the age of the quote — or None when onvista has none.
+    One venue's quote, picked by its market code (_TRO), from onvista's unofficial API; the STOCK
+    path serves funds and ETFs too, and an unknown market answers 403."""
+    url = f"https://api.onvista.de/api/v1/instruments/STOCK/ISIN:{isin}/quote?codeMarket=_TRO"
+    out = subprocess.run(["curl", "-sf", "--max-time", "15", "-H", f"User-Agent: {UA}", url],
+                         capture_output=True, text=True).stdout
+    try:
+        q = json.loads(out)
+        bid, ask = float(q.get("bid") or 0), float(q.get("ask") or 0)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if (q.get("market") or {}).get("name") != "gettex":
+        return None
+    stamp = max(q.get("datetimeBid") or "", q.get("datetimeAsk") or "")
+    if not (bid > 0 and ask >= bid and stamp) or q.get("isoCurrency") != "EUR":
+        return None
+    at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    age = (datetime.now(timezone.utc) - at).total_seconds() / 60
+    return {"bid": bid, "ask": ask, "age_min": round(age, 1), "at": at,
+            "spread_pct": round((ask - bid) / ((ask + bid) / 2) * 100, 2)}
+
+
+def live_price(inst, src, meta, rates):
+    """A price fresher than the stored closes, or None when the closes are as fresh as it gets.
+
+    A US listing in its pre-market (Yahoo's 1-minute bars with includePrePost): its daily bars
+    have nothing for today until the regular session opens. A European listing in its regular
+    session: gettex's mid, live where Yahoo's price for it is ~15 minutes old. Outside those
+    windows the newest close is the price, and there is no live row. gettex quotes in euros, so
+    it stands in only for a euro portfolio."""
+    now = time.time()
+    period = meta.get("currentTradingPeriod") or {}
+    inside = lambda k: bool(period.get(k)) and period[k]["start"] <= now < period[k]["end"]
+    symbol, ccy = src["symbol"].strip(), (src["quote_currency"] or portfolio_currency()).strip()
+    if meta.get("hasPrePostMarketData") and inside("pre"):
+        r = chart(symbol, "interval=1m&range=1d&includePrePost=true")
+        bars = [(t, c) for t, c in zip(r.get("timestamp") or [], r["indicators"]["quote"][0].get("close") or [])
+                if c is not None and t >= period["pre"]["start"]]
+        if not bars or now - bars[-1][0] > PRE_MARKET_MAX_AGE_MIN * 60:
+            return None
+        at, raw = datetime.fromtimestamp(bars[-1][0], timezone.utc), round(bars[-1][1], 6)
+        day = at.strftime("%Y-%m-%d")
+        price = raw if ccy == portfolio_currency() else to_portfolio_ccy(raw, ccy, rates, day)
+        source = f"{symbol} pre-market"
+    elif (meta.get("exchangeTimezoneName") or "").startswith("Europe/") and inside("regular") \
+            and portfolio_currency() == "EUR" and inst.get("isin"):
+        g = gettex_quote(inst["isin"])
+        if not g or g["age_min"] > GETTEX_MAX_AGE_MIN:
+            return None
+        at, raw, ccy, source = g["at"], round((g["bid"] + g["ask"]) / 2, 6), "EUR", "gettex mid"
+        price = raw
+    else:
+        return None
+    if price is None:
+        return None
+    return {"id": inst["id"], "date": at.strftime("%Y-%m-%d"), "at": at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "price": price, "price_raw": raw, "quote_currency": ccy, "source": source}
+
+
 def update_one(inst, src, backfill=None):
     iid, slug = inst["id"], inst["slug"]
     path = os.path.join(DIR, f"{iid}-{slug}.csv" if slug else f"{iid}.csv")
@@ -213,10 +293,10 @@ def update_one(inst, src, backfill=None):
     start = have_from if (backfill and have_from and backfill > have_from) \
         else backfill or have_from or FALLBACK_START
     try:
-        fresh = fetch(symbol, as_stamp(start))
+        fresh, meta = fetch_with_meta(symbol, as_stamp(start))
     except LookupError as err:
         print(f"  {iid} [{symbol}]: {err}")
-        fresh = {}
+        fresh, meta = {}, {}
 
     rates = fx_series(src["fx_symbol"], timeline_start()) if src["fx_symbol"] else None
     added = 0
@@ -243,7 +323,14 @@ def update_one(inst, src, backfill=None):
     span = f"{min(rows)} → {max(rows)}"
     print(f"  {iid} [{slug}]: {len(rows)} rows, {span} (+{added} new)")
     last = rows[max(rows)]
-    return {"id": iid, "date": last["date"], "close": last["close"], "source": last["source"]}
+    try:
+        live = live_price(inst, src, meta, rates) if meta else None
+    except (LookupError, KeyError, IndexError, TypeError) as err:
+        print(f"  {iid} [{symbol}]: no live price — {err}")
+        live = None
+    if live:
+        print(f"  {iid} [{slug}]: live {live['price']} ({live['source']}, {live['at']})")
+    return {"id": iid, "date": last["date"], "close": last["close"], "source": last["source"]}, live
 
 
 def write_latest(latest, merge=False):
@@ -262,6 +349,26 @@ def write_latest(latest, merge=False):
         w.writeheader()
         w.writerows(sorted(latest, key=lambda r: r["id"]))
     print(f"{path}: {len(latest)} instruments")
+
+
+def write_live(live, done, merge=False):
+    """The live price per instrument, where there is one fresher than its close (see live_price).
+
+    Every instrument this run fetched (`done`) either gets its new row or loses its old one — a
+    pre-market price must not outlive the session that superseded it. With merge, instruments
+    this run did not touch keep theirs, as in write_latest."""
+    path = os.path.join(DIR, "_live.csv")
+    kept = {}
+    if merge and os.path.exists(path):
+        with open(path) as fh:
+            kept = {r["id"]: r for r in csv.DictReader(fh) if r.get("id") and r["id"] not in done}
+    kept.update({r["id"]: r for r in live})
+    fields = ["id", "date", "at", "price", "price_raw", "quote_currency", "source"]
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        w.writerows(sorted(kept.values(), key=lambda r: r["id"]))
+    print(f"{path}: {len(kept)} live prices")
 
 
 def main():
@@ -315,17 +422,20 @@ def main():
     for pair in sorted({src["fx_symbol"] for _, src in jobs if src["fx_symbol"]}):
         fx_series(pair, timeline_start())
 
-    latest = []
+    latest, live = [], []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = [pool.submit(update_one, inst, src, backfill) for inst, src in jobs]
         for future in as_completed(futures):
-            row = future.result()
+            row, now = future.result() or (None, None)
             if row:
                 latest.append(row)
+            if now:
+                live.append(now)
     # a partial run — one profile, or one instrument — merges into _latest.csv rather than
     # replacing it, so every other instrument keeps its row
     if latest:
         write_latest(latest, merge=bool(profile or args))
+    write_live(live, {inst["id"] for inst, _ in jobs}, merge=bool(profile or args))
 
 
 if __name__ == "__main__":

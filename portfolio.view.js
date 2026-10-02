@@ -303,9 +303,13 @@ const tipRow = (label, value, cls) =>
 // longer want it: they carry a Purchase price / End price pair of their own further down, and the
 // header quote was the same number a second time. The realised bar has no such pair, so its
 // tooltip is the one place the quote still earns its space.
+// a live price's time and kind, e.g. "14:45 pre-market" — see LIVE_PATH
+const liveStamp = d => `${pad2(new Date(d.liveAt).getHours())}:${pad2(new Date(d.liveAt).getMinutes())} ` +
+  (/pre-market$/.test(d.liveSource || '') ? 'pre-market' : 'gettex');
 const tipHead = (d, withPrice) =>
   `<div class="t">${d.label || d.name}` +
-  (withPrice && d.lastPrice > 0 ? ` <span class="quote">${fmtMoneyPre(d.lastPrice)}` +
+  (withPrice && d.livePrice > 0 ? ` <span class="quote">${fmtMoneyPre(d.livePrice)} · ${liveStamp(d)}</span>`
+    : withPrice && d.lastPrice > 0 ? ` <span class="quote">${fmtMoneyPre(d.lastPrice)}` +
     `${d.lastPriceDate ? ' · ' + d.lastPriceDate : ''}</span>` : '') + '</div>' +
   (d.label && d.label !== d.name ? `<div class="full">${d.name}</div>` : '');
 // when the position was sold out of, and at what price
@@ -953,7 +957,8 @@ function renderWatch() {
     // ever match tradeKey(d), so the value bar is correctly all-zero rather than wrong
     const d = { identifier: inst.id, name: inst.name, label: inst.display || inst.name,
                portfolio: 'Watchlist' };
-    const last = PRICES.get(inst.id);
+    const close = PRICES.get(inst.id), live = LIVE.get(inst.id);
+    const last = live && (!close || live.asof >= close.asof) ? live : close;
     const tr = document.createElement('tr');
     tr.style.cursor = 'pointer';
     tr.addEventListener('click', () => openDetail(d));
@@ -3441,10 +3446,11 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
   })
   .then(([configText, instrumentsText, sourcesText, sectorColorsText]) => Promise.all([
     configText, get(CSV_PATH(), true), get(TRADES_PATH()), instrumentsText, sourcesText,
-    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH), get(CASH_PATH()), sectorColorsText,
+    get(benchSeriesPath(configText, instrumentsText)), get(LATEST_PATH), get(CASH_PATH()), get(LIVE_PATH),
+    sectorColorsText,
   ]))
   // sector colours are a view concern (see SECTOR_COLOR_OVERRIDE) — applied here, not threaded
-  // through ingest()'s own argument list, which stays exactly the eight the model expects
+  // through ingest()'s own argument list, which stays exactly the nine the model expects
   .then(texts => {
     loadSectorColors(texts.pop());
     load(...texts);
