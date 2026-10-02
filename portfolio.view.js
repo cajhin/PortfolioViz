@@ -3459,6 +3459,7 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
   .catch(err => {
     if (err && err.message === EMPTY_PROFILE_MSG) { showEmptyProfile(); return; }
     document.getElementById('loader').hidden = false;
+    document.getElementById('csvPath').textContent = CSV_PATH();
     if (err && err.message !== '404') document.getElementById('err').textContent = String(err && err.stack || err);
   });
 

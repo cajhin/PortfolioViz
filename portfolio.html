@@ -15,8 +15,8 @@
 <div class="verttitle" id="vertTitle" aria-hidden="true">Portfolio Viz</div>
 <div class="wrap">
   <div id="loader" class="loader" hidden>
-    <div>Could not read <code>parqet/positions.csv</code> automatically (browsers block local file reads from <code>file://</code>).</div>
-    <div>Pick the file, or serve the folder with <code>python3 -m http.server</code>.</div>
+    <div>Could not read <code id="csvPath">positions.csv</code> — missing, or opened from <code>file://</code>, where browsers block local file reads.</div>
+    <div>Pick the file, or serve the folder with <code>./start.sh</code>.</div>
     <input type="file" id="file" accept=".csv,text/csv">
     <div class="err" id="err"></div>
   </div>
