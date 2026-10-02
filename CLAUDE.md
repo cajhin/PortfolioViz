@@ -10,9 +10,11 @@ portfolio.model.js      data and arithmetic — never touches the DOM
 portfolio.view.js       everything that reads or writes the page
 config.json             settings — timeline start, portfolio currency, benchmark ISIN, default profile
 check_portfolio.js      regression check for both scripts (see below)
-start.sh                serves the directory on localhost and opens the page
+start.sh                checks the port, runs scripts/server.py, opens the page
 scripts/                every Python script; each finds the repo as its own folder's parent, so it
                           runs from any working directory, and the others import from one another
+  server.py               the page's server: the repo's files on localhost, plus every route the
+                            page needs a backend for — most just run one of the scripts below
   update_prices.py        fetches price history per registry/price_sources.csv
   import_tr.py            imports a Trade Republic transaction export into a manual profile, and
                             rebuilds a manual profile's CSVs from its ledgers
@@ -77,7 +79,7 @@ by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand
 for virtual demo portfolios; booked under portfolio "Manual", so never merged with a real
 position), both on the Transactions tab, never refreshed from Parqet. That tab's "+ New
 instrument…" writes to the **committed** `registry/` (via `add_instrument.py`) — so a page action
-can leave a git change there, which is meant: the registry is the shared catalog. A missing `source` counts as Parqet, the side that refuses imports; start.sh,
+can leave a git change there, which is meant: the registry is the shared catalog. A missing `source` counts as Parqet, the side that refuses imports; server.py,
 `import_tr.py` and the page all hold to it, so `main` cannot be overwritten by a stray import. Its conversion follows Parqet's conventions and was checked
 against Parqet's own import of the same account; its docstring lists them.
 

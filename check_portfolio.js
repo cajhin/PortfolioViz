@@ -131,7 +131,7 @@ const sandbox = {
   },
   fetch: async p => {
     // the live-index widget (see renderLiveIndex) has nothing to fetch here — there's no server
-    // behind this harness to proxy Yahoo through, unlike start.sh's own /live-index route — so it
+    // behind this harness to proxy Yahoo through, unlike scripts/server.py's /live-index route — so it
     // gets an empty-but-valid payload rather than a 404. refresh() treats "no ticks yet" as a
     // silent no-op (its own openIdx/lastIdx check), so this produces no console noise at all,
     // instead of a caught error that only ever says the same harmless thing on every run.

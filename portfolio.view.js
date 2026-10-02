@@ -3473,22 +3473,21 @@ document.getElementById('file').addEventListener('change', e => {
 });
 
 // The development machine's copy of the page gets a blue "PV dev" down the left edge, so it is
-// never mistaken for the live one. Asked of start.sh's /host route, since the browser reaches
+// never mistaken for the live one. Asked of server.py's /host route, since the browser reaches
 // either through localhost or a proxy and cannot tell them apart; served any other way, the page
 // keeps its plain title.
 const DEV_HOST = 'maigold';
 fetch('host', { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(({ host, stale }) => {
-    if (stale) staleServer();
+  .then(({ host }) => {
     if (String(host).toLowerCase().split('.')[0] !== DEV_HOST) return;
     const t = document.getElementById('vertTitle');
     t.textContent = 'PV dev';
     t.classList.add('dev');
   })
-  .catch(() => { /* not start.sh — nothing to mark */ });
+  .catch(() => { /* not server.py — nothing to mark */ });
 
-// The profile picker above the Update button. The list comes from start.sh's own /profiles route
+// The profile picker above the Update button. The list comes from server.py's /profiles route
 // (one entry per private-profiles/<name>/), so a page served any other way just hides it. Picking
 // one reloads with ?profile= — PROFILE is fixed for a page's lifetime, the same way the CSVs are,
 // and the URL keeps the choice bookmarkable and lets two profiles sit in two tabs. New profiles
@@ -3516,7 +3515,7 @@ function renderProfilePicker() {
       sel.hidden = false;
       const me = list.find(p => p.name === PROFILE);
       document.getElementById('profileLabel').value = me.label || PROFILE;
-      // every start.sh that knows about profile kinds says one; none at all means the running
+      // every server.py that knows about profile kinds says one; none at all means the running
       // server predates this page — say so, rather than let "no source" read as Parqet
       if (!('source' in me)) staleServer();
       else applyProfileSource(me.source, me.label);
@@ -3525,10 +3524,10 @@ function renderProfilePicker() {
   sel.addEventListener('change', () => gotoProfile(sel.value));
 }
 
-// A profile is controlled by Parqet or manually (profile.json's "source"; start.sh reads it, and
+// A profile is controlled by Parqet or manually (profile.json's "source"; server.py reads it, and
 // treats anything but "manual" as Parqet). That decides the Transactions tab: a Parqet profile's
 // list is read-only, with a note saying where it comes from; a manual one gets the import, a
-// delete per row and the add form. start.sh and the scripts refuse a Parqet profile regardless, so
+// delete per row and the add form. server.py and the scripts refuse a Parqet profile regardless, so
 // hiding the tools here is a courtesy, not the guard. Unknown (no /profiles to ask) shows neither.
 let PROFILE_SOURCE = null;
 function applyProfileSource(source, label) {
@@ -3552,12 +3551,11 @@ function applyProfileSource(source, label) {
     : 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.';
 }
 
-// start.sh is a long-running process, so it can be older than the page it serves — and then
-// lacks routes this page relies on. Three ways that shows: /host says start.sh changed on disk
-// since the server started (see markDevHost's fetch); /profiles lacks a field every current
-// server sends; or a route answers 404, which from start.sh means "no such route" — routeFailure
+// server.py is a long-running process, so it can be older than the page it serves — and then
+// lacks routes this page relies on. Two ways that shows: /profiles lacks a field every current
+// server sends; or a route answers 404, which from server.py means "no such route" — routeFailure
 // turns that into the same advice instead of a bare "File not found".
-const STALE_MSG = 'start.sh is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
+const STALE_MSG = 'The server is older than this page — restart it (Ctrl-C, ./start.sh) and reload.';
 function staleServer() {
   document.getElementById('profileSource').textContent = '· ' + STALE_MSG;
   document.getElementById('emptyProfileHow').textContent = STALE_MSG;
@@ -3590,7 +3588,7 @@ document.getElementById('profileLabelForm').addEventListener('submit', async e =
 });
 
 // The Config tab's "Create new profile": derives the directory name from the label typed ("Family
-// Trust" → family-trust), has start.sh create private-profiles/<name>/ with an empty export and a
+// Trust" → family-trust), has server.py create private-profiles/<name>/ with an empty export and a
 // profile.json, and switches to it. Empty until its first refresh — the page shows
 // showEmptyProfile's note there.
 async function createProfile(label) {
@@ -3632,7 +3630,7 @@ function showEmptyProfile() {
   document.getElementById('emptyProfile').hidden = false;
 }
 
-// The Transactions tab's "Import Trade Republic file": the export goes to start.sh's /import-tr route,
+// The Transactions tab's "Import Trade Republic file": the export goes to server.py's /import-tr route,
 // which keeps it under the profile's exports/ and runs import_tr.py on it. That script's own
 // report — how many rows were new, how many already imported, anything it could not place — is
 // shown as-is; a reload then picks up the rebuilt CSVs, the same as after Update.
@@ -3669,7 +3667,7 @@ function reloadOnTransactions() {
   else location.search = q.toString();
 }
 
-// "Add transaction": buys and sells entered by hand, for a virtual demo portfolio. start.sh's
+// "Add transaction": buys and sells entered by hand, for a virtual demo portfolio. server.py's
 // /manual-tx route runs manual_tx.py, which validates (instrument in the registry, no sale beyond
 // what is held, no future date), writes the profile's manual_ledger.csv and rebuilds its CSVs.
 // The instruments offered are the registry's priced ones — a virtual position is tracked by its
@@ -3858,7 +3856,7 @@ function openTxEditor(tr, t) {
 }
 
 /* ---------- new instrument ----------
-   Opened by "+ New instrument…" in the add form. Two look-ups, through start.sh's
+   Opened by "+ New instrument…" in the add form. Two look-ups, through server.py's
    /instrument-search (add_instrument.py): Look up turns the name typed ("Porsche") into candidates
    with their ISINs; picking one fills name and ISIN and then asks Yahoo which symbols list that
    ISIN — the best guess goes in the symbol field, the rest are offered there. The sector starts at
@@ -3993,7 +3991,7 @@ document.getElementById('instForm').addEventListener('submit', async e => {
   }
 });
 
-// Runs update_prices.py on whatever's serving this page — see start.sh's own update-prices
+// Runs update_prices.py on whatever's serving this page — see server.py's update-prices
 // route, the only thing here that isn't a plain static file. A reload afterwards is simpler and
 // more honest than trying to invalidate every cache (SERIES_CACHE, AS_OF_CACHE, …) this page
 // keeps: a fresh load re-fetches the CSVs the script just rewrote, the same way opening the page
@@ -4032,7 +4030,7 @@ document.getElementById('btnUpdatePrices').addEventListener('click', async () =>
 // a different element id/symbol/name to add a second index; nothing here is specific to NDX.
 //
 // Deliberately outside the registry/gen_prices pipeline every other price on this page goes
-// through: fetched via start.sh's own /live-index route (a browser can't call Yahoo's chart API
+// through: fetched via server.py's /live-index route (a browser can't call Yahoo's chart API
 // directly — no CORS allowance there, the same reason update_prices.py runs server-side rather
 // than from here), and never written to gen_prices or localStorage. A reload starts from nothing;
 // while the tab stays open, it refetches every 5 minutes. A page served any other way (file://, a
