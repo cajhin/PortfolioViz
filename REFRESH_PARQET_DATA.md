@@ -70,11 +70,12 @@ Gotchas that will bite you:
 One row per position, **open and closed**, plus the cash accounts. Header, in order:
 
 ```
-portfolio,name,identifier,assetType,isSold,shares,currency,currentValue,purchaseValue,
+depot,name,identifier,assetType,isSold,shares,currency,currentValue,purchaseValue,
 lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,activityCount
 ```
 
-- `portfolio` — display name (`Trade Republic`, `Comdirect`, `Schwab`), not the ID.
+- `depot` — the Parqet portfolio's display name (`Trade Republic`, `Comdirect`, `Schwab`), not the
+  ID. Parqet calls each depot a portfolio; here a portfolio is the whole (a profile).
 - `identifier` — ISIN; empty for cash rows.
 - `isSold` — `1` for a position closed out (`isSold: true`), else `0`. Closed rows carry
   `shares`, `currentValue`, `purchaseValue` = 0 and keep their `realizedGainNet`.
@@ -90,15 +91,15 @@ lastPriceDate,lastPrice,realizedGainNet,unrealizedGainNet,earliestActivityDate,a
 
 ## 4. Write `activities_<TS>.csv`
 
-One row per activity, all portfolios, sorted by `portfolio` then `datetime` ascending. Header:
+One row per activity, all depots, sorted by `depot` then `datetime` ascending. Header:
 
 ```
-portfolio,name,identifier,type,datetime,shares,price,amount,amountNet,fee,tax,
+depot,name,identifier,type,datetime,shares,price,amount,amountNet,fee,tax,
 realizedGains,realizedGainsNet,currency
 ```
 
 - `type` — `buy` | `sell` | `dividend` | `fees_taxes` (whatever the API returns).
-- `name` — resolve from the positions file by `(portfolio, ISIN)`; every row must end up named.
+- `name` — resolve from the positions file by `(depot, ISIN)`; every row must end up named.
 - `datetime` — the API's ISO string, unchanged.
 - `amountNet` — as delivered: buys = gross **+** fee, sells = gross **−** tax **−** fee,
   dividends after withholding. The page's XIRR runs on this column, so do not recompute it.
@@ -115,7 +116,7 @@ Last run: 211 rows — 138 buys, 43 sells, 26 dividends, 4 fee/tax bookings.
 python3 scripts/import_parqet.py $P private-profiles/$P/exports/positions_$TS.csv private-profiles/$P/exports/activities_$TS.csv
 ```
 
-It checks before it writes anything — every activity named, every traded `(portfolio, ISIN)` also a
+It checks before it writes anything — every activity named, every traded `(depot, ISIN)` also a
 position, every sale's net = gross − tax − fee — and refuses the import if one fails: fix the
 files and run it again. On success it replaces the profile's positions and activities in one go,
 prints the counts and headline figures, and lists any held instrument the registry lacks or that

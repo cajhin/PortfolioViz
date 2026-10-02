@@ -533,6 +533,5 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 if __name__ == "__main__":
-    db.migrate()
     http.server.test(HandlerClass=functools.partial(QuietHandler, directory=WEB),
                      port=int(sys.argv[1]) if len(sys.argv) > 1 else 8000, bind="127.0.0.1")

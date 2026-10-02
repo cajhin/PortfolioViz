@@ -49,7 +49,7 @@ const SCRIPTS = [...fs.readFileSync(PAGE, 'utf8').matchAll(/<script src="([^"]+)
 if (!SCRIPTS.length) { console.error(`no <script src> tags found in ${PAGE}`); process.exit(2); }
 const src = SCRIPTS.map(f => fs.readFileSync(path.join(WEB, f), 'utf8')).join('\n;\n') + `
 ;globalThis.__hooks = {
-  items: () => ITEMS, closed: () => CLOSED, pf: () => PF, cash: () => CASH,
+  items: () => ITEMS, closed: () => CLOSED, depots: () => DEPOTS, cash: () => CASH,
   totals, computeAsOf, computeAsOfRealized, openDetail, detail: () => DETAIL,
   renderPie, renderMap, renderClosed, renderMeta, renderTrades, renderWatch, renderHeaderTotals,
   setMode: m => { MODE = m; applyMode(ITEMS); applyMode(CLOSED); },
@@ -159,7 +159,7 @@ vm.runInContext(src, sandbox, { filename: SCRIPTS.join(' + ') });
 /* ---------- what gets recorded ---------- */
 const r = v => typeof v === 'number'
   ? (Number.isFinite(v) ? Math.round(v * 1e4) / 1e4 : String(v)) : v;
-const FIELDS = ['portfolio', 'label', 'identifier', 'shares', 'cur', 'pur', 'purAbs', 'gain', 'ret',
+const FIELDS = ['depot', 'label', 'identifier', 'shares', 'cur', 'pur', 'purAbs', 'gain', 'ret',
   'rel', 'relPre', 'state', 'cash', 'fund', 'invested', 'split', 'irr', 'irrExact', 'benchIrr',
   'benchAlt', 'alpha', 'divHeld', 'divSold', 'since', 'sinceKnown', 'vsBench', 'heldValue',
   'benchValue', 'soldShares', 'grossProceeds', 'sellCount', 'taxSell', 'share', 'years'];
@@ -187,7 +187,7 @@ function hoverAll(nodes, rows, tag, out) {
   for (const mode of ['abs', 'rel']) {
     h.setMode(mode);
     out[`${mode}/model`] = {
-      account: h.account(), pf: h.pf().map(p => p.name),
+      account: h.account(), depots: h.depots().map(p => p.name),
       totals: h.totals(h.items()), closedTotals: h.totals(h.closed()),
       items: h.items().map(snap), closed: h.closed().map(snap),
     };
@@ -220,14 +220,14 @@ function hoverAll(nodes, rows, tag, out) {
       h.renderMeta(h.items(), h.closed());
       const curTip = byId('curTip'); curTip.innerHTML = '';
       byId('tileCur').fire('pointerenter');
-      const byPortfolio = curTip.innerHTML;
+      const byDepot = curTip.innerHTML;
       curTip.innerHTML = '';
       byId('tilePur').fire('pointerenter');       // the Invested tile's own breakdown
       out[`${tag}/chrome`] = {
         tiles: ['tCur', 'tPur', 'tGain', 'tRel', 'tN', 'kCur', 'kPur', 'kGain'].map(id => byId(id).textContent),
         closedNet: byId('closedNet').textContent,
         dataStamp: byId('dataStamp').textContent,
-        byPortfolio,
+        byDepot,
         investedTip: curTip.innerHTML,
         legendItems: byId('legend').children.length,
       };

@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
+INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '2');   -- db.py SCHEMA_VERSION
 
 -- ---------- settings: was config.json (profile '') and private-profiles/<p>/profile.json ----------
 -- value is JSON. A profile's keys override the global ones (flat, shallow), except currency.
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS ledger (
 -- the ledger. Numbers stay text, exactly as written, so the page reads what it always read.
 CREATE TABLE IF NOT EXISTS position (
   profile TEXT NOT NULL REFERENCES profile (name) ON DELETE CASCADE,
-  portfolio TEXT, name TEXT, identifier TEXT, assetType TEXT, isSold TEXT, shares TEXT,
+  depot TEXT, name TEXT, identifier TEXT, assetType TEXT, isSold TEXT, shares TEXT,
   currency TEXT, currentValue TEXT, purchaseValue TEXT, lastPriceDate TEXT, lastPrice TEXT,
   realizedGainNet TEXT, unrealizedGainNet TEXT, earliestActivityDate TEXT, activityCount TEXT
 );
@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS position_profile ON position (profile);
 
 CREATE TABLE IF NOT EXISTS activity (
   profile TEXT NOT NULL REFERENCES profile (name) ON DELETE CASCADE,
-  portfolio TEXT, name TEXT, identifier TEXT, type TEXT, datetime TEXT, shares TEXT, price TEXT,
+  depot TEXT, name TEXT, identifier TEXT, type TEXT, datetime TEXT, shares TEXT, price TEXT,
   amount TEXT, amountNet TEXT, fee TEXT, tax TEXT, realizedGains TEXT, realizedGainsNet TEXT,
   currency TEXT, transactionId TEXT
 );
@@ -129,7 +129,7 @@ CREATE INDEX IF NOT EXISTS activity_profile ON activity (profile);
 -- each booking's effect on its account's cash (manual profiles only)
 CREATE TABLE IF NOT EXISTS cash (
   profile TEXT NOT NULL REFERENCES profile (name) ON DELETE CASCADE,
-  portfolio TEXT, datetime TEXT, date TEXT, kind TEXT, amount TEXT, transactionId TEXT
+  depot TEXT, datetime TEXT, date TEXT, kind TEXT, amount TEXT, transactionId TEXT
 );
 CREATE INDEX IF NOT EXISTS cash_profile ON cash (profile);
 

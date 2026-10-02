@@ -28,8 +28,8 @@
      build                CSV rows → the position objects every renderer consumes
      ingest               config + profile + registry + the Parqet export in, the whole model out
 
-   Two rules the code holds to, worth keeping: a position is identified by portfolio *and*
-   identifier (the same ISIN can live in two portfolios with separate histories), and money
+   Two rules the code holds to, worth keeping: a position is identified by depot *and*
+   identifier (the same ISIN can live in two depots with separate histories), and money
    figures are always pre-tax unless the name says otherwise.
 
    Every input comes out of data/portfolio.db through server.py's api/ routes, each in the shape
@@ -113,7 +113,7 @@ let ITEMS = [], CLOSED = [], TRADES = [], NAMES = new Map(), PRICES = new Map(),
       .find(v => v === new URLSearchParams(location.search).get('view')) || 'map',
     AS_OF = null,                                      // an ISO date, or null for "today"
     AS_FROM = null,                                    // an ISO date, or null for "beginning of time"
-    PF = [],                                           // [{ name }] — portfolios in draw order
+    DEPOTS = [],                                       // [{ name }] — depots in draw order
     TAX_TOTAL = 0, DIV_TOTAL = 0, DIV_ROWS = [], TAX_SPLIT = { sell: 0, dividend: 0, other: 0 },
     TIMELINE_START = '2019-01-01', BENCH_LABEL = 'MSCI World',
     PROFILE = new URLSearchParams(location.search).get('profile') || '',
@@ -155,10 +155,10 @@ function splitMeta(text) {
    Nearly every figure on this page is a replay of one position's own trades, and before this
    index each of the dozen or so helpers that need them re-scanned and re-sorted the whole log
    for every position — quadratic in a file that only grows. Built once by load(); a position is
-   keyed by portfolio *and* identifier, never identifier alone, since the same ISIN can be held
-   in two portfolios (and closed in one of them) with entirely separate histories. */
+   keyed by depot *and* identifier, never identifier alone, since the same ISIN can be held
+   in two depots (and closed in one of them) with entirely separate histories. */
 let TRADE_INDEX = new Map();
-const tradeKey = d => d.portfolio + '|' + d.identifier;
+const tradeKey = d => d.depot + '|' + d.identifier;
 function indexTrades() {
   TRADE_INDEX = new Map();
   for (const t of TRADES) {
@@ -259,11 +259,11 @@ function xirr(flows) {
 }
 
 // Cash: what the account holds besides its positions, on `date` (an ISO date; null for now), for
-// one portfolio or all. Shown in the header's own Cash tile and counted into no other figure:
+// one depot or all. Shown in the header's own Cash tile and counted into no other figure:
 // moving money to the broker is not an investment, so cash stays out of the value, Invested, every
 // gain, return and IRR, the benchmark comparisons and the map's areas. It may be negative.
-function cashBalance(date = null, portfolio = null) {
-  return CASH.reduce((t, c) => (!date || c.date <= date) && (!portfolio || c.portfolio === portfolio)
+function cashBalance(date = null, depot = null) {
+  return CASH.reduce((t, c) => (!date || c.date <= date) && (!depot || c.depot === depot)
     ? t + c.amount : t, 0);
 }
 // money in and out, and interest earned, up to `date` — the Cash tile's breakdown
@@ -271,12 +271,12 @@ function cashSummary(date = null) {
   const by = new Map();
   CASH.forEach(c => {
     if (date && c.date > date) return;
-    const s = by.get(c.portfolio) || { portfolio: c.portfolio, balance: 0, in: 0, out: 0, interest: 0 };
+    const s = by.get(c.depot) || { depot: c.depot, balance: 0, in: 0, out: 0, interest: 0 };
     s.balance += c.amount;
     if (c.kind === 'deposit') s.in += c.amount;
     if (c.kind === 'withdrawal') s.out -= c.amount;
     if (c.kind === 'interest') s.interest += c.amount;
-    by.set(c.portfolio, s);
+    by.set(c.depot, s);
   });
   return [...by.values()];
 }
@@ -702,7 +702,7 @@ async function computeAsOf(dateStr, fromStr = null) {
     const pur = Number.isFinite(benchAtD) ? benchAtD : costAtD;
     const gain = cur - pur;
     out.push({
-      portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
+      depot: d.depot, name: d.name, label: d.label, identifier: d.identifier,
       fund: d.fund, shares: sharesAtD,
       // purAbs is what these shares actually cost, before any re-basing or benchmark substitution
       // — the money that left the account. `pur` is what the range or the vs.-World mode measures
@@ -908,7 +908,7 @@ async function computeAsOfRealized(dateStr, fromStr = null) {
     if (!sellCount) continue;                            // nothing realised on this position yet
 
     rows.push({
-      portfolio: d.portfolio, name: d.name, label: d.label, identifier: d.identifier,
+      depot: d.depot, name: d.name, label: d.label, identifier: d.identifier,
       relPre: realized, invested: costSold,
       alpha: (MODE === 'rel' && benchKnown) ? grossProceeds - benchProceeds : NaN,
       sold: lotShares(lots) <= 1e-9,
@@ -1069,7 +1069,7 @@ function splitFactor(d) {
 // the same correction the realised-bar tooltip already prints next to a sale.
 //
 // The position — a trade is only comparable to the last price of the holding it belongs to, found
-// by portfolio *and* identifier like everything else here. A closed position works too: Parqet
+// by depot *and* identifier like everything else here. A closed position works too: Parqet
 // stops quoting one at the sale, and api/latest fills that in above.
 //
 // The sign is deliberately the same for both directions: the number answers "what has the price
@@ -1148,7 +1148,7 @@ function build(rows) {
     const gain = cur - pur;
     const state = pur === 0 || Math.abs(gain) < 0.005 ? 'flat' : (gain > 0 ? 'gain' : 'loss');
     return {
-      portfolio: r.portfolio || 'Portfolio', name: r.name, shares: num(r.shares),
+      depot: r.depot || 'Depot', name: r.name, shares: num(r.shares),
       cur, pur, purAbs: pur, gain, ret: pur > 0 ? gain / pur * 100 : 0, state,
       rel: num(r.realizedGainNet),
       firstActivity: r.earliestActivityDate || '',
@@ -1251,17 +1251,17 @@ function build(rows) {
   const grand = items.reduce((t, d) => t + d.cur, 0);
   items.forEach(d => { d.share = grand > 0 ? d.cur / grand : 0; });
 
-  // portfolios in draw order: biggest by live value first, and that order is the pie's arc order
-  const byPf = new Map();
-  items.filter(d => !d.sold).forEach(d => byPf.set(d.portfolio, (byPf.get(d.portfolio) || 0) + d.cur));
-  PF = [...byPf.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => ({ name }));
-  const rank = new Map(PF.map((p, i) => [p.name, i]));
+  // depots in draw order: biggest by live value first, and that order is the pie's arc order
+  const byDepot = new Map();
+  items.filter(d => !d.sold).forEach(d => byDepot.set(d.depot, (byDepot.get(d.depot) || 0) + d.cur));
+  DEPOTS = [...byDepot.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => ({ name }));
+  const rank = new Map(DEPOTS.map((p, i) => [p.name, i]));
 
   applyMode(items);                                    // sets .pur, .gain, .ret, .state
 
-  // group by portfolio (contiguous arcs), largest position first inside each group
+  // group by depot (contiguous arcs), largest position first inside each group
   return items.sort((a, b) =>
-    (rank.get(a.portfolio) - rank.get(b.portfolio)) || (b.cur - a.cur));
+    (rank.get(a.depot) - rank.get(b.depot)) || (b.cur - a.cur));
 }
 
 // absolute mode measures against what was paid; relative mode against the benchmark mirror

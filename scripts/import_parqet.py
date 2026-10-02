@@ -4,13 +4,13 @@
     python3 scripts/import_parqet.py <profile> <positions.csv> <activities.csv>
 
 Parqet profiles only: a manual one is rebuilt from its own ledger (import_tr.py), and this would
-throw that away. The two files are what the refresh task writes, in exactly Parqet's schema (see
-REFRESH_PARQET_DATA.md, sections 3 and 4); they replace the profile's positions and activities
-wholesale, in one transaction — the page sees the old data or the new, never a mix. Kept where the
+throw that away. The two files are what the refresh task writes, in Parqet's schema bar one name —
+a Parqet portfolio is a `depot` here (see REFRESH_PARQET_DATA.md, sections 3 and 4); they replace
+the profile's positions and activities wholesale, in one transaction — the page sees the old data or the new, never a mix. Kept where the
 task wrote them (private-profiles/<profile>/exports/), they are the record of what was imported.
 
 Before it writes anything, checks what REFRESH_PARQET_DATA.md asks to hold: every activity named,
-every (portfolio, ISIN) traded also a position, every sale's net amount = gross − tax − fee. A
+every (depot, ISIN) traded also a position, every sale's net amount = gross − tax − fee. A
 failed check refuses the import. After it, lists any held instrument the registry lacks, or that
 has no price source.
 """
@@ -36,8 +36,8 @@ def check(positions, activities):
     unnamed = sum(1 for r in activities if not r["name"])
     if unnamed:
         problems.append(f"{unnamed} activities have no name")
-    orphans = {(r["portfolio"], r["identifier"]) for r in activities} \
-        - {(p["portfolio"], p["identifier"]) for p in positions}
+    orphans = {(r["depot"], r["identifier"]) for r in activities} \
+        - {(p["depot"], p["identifier"]) for p in positions}
     if orphans:
         problems.append(f"activities with no matching position: {sorted(orphans)}")
     bad = [r for r in activities if r["type"] == "sell"

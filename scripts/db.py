@@ -59,7 +59,53 @@ def conn():
         c.execute("PRAGMA foreign_keys = ON")
         c.execute("PRAGMA busy_timeout = 60000")
         _local.conn, _local.depth = c, 0
+        migrate(c)
     return c
+
+
+# ---------- schema versions ----------
+# schema.sql is always the latest; a database made from an older one is brought up to it the first
+# time a script opens it. Each step takes one version to the next, and holds back on what is not
+# there (a table a much older database never had is simply created, by schema.sql, afterwards).
+
+SCHEMA_VERSION = 2
+
+
+def _columns(c, table):
+    return {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+
+
+def _rename_column(c, table, old, new):
+    if old in _columns(c, table):
+        c.execute(f"ALTER TABLE {table} RENAME COLUMN {old} TO {new}")
+
+
+def _to_2(c):
+    """A position's, activity's or cash booking's `portfolio` (Parqet's word) is its `depot`."""
+    for table in ("position", "activity", "cash"):
+        _rename_column(c, table, "portfolio", "depot")
+
+
+MIGRATIONS = {2: _to_2}
+
+
+def migrate(c):
+    row = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    if row and int(row[0]) >= SCHEMA_VERSION:
+        return
+    c.execute("BEGIN IMMEDIATE")
+    try:
+        row = c.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+        for v in range(int(row[0]) + 1 if row else 2, SCHEMA_VERSION + 1):
+            MIGRATIONS[v](c)
+        c.execute("INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
+                  "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (str(SCHEMA_VERSION),))
+        c.execute("COMMIT")
+    except BaseException:
+        c.execute("ROLLBACK")
+        raise
+    with open(os.path.join(SCRIPTS, "schema.sql"), encoding="utf-8") as fh:
+        c.executescript(fh.read())            # every statement there is IF NOT EXISTS
 
 
 @contextlib.contextmanager
@@ -225,13 +271,13 @@ def write_fx(pair, rates):
 # A profile is one row in `profile` (label, source, allow_cli) plus its own settings (watchlist,
 # benchmarkIsin, parqetPortfolios, ...) — together what its profile.json used to say.
 
-POSITION_FIELDS = ["portfolio", "name", "identifier", "assetType", "isSold", "shares", "currency",
+POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares", "currency",
                    "currentValue", "purchaseValue", "lastPriceDate", "lastPrice", "realizedGainNet",
                    "unrealizedGainNet", "earliestActivityDate", "activityCount"]
-ACTIVITY_FIELDS = ["portfolio", "name", "identifier", "type", "datetime", "shares", "price", "amount",
+ACTIVITY_FIELDS = ["depot", "name", "identifier", "type", "datetime", "shares", "price", "amount",
                    "amountNet", "fee", "tax", "realizedGains", "realizedGainsNet", "currency",
                    "transactionId"]
-CASH_FIELDS = ["portfolio", "datetime", "date", "kind", "amount", "transactionId"]
+CASH_FIELDS = ["depot", "datetime", "date", "kind", "amount", "transactionId"]
 PROFILE_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "cash": CASH_FIELDS}
 
 
@@ -328,12 +374,6 @@ def mark_deleted(name, tid):
 # login. The scripts themselves never ask: a command line is the admin's.
 
 SESSION_DAYS = 30
-
-
-def migrate():
-    """Bring an older database up to schema.sql — every statement there is IF NOT EXISTS."""
-    with open(os.path.join(SCRIPTS, "schema.sql"), encoding="utf-8") as fh:
-        conn().executescript(fh.read())
 
 
 def hash_password(pw):

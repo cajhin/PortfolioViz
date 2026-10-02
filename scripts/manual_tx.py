@@ -29,10 +29,10 @@ FIELDS = ["datetime", "date", "account_type", "category", "type", "asset_class",
 
 
 def never_short(rows, isin):
-    """Exit unless the "Manual" portfolio's holding of `isin` stays at or above zero throughout.
+    """Exit unless the "Manual" depot's holding of `isin` stays at or above zero throughout.
 
     Hand-entered rows alone: that is where a hand-entered sale books, and shares imported from TR
-    sit in a portfolio of their own and cannot cover it. Replaying the whole history, not just the
+    sit in a depot of their own and cannot cover it. Replaying the whole history, not just the
     date of the change, is what catches a buy edited down — or deleted — under a later sale."""
     held = 0.0
     for r in sorted((r for r in rows if r["symbol"] == isin), key=lambda r: r["datetime"]):
@@ -77,7 +77,7 @@ CASH_TYPES = {"deposit": "CUSTOMER_INBOUND", "withdrawal": "CUSTOMER_OUTBOUND_RE
 
 
 def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
-    """A deposit to, or withdrawal from, the "Manual" portfolio's cash — the TR export's own types
+    """A deposit to, or withdrawal from, the "Manual" depot's cash — the TR export's own types
     for the same thing, so the one conversion books it (into cash, see import_tr.cash_rows)."""
     try:
         when = datetime.strptime(day, "%Y-%m-%d").date()

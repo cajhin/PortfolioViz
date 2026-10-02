@@ -60,6 +60,15 @@ The database's tables (`scripts/schema.sql`) fall into three groups that differ 
   than any close (US pre-market from Yahoo, EU gettex mid in-session): the page makes it each
   series' last point, but it is never written into `price`.
 
+A position, activity or cash booking belongs to a **depot** (`depot` column): one securities
+account — what Parqet calls a portfolio (Trade Republic, Comdirect, …), or "Manual" for
+hand-entered rows. A position is (depot, ISIN); the same ISIN can sit in two depots.
+
+`scripts/schema.sql` is always the latest schema, and `db.py`'s `SCHEMA_VERSION` its number. A
+database made from an older one is brought up to date the first time any script opens it: one
+step per version in `db.py`'s `MIGRATIONS`, then `schema.sql` for any table still missing. A
+schema change bumps both and adds its step.
+
 Changes go through the scripts, never raw SQL: `db.py`'s own CLI for settings and registry rows
 (`config`, `upsert`, `delete`), `add_instrument.py` to register an instrument, `import_tr.py` /
 `import_parqet.py` / `manual_tx.py` for profiles. `db.py query` is read-only. The page reads only
@@ -78,7 +87,7 @@ FX. An instrument may be listed with no matching Parqet holding — that is how 
 watchlist name gets charted. Parqet's cash accounts are not tracked: `build()` drops the export's
 cash rows, since they carry no dated balance history and no past date could be reconstructed for
 them. A TR-imported or manual profile *does* have that history — every booking — so its rebuild
-writes `cash` (each booking's cash effect, by account), and the page shows the balance on a
+writes `cash` (each booking's cash effect, by depot), and the page shows the balance on a
 date in a Cash tile of its own and counts it into **nothing else**: not the Current value /
 "Value on" tile, not Invested, no gain, return or IRR, no benchmark, no map area. Moving
 money to the broker is not an investment. Cash may go negative (a demo buy is never refused for
@@ -101,7 +110,7 @@ A profile is controlled **either** by Parqet **or** manually, and its `source` s
 which: `parqet` — refreshed by REFRESH_PARQET_DATA.md (`import_parqet.py`), never imported into
 otherwise — or `manual` — fed
 by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand (`manual_tx.py`,
-for virtual demo portfolios; booked under portfolio "Manual", so never merged with a real
+for virtual demo portfolios; booked under depot "Manual", so never merged with a real
 position), both on the Transactions tab, never refreshed from Parqet. That tab's "+ New
 instrument…" writes to the registry (via `add_instrument.py`), the shared catalog. server.py,
 `import_tr.py`, `manual_tx.py`, `import_parqet.py` and the page all check the source, so `main`
@@ -119,7 +128,7 @@ owner. Update fetches one granted profile's instruments, never the whole registr
 instrument takes write access to some profile. The Config tab lists the user's other profiles and deletes one
 they may change — `manage-accounts.py purge`, with no backup. These tables (`user`, `user_profile`,
 `session`) are a fourth lifecycle — people, neither a profile's own nor the registry — and
-`db.migrate()` adds them to an older database (server.py runs it at start). It is for
+an older database gets them like any other schema change (below). It is for
 convenience and keeping people apart, not hardened: the registry, prices and every script stay
 shared and unchecked, and an agent's boundary is still `allow_cli`/`TRADE_ACCOUNT` below.
 

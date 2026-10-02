@@ -465,7 +465,7 @@ function attachTip(items, nodes) {
     n.addEventListener('pointerenter', e => {
       tip.innerHTML =
         tipHead(d, false) +
-        `<div class="pf">${d.portfolio}</div>` +
+        `<div class="pf">${d.depot}</div>` +
         tipRow('Share', fmtShare(d.share)) +
         tipRow(purLabel(true), fmtMoney2(d.pur)) +
         tipRow(curLabel(), fmtMoney2(d.cur)) +
@@ -638,7 +638,7 @@ function sourceTag(d) {
    be four times the code and four chances for a column and its comparator to drift apart. What a
    cell says is what it sorts by.
 
-   Subtotal rows are not sorted and not moved. In the positions table they delimit the portfolio
+   Subtotal rows are not sorted and not moved. In the positions table they delimit the depot
    groups, so rows are sorted *within* each group and the subtotal stays pinned at the end of its
    own — the grouping the table is built around survives. A table without them is simply one group.
 
@@ -741,8 +741,8 @@ let START_VALUE_MAP = new Map();
 function renderMeta(items, closed = []) {
   const tb = document.querySelector('#tbl tbody');
   const trs = [];
-  // One flat list, deliberately not grouped by portfolio/broker (see renderClosedPositions,
-  // which never was) — a position's own Portfolio column already says which broker holds it,
+  // One flat list, deliberately not grouped by depot (see renderClosedPositions,
+  // which never was) — a position's own Depot column already says which depot holds it,
   // and one overall total below is the summary, not one per broker.
   let sumStart = 0;
   items.forEach(d => {
@@ -761,7 +761,7 @@ function renderMeta(items, closed = []) {
     const cls = flat ? '' : rangeGain > 0 ? 'pos' : 'neg';
     const tr = document.createElement('tr');
     tr.innerHTML =
-      `<td>${d.portfolio}</td>` +
+      `<td>${d.depot}</td>` +
       `<td class="src">${sourceTag(d)}</td>` +
       `<td class="isin">${d.identifier}</td>` +
       `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>` +
@@ -847,8 +847,8 @@ function startRenaming(cell, d) {
   input.addEventListener('dblclick', e => e.stopPropagation());
 }
 
-// A flat list — deliberately not grouped by portfolio like the open-positions table above, since
-// a closed position's own portfolio is already a column and there's nothing to subtotal that the
+// A flat list — deliberately not grouped by depot like the open-positions table above, since
+// a closed position's own depot is already a column and there's nothing to subtotal that the
 // realised bar doesn't already show. CLOSED is pre-sorted by realised gain (build()), kept as-is.
 function renderClosedPositions() {
   const tb = document.querySelector('#tblClosedPositions tbody');
@@ -856,7 +856,7 @@ function renderClosedPositions() {
     const ret = d.invested > 0 ? d.relPre / d.invested * 100 : NaN;
     const tr = document.createElement('tr');
     tr.innerHTML =
-      `<td>${d.portfolio}</td>` +
+      `<td>${d.depot}</td>` +
       `<td class="src">${sourceTag(d)}</td>` +
       `<td class="posname dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
       `<td>${fmtMoney2(d.invested)}</td>` +
@@ -898,7 +898,7 @@ function renderTrades() {
   TRADES_DRAWN_FOR = SHOW_MONEY;
   // money in, out and interest are listed among the trades, shaped like an activity row
   const cashRows = CASH.filter(c => CASH_LISTED.has(c.kind)).map(c => ({
-    portfolio: c.portfolio, name: '', type: c.kind, datetime: c.datetime, shares: '', price: '',
+    depot: c.depot, name: '', type: c.kind, datetime: c.datetime, shares: '', price: '',
     amount: c.amount, amountNet: c.amount, fee: 0, tax: 0, transactionId: c.transactionId, cash: true }));
   const rows = [...TRADES, ...cashRows].sort((a, b) => a.datetime < b.datetime ? 1 : -1);   // newest first
   const feesTotal = TRADES.reduce((t, r) => t + num(r.fee), 0);
@@ -913,7 +913,7 @@ function renderTrades() {
     const tr = document.createElement('tr');
     const cls = t.type === 'sell' ? 'pos' : t.type === 'dividend' || t.type === 'interest' ? 'income' : '';
     tr.innerHTML =
-      `<td>${t.datetime.slice(0, 10)}</td><td>${t.portfolio}</td>` +
+      `<td>${t.datetime.slice(0, 10)}</td><td>${t.depot}</td>` +
       `<td>${t.cash ? '<span class="muted">cash</span>' : NAMES.get(t.name) || tidyName(t.name)}</td>` +
       `<td>${TYPE_LABEL[t.type] || t.type}</td>` +
       `<td>${num(t.shares) ? num(t.shares).toLocaleString('de-DE') : '–'}</td>` +
@@ -956,7 +956,7 @@ function renderWatch() {
     // enough of a position-shaped object for openDetail()/sourceTag() to work on: no trades will
     // ever match tradeKey(d), so the value bar is correctly all-zero rather than wrong
     const d = { identifier: inst.id, name: inst.name, label: inst.display || inst.name,
-               portfolio: 'Watchlist' };
+               depot: 'Watchlist' };
     const close = PRICES.get(inst.id), live = LIVE.get(inst.id);
     const last = live && (!close || live.asof >= close.asof) ? live : close;
     const tr = document.createElement('tr');
@@ -972,7 +972,7 @@ function renderWatch() {
   applySort('tblWatch');
 }
 
-// The stat-tile row + per-portfolio breakdown, split out of renderMeta so an as-of pick can
+// The stat-tile row + per-depot breakdown, split out of renderMeta so an as-of pick can
 // refresh just this part with reconstructed figures without touching the (always-live) table.
 // `opts.realizedTotal`, when given, replaces the live rel/relPre sum for the "Realised pre-tax"
 // tile — as-of items carry no relPre of their own, that figure comes from computeAsOfRealized.
@@ -1064,7 +1064,7 @@ function renderHeaderTotals(items, closed = [], opts = {}) {
     asOf ? `Last update:\n${stampText}` : '';
 }
 
-// The per-portfolio breakdown, now a hover popup over the Current value tile instead of its own
+// The per-depot breakdown, now a hover popup over the Current value tile instead of its own
 // always-visible row — reuses the same #tip element and placeTip() the map/bar tooltips use.
 // Reassigning .onpointer* (rather than addEventListener) is deliberate: this tile is a static
 // DOM node re-rendered against fresh `items` on every header refresh, so a plain addEventListener
@@ -1124,11 +1124,11 @@ function attachCurTip(items) {
   // land wherever chartwrap happens to sit on the page, not near the cursor
   const tip = document.getElementById('curTip');
   const wrapEl = document.getElementById('totalsCard');
-  // each portfolio's investments, with their own gain — cash is the Cash tile's, not this one's
-  const rows = PF.map(p => totals(items.filter(d => d.portfolio === p.name)))
-    .map((s, i) => ({ name: PF[i].name, cur: s.cur, gain: s.gain, pur: s.pur }));
+  // each depot's investments, with their own gain — cash is the Cash tile's, not this one's
+  const rows = DEPOTS.map(p => totals(items.filter(d => d.depot === p.name)))
+    .map((s, i) => ({ name: DEPOTS[i].name, cur: s.cur, gain: s.gain, pur: s.pur }));
   tile.onpointerenter = e => {
-    tip.innerHTML = `<div class="t">${curLabel()} by portfolio</div>` +
+    tip.innerHTML = `<div class="t">${curLabel()} by depot</div>` +
       rows.map(r => `<div class="r"><span>${r.name}</span>` +
         `<b class="${r.gain >= 0 ? 'pos' : 'neg'}">${fmtMoney(r.cur)}` +
         `${r.pur > 0 ? ' · ' + fmtPct(r.gain / r.pur * 100) : ''}</b></div>`).join('');
@@ -1184,7 +1184,7 @@ function attachCashTip() {
   const rows = cashSummary(rangeAt());
   tile.onpointerenter = e => {
     tip.innerHTML = `<div class="t">Cash${rangeAt() ? ' on ' + deDate(rangeAt()) : ''} — not counted as invested, nor in any gain</div>` +
-      rows.map(r => `<div class="r"><span><b>${r.portfolio}</b></span><b class="${r.balance < 0 ? 'neg' : ''}">${fmtMoney(r.balance)}</b></div>` +
+      rows.map(r => `<div class="r"><span><b>${r.depot}</b></span><b class="${r.balance < 0 ? 'neg' : ''}">${fmtMoney(r.balance)}</b></div>` +
         `<div class="r"><span>in</span><b>${fmtMoney(r.in)}</b></div>` +
         `<div class="r"><span>out</span><b>${fmtMoney(r.out)}</b></div>` +
         (r.interest ? `<div class="r"><span>interest</span><b class="income">${fmtMoney(r.interest)}</b></div>` : '')).join('');
@@ -1758,11 +1758,11 @@ function renderClosed(over = null) {
   const pick = (rows, sign) => rows.filter(d => Math.sign(barValue(d)) === sign)
                                    .sort((a, b) => Math.abs(barValue(b)) - Math.abs(barValue(a)));
   const divRow = divTotal > 0.005
-    ? { name: 'Dividends', label: 'Dividends', portfolio: 'all portfolios', relPre: divTotal,
+    ? { name: 'Dividends', label: 'Dividends', depot: 'all depots', relPre: divTotal,
         isDiv: true, sold: true, flows: [] }
     : null;
   const taxRow = taxTotal > 0.005
-    ? { name: 'Taxes', label: 'Taxes', portfolio: 'all portfolios', relPre: -taxTotal, isTax: true, flows: [] }
+    ? { name: 'Taxes', label: 'Taxes', depot: 'all depots', relPre: -taxTotal, isTax: true, flows: [] }
     : null;
   const sub = (label, rows) => ({ label: `${label} · ${rows.length}`, rows });
 
@@ -1880,7 +1880,7 @@ function attachTipClosed(rows, nodes, ctx = null) {
   const taxSplit = ctx ? ctx.taxSplit : TAX_SPLIT;
   const tip = document.getElementById('tip');
   const wrapEl = document.getElementById('closed').closest('.chartwrap');
-  // dividends/taxes are synthetic rows (all portfolios, no single position behind them) — every
+  // dividends/taxes are synthetic rows (all depots, no single position behind them) — every
   // other row here is a real position, open or closed, and opens the same chart a map tile does
   const clickable = d => !d.isDiv && !d.isTax;
   rows.forEach(d => nodesOf(nodes, d).forEach(n => {
@@ -1891,7 +1891,7 @@ function attachTipClosed(rows, nodes, ctx = null) {
         divRows.forEach(r => byName.set(r.name, (byName.get(r.name) || 0) + num(r.amountNet)));
         const top = [...byName.entries()].sort((a, b) => b[1] - a[1]);
         tip.innerHTML = `<div class="t">Dividends</div>` +
-          `<div class="pf">all portfolios · net of withholding</div>` +
+          `<div class="pf">all depots · net of withholding</div>` +
           `<div class="r"><span>Total · ${divRows.length} payments</span>` +
           `<b class="income">${fmtMoney2(divTotal)}</b></div>` +
           top.slice(0, 8).map(([name, amt]) =>
@@ -1899,7 +1899,7 @@ function attachTipClosed(rows, nodes, ctx = null) {
             `<b class="income">${fmtMoney2(amt)}</b></div>`).join('') +
           (top.length > 8 ? `<div class="r"><span>+ ${top.length - 8} smaller</span><b></b></div>` : '');
       } else if (d.isTax) {
-        tip.innerHTML = `<div class="t">Taxes</div><div class="pf">all portfolios</div>` +
+        tip.innerHTML = `<div class="t">Taxes</div><div class="pf">all depots</div>` +
           `<div class="r"><span>On sales</span><b class="neg">${fmtMoney2(-taxSplit.sell)}</b></div>` +
           `<div class="r"><span>On dividends</span><b class="neg">${fmtMoney2(-taxSplit.dividend)}</b></div>` +
           `<div class="r"><span>Advance lump sum</span><b class="neg">${fmtMoney2(-taxSplit.other)}</b></div>` +
@@ -1907,7 +1907,7 @@ function attachTipClosed(rows, nodes, ctx = null) {
       } else {
         tip.innerHTML =
           tipHead(d, true) +
-          `<div class="pf">${d.portfolio} · ${d.sold ? 'closed' : 'still open'}</div>` +
+          `<div class="pf">${d.depot} · ${d.sold ? 'closed' : 'still open'}</div>` +
           tipSaleRows(d) +
           tipRow('Realised (pre-tax)', fmtMoney2(d.relPre), d.relPre >= 0 ? 'realized' : 'neg') +
           (Number.isFinite(d.alpha)
@@ -1969,7 +1969,7 @@ function legendMap() {
 
 // Every open or closed position — the pool clicking the benchmark's own label can pick
 // a replacement from. Deduped by identifier: the same ISIN can appear twice (open in one
-// portfolio, closed in another — POET Technologies does), and it should only offer once.
+// depot, closed in another — POET Technologies does), and it should only offer once.
 function benchmarkCandidates() {
   const seen = new Map();
   [...ITEMS, ...CLOSED].forEach(d => {
@@ -2665,7 +2665,7 @@ function renderDetail() {
   })();
   // built once so hovering can restore exactly this on pointerleave, instead of re-deriving it
   const subAt = (day, isFilled) =>
-    `${d.portfolio} ·${anchorPrice} 0 % at ${drawn.anchor}` +
+    `${d.depot} ·${anchorPrice} 0 % at ${drawn.anchor}` +
     (day ? ` — ${day}` : '') +
     (isFilled ? ' (no data — held flat)' : '');
   // every line on the chart reports here at the crosshair, sigma included — unsigned, since it is
@@ -2910,7 +2910,7 @@ function renderDetail() {
 async function openDetail(d) {
   const dlg = document.getElementById('detail');
   document.getElementById('dtTitle').textContent = d.label || d.name;
-  document.getElementById('dtSub').textContent = `${d.portfolio} · ${d.name}`;
+  document.getElementById('dtSub').textContent = `${d.depot} · ${d.name}`;
   document.getElementById('dtVals').textContent = '';
   const body = document.getElementById('dtBody');
   body.innerHTML = '<div class="empty">loading…</div>';
@@ -2951,11 +2951,11 @@ async function openSectorDetail(name, members) {
     // this line over the sector's own at that date and to dash the stretch before it
     return series ? { label: m.label, identifier: m.identifier, series, firstActivity: m.firstActivity } : null;
   }))).filter(Boolean);
-  // renderDetail always rewrites dtSub to "<d.portfolio> · 0 % at <anchor>" once the chart is
+  // renderDetail always rewrites dtSub to "<d.depot> · 0 % at <anchor>" once the chart is
   // drawn (see subAt) — same as it does for a real position — so the position count belongs in
-  // d.portfolio, not in a one-off dtSub assignment that render would just overwrite anyway.
+  // d.depot, not in a one-off dtSub assignment that render would just overwrite anyway.
   const d = {
-    label: name, name, portfolio: count, identifier: SECTOR_ID,
+    label: name, name, depot: count, identifier: SECTOR_ID,
     firstActivity: members.reduce((t, m) =>
       (m.firstActivity && (!t || m.firstActivity < t)) ? m.firstActivity : t, ''),
     // rangeStartFor's own "all" case for a basket line — see there — since the sector's own

@@ -42,8 +42,8 @@ from collections import defaultdict
 
 import db
 
-PORTFOLIO = "Trade Republic"
-MANUAL_PORTFOLIO = "Manual"              # where hand-entered rows (account_type MANUAL) book
+DEPOT = "Trade Republic"
+MANUAL_DEPOT = "Manual"                  # where hand-entered rows (account_type MANUAL) book
 REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_class", "name",
             "symbol", "shares", "price", "amount", "fee", "tax", "currency"}
 
@@ -73,7 +73,7 @@ def cash_rows(ledger):
         if abs(delta) < 0.005:
             continue
         kind = "income" if t["type"] in DIVIDEND_TYPES else CASH_KIND.get(t["type"], "other")
-        out.append({"portfolio": MANUAL_PORTFOLIO if t.get("account_type") == "MANUAL" else PORTFOLIO,
+        out.append({"depot": MANUAL_DEPOT if t.get("account_type") == "MANUAL" else DEPOT,
                     "datetime": t["datetime"], "date": t["date"], "kind": kind,
                     "amount": fmt(delta, 2), "transactionId": t["transaction_id"]})
     return out
@@ -136,7 +136,7 @@ def latest_prices():
 def convert(ledger):
     """Ledger rows → (activities, positions, notes). Walks each position's history once, FIFO.
 
-    A position is (portfolio, ISIN), as on the page: TR rows book under "Trade Republic", rows
+    A position is (depot, ISIN), as on the page: TR rows book under "Trade Republic", rows
     entered by hand under "Manual" — so a virtual position never mixes with a real one in the
     same instrument."""
     registry = registry_names()
@@ -153,9 +153,9 @@ def convert(ledger):
         if net is None:
             net = amount + fee if kind == "buy" else amount - tax - fee
         price = amount / shares if shares else 0.0
-        pf, isin = k
+        depot, isin = k
         activities.append({
-            "portfolio": pf, "name": names.get(isin, t["name"]), "identifier": isin,
+            "depot": depot, "name": names.get(isin, t["name"]), "identifier": isin,
             "type": kind, "datetime": t["datetime"], "shares": fmt(shares), "price": fmt(price),
             "amount": fmt(amount, 2), "amountNet": fmt(net, 2), "fee": fmt(fee, 2),
             "tax": fmt(tax, 2), "realizedGains": fmt(rg), "realizedGainsNet": fmt(rgn),
@@ -183,7 +183,7 @@ def convert(ledger):
 
     for t in ledger:
         kind, isin = t["type"], t["symbol"]
-        k = (MANUAL_PORTFOLIO if t.get("account_type") == "MANUAL" else PORTFOLIO, isin)
+        k = (MANUAL_DEPOT if t.get("account_type") == "MANUAL" else DEPOT, isin)
         if isin:
             names.setdefault(isin, (registry.get(isin) or {}).get("name") or t["name"])
         if kind == "BUY":
@@ -239,7 +239,7 @@ def convert(ledger):
     latest = latest_prices()
     positions = []
     for k in sorted(first):
-        pf, isin = k
+        depot, isin = k
         shares = sum(l[0] for l in lots[k])
         if shares < 1e-6:
             shares = 0.0
@@ -254,7 +254,7 @@ def convert(ledger):
                 notes[f"{isin}: no price on file — valued at its last trade"] += 1
         value = shares * price
         positions.append({
-            "portfolio": pf, "name": names.get(isin, isin), "identifier": isin,
+            "depot": depot, "name": names.get(isin, isin), "identifier": isin,
             "assetType": "security", "isSold": "0" if shares else "1", "shares": fmt(shares),
             "currency": "EUR", "currentValue": fmt(value, 4), "purchaseValue": fmt(cost, 4),
             "lastPriceDate": price_date, "lastPrice": fmt(price),
@@ -269,7 +269,7 @@ def require_manual(profile):
     """The profile's name, or exit: it must exist and be a manual one.
 
     A Parqet one has its positions and activities written by the refresh, and rebuilding them from
-    these ledgers would throw its other portfolios away — so only "manual" is let through."""
+    these ledgers would throw its other depots away — so only "manual" is let through."""
     p = db.profile(profile)
     if not p:
         sys.exit(f"no profile {profile!r} (create it on the page's Config tab)")
@@ -297,8 +297,8 @@ def rebuild(profile):
           f"{len(activities)} activities, {open_n} open and {len(positions) - open_n} closed positions")
     for note, n in sorted(notes.items()):
         print(f"  {note}" + (f" (×{n})" if n > 1 else ""))
-    for pf in sorted({c["portfolio"] for c in cash}):
-        print(f"  cash, {pf}: {sum(num(c['amount']) for c in cash if c['portfolio'] == pf):.2f}")
+    for depot in sorted({c["depot"] for c in cash}):
+        print(f"  cash, {depot}: {sum(num(c['amount']) for c in cash if c['depot'] == depot):.2f}")
 
     registry = registry_names()
     unknown = sorted({p["identifier"] for p in positions} - set(registry))

@@ -104,7 +104,6 @@ def configure(sub):
 
 
 def dispatch(a):
-    db.migrate()
     if a.cmd == "add":
         return add(a.user)
     if a.cmd == "passwd":
