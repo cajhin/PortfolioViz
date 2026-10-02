@@ -517,7 +517,7 @@
   #configCard { display: flex; flex-direction: column; gap: 14px; }
   #configCard[hidden] { display: none; }
   .configrow[hidden] { display: none; }
-  .configrow > label:first-child { align-self: flex-start; }
+  #otherPortfolios > label:first-child { align-self: flex-start; }   /* beside a list, at its top */
   .proflist { display: flex; flex-direction: column; gap: 6px; }
   .proflist > div { display: flex; align-items: center; gap: 10px; }
   .proflist a { color: var(--text-primary); }
