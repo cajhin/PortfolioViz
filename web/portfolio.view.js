@@ -306,6 +306,18 @@ const tipRow = (label, value, cls) =>
 // a live price's time and kind, e.g. "14:45 pre-market" — see LIVE_PATH
 const liveStamp = d => `${pad2(new Date(d.liveAt).getHours())}:${pad2(new Date(d.liveAt).getMinutes())} ` +
   (/pre-market$/.test(d.liveSource || '') ? 'pre-market' : 'gettex');
+// One position's curLabel(): when no end date was picked, its value is dated by its own price —
+// "Value at 14:45" for a live price from today, else "Value on" the close it was priced at. Read
+// off the live position in ITEMS: a range's reconstruction (computeAsOf) carries no live price and
+// dates every position by the range's end, which here is just today.
+const isToday = s => new Date(s).toDateString() === new Date().toDateString();
+const posCurLabel = d => {
+  if (rangeAt()) return curLabel();
+  const p = ITEMS.find(x => x.identifier === d.identifier) || d;
+  return p.livePrice > 0 && p.liveAt && isToday(p.liveAt)
+    ? `Value at ${pad2(new Date(p.liveAt).getHours())}:${pad2(new Date(p.liveAt).getMinutes())}`
+    : p.lastPriceDate ? `Value on ${deDate(p.lastPriceDate)}` : curLabel();
+};
 const tipHead = (d, withPrice) =>
   `<div class="t">${d.label || d.name}` +
   (withPrice && d.livePrice > 0 ? ` <span class="quote">${fmtMoneyPre(d.livePrice)} · ${liveStamp(d)}</span>`
@@ -468,7 +480,7 @@ function attachTip(items, nodes) {
         `<div class="pf">${d.depot}</div>` +
         tipRow('Share', fmtShare(d.share)) +
         tipRow(purLabel(true), fmtMoney2(d.pur)) +
-        tipRow(curLabel(), fmtMoney2(d.cur)) +
+        tipRow(posCurLabel(d), fmtMoney2(d.cur)) +
         priceRows(d) +
         (d.divHeld > 0 ? tipRow('Dividends', fmtMoney2(d.divHeld), 'income') : '') +
         (d.state === 'flat' ? '' :
