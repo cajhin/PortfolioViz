@@ -229,6 +229,15 @@ by hand: `python3 scripts/db.py backup` writes a consistent, timestamped copy to
 file itself while the server runs is not safe. `$PORTFOLIO_DB` points every script at another
 database file, e.g. a copy to try something on.
 
+**Deploying.** Dev (this checkout) and prod (host `cube`, a systemd service) share the code through
+git and nothing else: prod's `data/portfolio.db` is the real data and is never replaced, only
+migrated in place. On prod, `./deploy.sh` does it: refuses local edits, backs the database up
+(the old code's backup, before anything changes), pulls fast-forward only, migrates, restarts the
+service and checks it answers — and prints how to roll back (the old commit *and* that backup:
+migrations only go forward). `./deploy.sh -n` shows the pending commits. Before a deploy with a
+schema change, try it on a copy of prod's latest backup here (`$PORTFOLIO_DB`, check_portfolio.js).
+Never copy dev's database to prod.
+
 The two scripts are classic `<script>` tags sharing one global scope — no modules, no imports.
 `portfolio.model.js` loads first and declares the state; `portfolio.view.js` reads it. The
 dependency arrow points one way: **the model never calls into the view.** Keep it that way — it
