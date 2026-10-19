@@ -112,7 +112,8 @@ holdings into it. A portfolio is known by its **id** — `pid1`, `pid2`, … a r
 page shows, and the only thing a rename changes. An id from before (a chosen name) stays until
 `manage-portfolios.py renumber`, which renames every such portfolio's rows, grants, tokens and the
 default — anything outside the database that names one (an agent's `TRADE_PORTFOLIO`, a baseline
-file) is the admin's to follow up. The page picks the portfolio from `?portfolio=`, else the global
+file) is the admin's to follow up. The page picks the portfolio from `?portfolio=`, else the
+user's own default (Config tab, "Make default": `user.default_portfolio`), else the global
 `defaultPortfolio` setting; a portfolio's own settings override the global ones (flat, shallow —
 `label`, `watchlist`, `benchmarkIsin`, `benchmarkLabel`, `timelineStart`), except `currency`, which
 stays shared because the price series are converted into it on write. The Update button runs

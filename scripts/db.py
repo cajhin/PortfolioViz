@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def _columns(c, table):
@@ -205,8 +205,15 @@ def _to_13(c):
         c.execute("UPDATE portfolio SET ai_access = 2 WHERE ai_access = 1")
 
 
+def _to_14(c):
+    """Each user may have a default portfolio of their own, over the global defaultPortfolio."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'user'").fetchone() \
+            and "default_portfolio" not in _columns(c, "user"):
+        c.execute("ALTER TABLE user ADD COLUMN default_portfolio TEXT REFERENCES portfolio (id) ON DELETE SET NULL")
+
+
 MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9, 10: _to_10,
-              11: _to_11, 12: _to_12, 13: _to_13}
+              11: _to_11, 12: _to_12, 13: _to_13, 14: _to_14}
 
 
 def migrate(c):
@@ -477,6 +484,7 @@ def renumber_portfolios():
             c.execute("UPDATE portfolio SET id = ? WHERE id = ?", (new, old))
             for table in PORTFOLIO_COLUMNS:
                 c.execute(f"UPDATE {table} SET portfolio = ? WHERE portfolio = ?", (new, old))
+            c.execute("UPDATE user SET default_portfolio = ? WHERE default_portfolio = ?", (new, old))
             if default == old:
                 c.execute("UPDATE setting SET value = ? WHERE portfolio = '' AND key = 'defaultPortfolio'",
                           (json.dumps(new),))
@@ -712,6 +720,12 @@ def users():
     for g in rows("SELECT * FROM user_portfolio ORDER BY portfolio"):
         out[g["user"]]["portfolios"][g["portfolio"]] = bool(g["can_write"])
     return list(out.values())
+
+
+def set_user_default(name, pid):
+    """The portfolio the user's page opens with, when its address names none."""
+    with tx() as c:
+        return c.execute("UPDATE user SET default_portfolio = ? WHERE name = ?", (pid, name)).rowcount
 
 
 def create_user(name, pw):

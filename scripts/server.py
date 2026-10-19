@@ -28,7 +28,9 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # POST /login {user, password}, POST /register {user, password}, POST /logout — login.html's.
 # Register is open to anyone who reaches the page: the new user sees nothing until they create a
 # portfolio (or are granted one with scripts/manage-users.py). Both answer with the session cookie.
-# GET /me — {user, admin, restart, publicUrl}: who is logged in, whether they are an admin (the global
+# POST /default-portfolio {portfolio} — the Config tab's "Make default": the user's own default
+# portfolio, which api/config's defaultPortfolio then names (see default_portfolio).
+# GET /me — {user, admin, restart, publicUrl, default}: who is logged in, their default portfolio, whether they are an admin (the global
 # `admins` setting, a list of user names — never sent to the page with the other settings), and,
 # for an admin, whether this server's code changed on disk since it started (see RESTART).
 # POST /restart — an admin's "Restart server": the server replaces itself (same process, port and
@@ -438,6 +440,14 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/watchlist":
             self.watchlist((urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
             return
+        if parsed.path == "/default-portfolio":
+            portfolio = str(self.read_json().get("portfolio") or "")
+            if not PORTFOLIO_ID.match(portfolio) or db.access(self.user, portfolio) is None:
+                self.send_error(404, f"no portfolio {portfolio} of yours")
+                return
+            db.set_user_default(self.user, portfolio)
+            self.send_json({"default": portfolio})
+            return
         if parsed.path == "/portfolio-public":
             portfolio = (urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0]
             req = self.read_json()
@@ -502,13 +512,22 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if url.path == "/api/config" and status == 200:
             cfg = json.loads(text)
             cfg.pop("admins", None)                 # who the admins are is not the page's business
-            mine = [p["id"] for p in db.user_portfolios(self.user) if self.may_open(p["id"])]
-            if cfg.get("defaultPortfolio") not in mine:
-                cfg.pop("defaultPortfolio", None)
-                if mine:
-                    cfg["defaultPortfolio"] = mine[0]
+            cfg.pop("defaultPortfolio", None)
+            mine = self.default_portfolio(cfg)
+            if mine:
+                cfg["defaultPortfolio"] = mine
             text = json.dumps(cfg, indent=2, ensure_ascii=False)
         return status, ctype, text
+
+    def default_portfolio(self, cfg=None):
+        """The portfolio a page with no ?portfolio= opens: the user's own default, else the global
+        one, else the first granted — whichever the user may open; a token, its own."""
+        if self.via_token:
+            return self.token_portfolio
+        mine = [p["id"] for p in db.user_portfolios(self.user)]
+        own = (db.user(self.user) or {}).get("default_portfolio")
+        glob = (cfg if cfg is not None else db.settings("")).get("defaultPortfolio")
+        return next((p for p in (own, glob) if p in mine), mine[0] if mine else None)
 
     def send_text(self, status, text):
         body = text.encode("utf-8")
@@ -826,7 +845,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/me":
             admin = is_admin(self.user)
             self.send_json({"user": self.user, "admin": admin, "restart": admin and code_changed(),
-                            "publicUrl": self.public_url()})
+                            "publicUrl": self.public_url(), "default": self.default_portfolio()})
             return
         if path.startswith("/api/"):
             status, ctype, text = self.api_get()

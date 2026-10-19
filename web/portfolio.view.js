@@ -3639,6 +3639,8 @@ function renderPortfolioPicker() {
       sel.value = me ? PORTFOLIO : '';
       sel.hidden = !list.length;
       renderOtherPortfolios(list);
+      MY_PORTFOLIOS = list;
+      showMakeDefault();
       if (!me) {
         PUBLIC.then(pub => { const p = pub.find(q => q.id === PORTFOLIO); if (p) viewPublic(p); });
         return list;
@@ -4152,11 +4154,36 @@ const routeFailure = r => r.status === 404 ? STALE_MSG : r.status === 401 ? 'Log
 
 // where agents elsewhere reach this server (server.py's public_url) — /me says; until then, here
 let PUBLIC_URL = '';
+let DEFAULT_PORTFOLIO = '', MY_PORTFOLIOS = null;
+// shown for one of the user's own portfolios that is not their default yet — once both /me (the
+// default) and /portfolios (theirs) are in, whichever lands last
+function showMakeDefault() {
+  document.getElementById('makeDefault').hidden = !MY_PORTFOLIOS || !DEFAULT_PORTFOLIO ||
+    !MY_PORTFOLIOS.some(p => p.id === PORTFOLIO) || PORTFOLIO === DEFAULT_PORTFOLIO;
+}
+// The Config tab's "Make default": the portfolio this user's page opens with when the address names
+// none — their own, not everyone's (server.py's /default-portfolio).
+document.getElementById('makeDefault').addEventListener('click', async e => {
+  const btn = e.currentTarget, msg = document.getElementById('portfolioLabelMsg');
+  try {
+    const r = await fetch('default-portfolio', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: JSON.stringify({ portfolio: PORTFOLIO }) });
+    if (!r.ok) throw new Error(routeFailure(r));
+    DEFAULT_PORTFOLIO = PORTFOLIO;
+    btn.hidden = true;
+    msg.textContent = 'Now your default';
+  } catch (err) {
+    msg.textContent = `Not changed: ${err.message}`;
+  }
+});
 // The Config tab's first row: who is logged in (server.py's /me), and the way out. Served without
 // logins (the regression check) there is nobody, and the row stays hidden.
 fetch('me', { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(({ user, restart, publicUrl }) => {
+  .then(({ user, restart, publicUrl, default: home }) => {
+    // "Make default", unless this portfolio is the user's default already (or not one of theirs)
+    DEFAULT_PORTFOLIO = home || '';
+    showMakeDefault();
     PUBLIC_URL = publicUrl ? publicUrl.replace(/\/?$/, '/') : '';
     // an agent elsewhere cannot reach "localhost": say so where tokens are handed out
     const note = document.getElementById('tokenUrlNote');

@@ -177,7 +177,8 @@ CREATE INDEX IF NOT EXISTS cash_portfolio ON cash (portfolio);
 CREATE TABLE IF NOT EXISTS user (
   name    TEXT PRIMARY KEY,
   pw_hash TEXT NOT NULL,
-  created TEXT NOT NULL
+  created TEXT NOT NULL,
+  default_portfolio TEXT REFERENCES portfolio (id) ON DELETE SET NULL   -- the user's "Make default"
 );
 
 -- what a user may open; can_write for its changes (rename, import, transactions)
