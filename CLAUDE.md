@@ -226,7 +226,8 @@ together. Keep them flat.
 `schema.sql` + `seed.sql`), then `update_prices.py --from <timelineStart>`. `python3 scripts/db.py
 seed > scripts/seed.sql` refreshes that seed from the current registry and settings. Backups are
 by hand: `python3 scripts/db.py backup` writes a consistent, timestamped copy to the NAS
-(`/Volumes/nas/bkp/portfolioviz` on macOS, `/mnt/nas/bkp/portfolioviz` on Linux) — copying the
+(`/Volumes/nas/bkp/portfolioviz` on macOS, `/mnt/data/nas/bkp/portfolioviz` on cube,
+`/mnt/nas/bkp/portfolioviz` on other Linux hosts) — copying the
 file itself while the server runs is not safe. `$PORTFOLIO_DB` points every script at another
 database file, e.g. a copy to try something on.
 

@@ -14,7 +14,8 @@
 The schema is scripts/schema.sql; scripts/sqlite-install.sh creates the DB from it and from
 scripts/seed.sql, which `seed` regenerates (`db.py seed > scripts/seed.sql`) — the base a new host
 starts from. The DB itself is not in git: `backup` is how it is kept, by hand, on the NAS
-(/Volumes/nas/bkp/portfolioviz on macOS, /mnt/nas/bkp/portfolioviz on Linux, or $PORTFOLIO_BACKUP_DIR).
+(/Volumes/nas/bkp/portfolioviz on macOS, /mnt/data/nas/bkp/portfolioviz on cube, /mnt/nas/bkp/portfolioviz
+on other Linux hosts, or $PORTFOLIO_BACKUP_DIR).
 It copies through SQLite's backup API, so a copy taken while the server or a fetch is writing is
 still consistent — which copying the file is not. Users and their access are scripts/manage-users.py's.
 
@@ -26,7 +27,8 @@ from datetime import datetime, timedelta
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
 DB_PATH = os.environ.get("PORTFOLIO_DB") or os.path.join(ROOT, "data", "portfolio.db")
-BACKUP_DIRS = ("/Volumes/nas/bkp/portfolioviz", "/mnt/nas/bkp/portfolioviz")
+# where `backup` writes: the first whose share is mounted — macOS, cube (prod), other Linux hosts
+BACKUP_DIRS = ("/Volumes/nas/bkp/portfolioviz", "/mnt/data/nas/bkp/portfolioviz", "/mnt/nas/bkp/portfolioviz")
 
 # the built-in settings, for a key the DB does not have — the same defaults the page falls back to
 DEFAULTS = {"timelineStart": "2019-01-01", "currency": "EUR"}

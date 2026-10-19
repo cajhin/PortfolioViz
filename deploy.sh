@@ -10,6 +10,8 @@
 #   PORTFOLIOVIZ_SYSTEMCTL how to call systemctl (default: "sudo systemctl"; "systemctl --user" for a
 #                          user unit)
 #   PORTFOLIOVIZ_PORT      where the server listens, for the check afterwards (default: 8000)
+#   PORTFOLIO_BACKUP_DIR   where the backup goes, if not db.py's own NAS paths (on cube:
+#                          /mnt/data/nas/bkp/portfolioviz)
 #
 # Steps, each stopping the deploy on failure:
 #   1. refuse unless on main with no local changes to tracked files — prod is never edited in place
@@ -61,7 +63,7 @@ git log --oneline "$old..$new"
 
 say "backing up the database"
 schema_old=$(schema)
-backup=$(python3 scripts/db.py backup | tail -1)
+backup=$(python3 scripts/db.py backup | tail -1)      # db.py's BACKUP_DIRS, or $PORTFOLIO_BACKUP_DIR
 [ -s "$backup" ] || { echo "no backup made ($backup) — stopping before any change" >&2; exit 1; }
 echo "$backup  (schema $schema_old)"
 
