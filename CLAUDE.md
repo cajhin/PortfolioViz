@@ -26,9 +26,10 @@ scripts/                every Python script; each finds the repo as its own fold
   update_prices.py        fetches price history per the registry's price sources
   import_tr.py            imports a Trade Republic transaction export into a normal portfolio, and
                             rebuilds a portfolio's positions/activities/cash from its ledger
-  import_csv.py           imports transactions pasted in the Portfolioviz CSV format (any broker,
-                            converted by hand, script or AI) into a normal portfolio — unverified
-                            until accepted, or rolled back; its docstring is the format's spec
+  import_csv.py           imports transactions pasted in the Portfolioviz CSV format, PViz CSV (any
+                            broker, converted by hand, script or AI) into a normal portfolio —
+                            unverified until accepted, or rolled back — and exports a portfolio in
+                            it, to replicate it in another; its docstring is the format's spec
   manual_tx.py            adds/edits/deletes any transaction of a normal portfolio (the page's backend)
   trade.py                trades a game portfolio from the command line — live only, JSON out
   manage-portfolios.py    creates game portfolios, moves their cash, lists them, purges an obsolete
@@ -46,7 +47,7 @@ backup/                 the files the data came from before the database (config
 The database's tables (`scripts/schema.sql`) fall into three groups that differ by
 **lifecycle**, and that is the distinction to preserve:
 
-- **a portfolio's own** (IMPORTED) — `portfolio` (label, type, ai_write), its keys in `setting`,
+- **a portfolio's own** (IMPORTED) — `portfolio` (id, label, type, ai_access), its keys in `setting`,
   `ledger`, and `position`/`activity`/`cash`. The `ledger` is its real source — every TR
   row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
   hand-entered or traded row (origin `manual`), and every row pasted as Portfolioviz CSV (origin
@@ -101,7 +102,7 @@ closed), its `watchlist` setting, and its benchmark. Being in the registry witho
 **not** enough to show up in a portfolio's watchlist — that would leak every other portfolio's
 holdings into it. A portfolio is known by its **id** — `pid1`, `pid2`, … a running number
 (`meta`'s `portfolio_seq`), handed out on creation and never reused — which every URL
-(`?portfolio=`), script argument, token and `check_baseline.<id>.json` uses; its `label` is what the
+(`?portfolio=`), script argument, token and `baselines/check_baseline.<id>.json` uses; its `label` is what the
 page shows, and the only thing a rename changes. An id from before (a chosen name) stays until
 `manage-portfolios.py renumber`, which renames every such portfolio's rows, grants, tokens and the
 default — anything outside the database that names one (an agent's `TRADE_PORTFOLIO`, a baseline
@@ -126,18 +127,19 @@ same depot; its docstring lists them. Parqet itself is no longer a source: a por
 refresh once filled becomes `normal` on migration, and `import_tr.rebuild` refuses to throw its
 data away — purge it and import its transactions anew.
 
-**AI access.** A portfolio's `ai_write` — the Config tab's "Allow AI (API) write access", off for a
-new one — says whether a script or an AI may write to it. Over HTTP that means an API token: a user
+**AI access.** A portfolio's `ai_access` — the Config tab's "Allow AI (API) access", off for a new
+one — says whether a script or an AI may use it at all. Over HTTP that means an API token: a user
 makes, copies and revokes theirs on the Config tab, shown there while the box is ticked
 (`api_token`: 10 letters and digits, looked up by hash but kept as is too, so it can be copied
 again — convenience over hardening), and sends it as `Authorization: Bearer …` in place of the
 session cookie. A token is bound to the portfolio whose Config tab made it: every route acts on
-that one (`?portfolio=` may be left out; another is refused, reading included). It writes only
-while that portfolio has `ai_write` on, only through server.py's
-`TOKEN_WRITES` (transactions, imports, trades, instruments, Update) — never accepting its own CSV
-import, which is its user's check of it, and never anything about portfolios, users, tokens or the
-server. On the command line, an agent's `trade.py` session (`TRADE_PORTFOLIO` set) trades only a
-game with `ai_write` on (`manage-portfolios.py create --ai`, or the checkbox).
+that one (`?portfolio=` may be left out; another is refused). It is refused outright while that
+portfolio's `ai_access` is off; it reads otherwise, and writes only with its own `can_write` (the
+token's "allow writing", off for a new one), only through server.py's `TOKEN_WRITES`
+(transactions, imports, trades, instruments, Update) — never accepting its own CSV import, which
+is its user's check of it, and never anything about portfolios, users, tokens or the server. On
+the command line, an agent's `trade.py` session (`TRADE_PORTFOLIO` set) trades only a game with
+`ai_access` on (`manage-portfolios.py create --ai`, or the checkbox).
 
 **Users.** server.py wants a login for every route but the page's own files (no data in them) and
 login.html's: an HttpOnly session cookie, its token's hash in the `session` table. A user sees and
@@ -223,7 +225,7 @@ rendered tooltip. Around any edit:
 ```bash
 node check_portfolio.js --save     # before: record what the code does today
 node check_portfolio.js            # after: diff against it
-node check_portfolio.js --portfolio pid6 [--save]   # another portfolio, against check_baseline.pid6.json
+node check_portfolio.js --portfolio pid6 [--save]   # another portfolio, against baselines/check_baseline.pid6.json
 ```
 
 A clean run means the numbers and the rendered text are untouched — worth having after any
@@ -235,7 +237,7 @@ It cannot see layout, colour, or anything needing a real browser. Check those by
 
 ## Data
 
-`data/`, `backup/`'s old data files and `check_baseline*.json` hold real
+`data/`, `backup/`'s old data files and `baselines/` hold real
 position values and are gitignored — never commit them, and don't paste figures from them into
 commit messages or issues. Nothing in the database is committed, the registry included:
 `scripts/seed.sql` (no amounts — only what each instrument is and where its prices come from,

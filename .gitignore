@@ -16,6 +16,7 @@ private*/
 
 # check_portfolio.js records real position values and tooltips here, one file per portfolio —
 # same rule as private*/
+baselines/
 check_baseline*.json
 
 .DS_Store

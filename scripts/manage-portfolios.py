@@ -13,11 +13,12 @@ Trading in a game portfolio is trade.py's; the rules both enforce are trading-ru
 answer is one JSON object; on error {"ok": false, "error": ..., "hint": ...}, exit code 1.
 
 A <portfolio> is its id: pid1, pid2, … `create` makes a game portfolio — the only type these scripts
-touch, and trade.py trades — under the next id (in its answer), and books the opening cash today. --ai allows AI write access: an agent's trade.py session trades only
-such a portfolio (the page's Config tab switches it, too). deposit and withdraw move cash today as well; there is no date to
-give. --id makes a call safe to repeat: a second call with the same id answers with the first
-one's result instead of moving the money twice. Cash can never go below zero: a withdrawal larger
-than the portfolio holds is refused.
+touch, and trade.py trades — under the next id (in its answer), and books the opening cash today.
+--ai allows AI access: an agent's trade.py session trades only such a portfolio (the page's Config
+tab switches it, too). deposit and withdraw move cash today as well; there is no date to give. --id
+makes a call safe to repeat: a second call with the same id answers with the first one's result
+instead of moving the money twice. Cash can never go below zero: a withdrawal larger than the
+portfolio holds is refused.
 
 `list-games` shows every game portfolio as it stands — value at the latest close
 on file, cash, and the result against the money put in, cash included, the measure to compare
@@ -70,11 +71,11 @@ def create(label, eur, ai=False):
         raise Refusal("give --label, the name the page shows")
     if not (eur or 0) >= 0:
         raise Refusal("give --cash as zero or more")
-    pid = db.create_portfolio(label, "game", ai_write=ai)
+    pid = db.create_portfolio(label, "game", ai_access=ai)
     quiet(import_tr.rebuild, pid)
     if eur:
         move_cash(pid, "deposit", eur, "opening balance")
-    return {"portfolio": pid, "label": label, "cash": eur or 0, "date": today(), "ai_write": bool(ai)}
+    return {"portfolio": pid, "label": label, "cash": eur or 0, "date": today(), "ai_access": bool(ai)}
 
 
 def renumber(yes=False):

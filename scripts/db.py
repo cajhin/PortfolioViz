@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _columns(c, table):
@@ -175,7 +175,17 @@ def _to_9(c):
     _rename_column(c, "portfolio", "name", "id")
 
 
-MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9}
+def _to_10(c):
+    """A portfolio's AI flag is about any access (ai_access), a token's own can_write about writing.
+    A token made before could write wherever its portfolio let it, so it still may."""
+    _rename_column(c, "portfolio", "ai_write", "ai_access")
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'api_token'").fetchone() \
+            and "can_write" not in _columns(c, "api_token"):
+        c.execute("ALTER TABLE api_token ADD COLUMN can_write INTEGER NOT NULL DEFAULT 0")
+        c.execute("UPDATE api_token SET can_write = 1")
+
+
+MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9, 10: _to_10}
 
 
 def migrate(c):
@@ -373,7 +383,7 @@ def write_fx(pair, rates):
 
 
 # ---------- portfolios ----------
-# A portfolio is one row in `portfolio` (id, label, type, ai_write) plus its own settings (watchlist,
+# A portfolio is one row in `portfolio` (id, label, type, ai_access) plus its own settings (watchlist,
 # benchmarkIsin, ...) — together what its profile.json used to say.
 
 POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares", "currency",
@@ -388,7 +398,7 @@ PORTFOLIO_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "c
 
 
 def portfolio(pid):
-    """The portfolio's row as {id, label, type, ai_write}, or None."""
+    """The portfolio's row as {id, label, type, ai_access}, or None."""
     r = conn().execute("SELECT * FROM portfolio WHERE id = ?", (pid,)).fetchone()
     return dict(r) if r else None
 
@@ -419,12 +429,12 @@ def next_portfolio_id(c):
     return f"pid{n}"
 
 
-def create_portfolio(label, type_, ai_write=False):
+def create_portfolio(label, type_, ai_access=False):
     """A new, empty portfolio with an empty watchlist, under the next portfolio id; that id."""
     with tx() as c:
         pid = next_portfolio_id(c)
-        c.execute("INSERT INTO portfolio (id, label, type, ai_write) VALUES (?, ?, ?, ?)",
-                  (pid, label or pid, type_, int(ai_write)))
+        c.execute("INSERT INTO portfolio (id, label, type, ai_access) VALUES (?, ?, ?, ?)",
+                  (pid, label or pid, type_, int(ai_access)))
         c.execute("INSERT INTO setting (portfolio, key, value) VALUES (?, 'watchlist', '[]')", (pid,))
     return pid
 
@@ -452,9 +462,9 @@ def renumber_portfolios():
     return out
 
 
-def set_ai_write(pid, allow):
+def set_ai_access(pid, allow):
     with tx() as c:
-        return c.execute("UPDATE portfolio SET ai_write = ? WHERE id = ?", (int(allow), pid)).rowcount
+        return c.execute("UPDATE portfolio SET ai_access = ? WHERE id = ?", (int(allow), pid)).rowcount
 
 
 def set_label(pid, label):
@@ -683,7 +693,8 @@ def api_tokens(name, portfolio):
     """The user's tokens for the portfolio, each with the token itself (None for one made before
     tokens were kept) — and any of theirs bound to none, made before tokens were bound."""
     return [{"id": r["token_hash"][:12], "label": r["label"], "created": r["created"],
-             "last_used": r["last_used"], "token": r["token"], "portfolio": r["portfolio"]}
+             "last_used": r["last_used"], "token": r["token"], "portfolio": r["portfolio"],
+             "write": bool(r["can_write"])}
             for r in rows("SELECT * FROM api_token WHERE user = ? AND (portfolio = ? OR portfolio IS NULL) "
                           "ORDER BY created", (name, portfolio))]
 
@@ -696,18 +707,28 @@ def revoke_api_token(name, token_id):
                          (name, token_id)).rowcount
 
 
+def set_token_write(name, token_id, allow):
+    """A token's own "allow writing"; how many it changed (0 or 1)."""
+    if len(token_id or "") != 12:
+        return 0
+    with tx() as c:
+        return c.execute("UPDATE api_token SET can_write = ? WHERE user = ? AND substr(token_hash, 1, 12) = ?",
+                         (int(allow), name, token_id)).rowcount
+
+
 def token_login(token):
-    """(user, portfolio) of an API token bound to a portfolio, or None; notes when it was last used."""
+    """(user, portfolio, can_write) of an API token bound to a portfolio, or None; notes when it was
+    last used."""
     if not token:
         return None
     h = _token_hash(token)
-    r = conn().execute("SELECT user, portfolio FROM api_token WHERE token_hash = ? AND portfolio IS NOT NULL",
-                       (h,)).fetchone()
+    r = conn().execute("SELECT user, portfolio, can_write FROM api_token WHERE token_hash = ? "
+                       "AND portfolio IS NOT NULL", (h,)).fetchone()
     if r:
         with tx() as c:
             c.execute("UPDATE api_token SET last_used = ? WHERE token_hash = ?",
                       (datetime.now().isoformat(timespec="seconds"), h))
-    return (r[0], r[1]) if r else None
+    return (r[0], r[1], bool(r[2])) if r else None
 
 
 # ---------- backup ----------

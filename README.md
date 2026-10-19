@@ -10,9 +10,9 @@ To init:
 
 Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete portfolio goes with `scripts/manage-portfolios.py purge <portfolio> --yes --backup-dir <dir>` (backs up there first; `--no-backup` instead to skip that).
 
-Game portfolios for you (Transactions tab: Trade now) or for AI agents: `scripts/manage-portfolios.py --help` to create and fund them from a terminal (admin only), `scripts/trade.py --help` to trade (all an agent gets — and only on a portfolio that allows AI write access).
+Game portfolios for you (Transactions tab: Trade now) or for AI agents: `scripts/manage-portfolios.py --help` to create and fund them from a terminal (admin only), `scripts/trade.py --help` to trade (all an agent gets — and only on a portfolio that allows AI access). Games are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
 
-Scripts and AI over HTTP: make an API token on the Config tab and send it as `Authorization: Bearer <token>`. It reads what you may read, and writes only to a portfolio whose "Allow AI (API) write access" box is ticked. Games are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
+Scripts and AI over HTTP: tick "Allow AI (API) access" on a portfolio's Config tab, make an API token there, and send it as `Authorization: Bearer <token>`. It reads that portfolio, and writes to it only if the token's own "allow writing" is ticked.
 
 Notes:
 - you can tell Claude directly to analyze the known data (like 'calc the max downdraw for all my stocks' or 'how many successful trades did i do in 2025?')

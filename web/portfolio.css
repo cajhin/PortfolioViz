@@ -524,7 +524,11 @@
   .proflist > div { display: flex; align-items: center; gap: 10px; }
   .proflist a { color: var(--text-primary); }
   #emptyPortfolioSlot { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-  #emptyPortfolioSlot .configrow { justify-content: center; }
+  #emptyPortfolioSlot > .configrow { justify-content: center; }
+  /* the Transactions tab's tools, moved in while the portfolio is empty (showEmptyPortfolio): laid
+     out as on that tab — full width, left-aligned, two columns — not centred like the rest here */
+  #emptyPortfolioSlot > #tblTrades, #emptyPortfolioSlot > #txAdd, #emptyPortfolioSlot > #txImport {
+    align-self: stretch; text-align: left; }
   .importlog { margin: 8px 0 0; padding: 8px 10px; font-size: 0.78rem; white-space: pre-wrap;
                text-align: left; color: var(--text-secondary); background: transparent;
                border: 1px solid var(--border); border-radius: 6px; max-height: 18em; overflow: auto; }
@@ -544,7 +548,11 @@
   .csvform textarea { flex: 0 1 72ch; width: 72ch; max-width: 100%; min-width: 0; min-height: 4.5em; max-height: 60vh; resize: vertical;
                       font: 0.8rem/1.4 ui-monospace, Menlo, monospace; padding: 6px 8px; color: var(--text-primary);
                       background: transparent; border: 1px solid var(--border); border-radius: 6px; }
-  .csvform .csvhelp { flex: 1 1 100%; font-size: 0.78rem; color: var(--text-muted); }
+  /* full width, as the paste form above: sized to its content, the row would let its label shrink to
+     the text and wrap the button under it, into the first column */
+  .csvexport { align-self: stretch; }
+  .csvform .csvhelp { flex: 1 1 calc(100% - var(--configcol) - 10px); margin-left: calc(var(--configcol) + 10px);
+                      font-size: 0.78rem; color: var(--text-muted); }
   .txver { text-align: center; }
   td.txver { color: var(--text-muted); }
   td.txver.new { color: var(--series-3); font-weight: 600; }
@@ -581,7 +589,10 @@
   .instcands .muted { color: var(--text-muted); }
   .instbtns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
   /* each Config row's own label, in one column of equal width so the controls line up */
-  .configrow > label:first-child { flex: 0 0 13.5em; }
+  /* the first column of every settings row: its label; the rest starts at --configcol (13.5em of
+     the row's 0.9rem) — and so does anything else meant to sit in the second column */
+  .configrow { --configcol: 12.15rem; }
+  .configrow > label:first-child { flex: 0 0 var(--configcol); }
   .configrow input[type="text"], .configrow input[type="date"], .configrow input[type="number"] {
     font: inherit; color: var(--text-primary); background: transparent;
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }

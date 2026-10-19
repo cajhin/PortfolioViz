@@ -56,7 +56,7 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # POST /portfolios {label, type} → {id} — the Config tab's "Create new portfolio", type "normal" or
 # "game": an empty portfolio with an empty watchlist under the next id (pid17), granted to its
 # creator — a game with GAME_CASH booked (manage-portfolios.py create).
-# POST /portfolio-ai?portfolio=ID {allow} — the Config tab's "Allow AI (API) write access".
+# POST /portfolio-ai?portfolio=ID {allow} — the Config tab's "Allow AI (API) access".
 # POST /portfolio-label?portfolio=ID {label} — the Config tab's rename: only the label changes. The
 # id never does — it is what URLs, scripts, tokens and baselines refer to the portfolio by.
 # POST /portfolio-delete?portfolio=ID — the Config tab's Delete, for a portfolio the user may change:
@@ -69,7 +69,9 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # after it — the export stays on the user's disk, its rows in the database.
 # Normal portfolios only — any other gets a 403 before anything is written.
 #
-# POST /import-csv?portfolio=ID — the Transactions tab's "Import CSV (Portfolioviz format)": the
+# GET /export-csv?portfolio=ID — the Transactions tab's "Export PViz CSV": every transaction in the
+# format the import reads (import_csv.py export), to replicate the portfolio in another.
+# POST /import-csv?portfolio=ID — the Transactions tab's "Import PViz CSV": the
 # body is the pasted text, which import_csv.py checks whole (any problem: nothing imported, every
 # problem listed), skipping duplicates. Its rows land unverified. With &action=accept they are
 # accepted, with &action=discard all rows not yet accepted are deleted again — the rollback.
@@ -87,9 +89,9 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # all} — a game's "trade now" on the Transactions tab: trade.py quote, and trade.py buy or sell —
 # its JSON as it is, the rules (trading-rules.md) and the refusals all trade.py's own. Games only.
 #
-# GET /tokens?portfolio=ID, POST /tokens {label, portfolio} → {id, token}, POST /token-revoke {id}
-# — the Config tab's API tokens: the user's own for that portfolio, each with the token itself, for
-# its Copy button. See TOKENS.
+# GET /tokens?portfolio=ID, POST /tokens {label, portfolio} → {id, token}, POST /token-revoke {id},
+# POST /token-write {id, allow} — the Config tab's API tokens: the user's own for that portfolio, each
+# with the token itself, for its Copy button, and its "allow writing". See TOKENS.
 #
 # GET /instrument-search?find=NAME | ?symbols=ISIN and POST /instrument {isin, symbol, name,
 # sector} — the Transactions tab's "new instrument" dialog: instruments by name (with their
@@ -147,19 +149,19 @@ def portfolio_type(pid):
 
 def list_portfolios(user):
     return [{"id": p["id"], "label": p["label"], "type": p["type"], "write": bool(p["can_write"]),
-             "ai": bool(p["ai_write"])} for p in db.user_portfolios(user)]
+             "ai": bool(p["ai_access"])} for p in db.user_portfolios(user)]
 
 # TOKENS. A script or an AI logs in with one of its user's API tokens (Authorization: Bearer …) in
 # place of the session cookie. A token is bound to the portfolio it was made for: every route acts on
-# that one — ?portfolio= may be left out, and any other is refused, for reading too. It writes only
-# while that portfolio allows AI write access, and only through TOKEN_WRITES — never accepting its
-# own CSV import (that is the user's check of it), and never anything about portfolios, users,
-# tokens or the server.
+# that one — ?portfolio= may be left out, and any other is refused. It works only while that
+# portfolio allows AI (API) access, reading included; it writes only if its own "allow writing" is
+# ticked, and only through TOKEN_WRITES — never accepting its own CSV import (that is the user's
+# check of it), and never anything about portfolios, users, tokens or the server.
 TOKEN_WRITES = ("/manual-tx", "/import-csv", "/import-tr", "/trade", "/instrument", "/update-prices")
 
 def script_env():
     """The environment a script runs in: never an agent's binding (TRADE_PORTFOLIO), which would
-    make trade.py ask for AI write access of the page's own trades."""
+    make trade.py ask for AI access of the page's own trades."""
     return {k: v for k, v in os.environ.items() if k != "TRADE_PORTFOLIO"}
 
 # USERS. A login is a random token in an HttpOnly cookie; the database keeps its hash (db.py's
@@ -224,7 +226,10 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not found:
             self.send_text(401, "unknown API token, or one made before tokens were bound to a portfolio")
             return None
-        user, self.token_portfolio = found
+        user, self.token_portfolio, self.token_write = found
+        if not (db.portfolio(self.token_portfolio) or {}).get("ai_access"):
+            self.send_text(403, f"portfolio {self.token_portfolio} does not allow AI (API) access")
+            return None
         url = urllib.parse.urlparse(self.path)
         asked = (urllib.parse.parse_qs(url.query).get("portfolio") or [""])[0]
         if asked and asked != self.token_portfolio:
@@ -240,15 +245,15 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 and (not self.via_token or portfolio == self.token_portfolio))
 
     def may_change(self, portfolio):
-        """Granted with write access — and, for an API token, AI write access allowed on it."""
-        return (PORTFOLIO_ID.match(portfolio or "") and db.access(self.user, portfolio) is True
-                and (not self.via_token or bool((db.portfolio(portfolio) or {}).get("ai_write"))))
+        """Granted with write access — and, for an API token, the token's own "allow writing"."""
+        return (self.may_open(portfolio) and db.access(self.user, portfolio) is True
+                and (not self.via_token or self.token_write))
 
     def refuse_change(self, portfolio, what="change"):
         if not self.may_open(portfolio):
             self.send_error(404, f"no portfolio {portfolio} for you")
         elif self.via_token and db.access(self.user, portfolio):
-            self.send_error(403, f"{portfolio} does not allow AI (API) write access")
+            self.send_error(403, "this token may not write - ask portfolio owner to 'allow writing' on the Config tab")
         else:
             self.send_error(403, f"you may not {what} {portfolio}")
 
@@ -391,7 +396,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/trade":
             self.trade((urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
             return
-        if parsed.path in ("/tokens", "/token-revoke"):
+        if parsed.path in ("/tokens", "/token-revoke", "/token-write"):
             self.tokens_post(parsed.path)
             return
         if parsed.path != "/update-prices":
@@ -473,7 +478,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
     def add_instrument(self):
         data = self.rfile.read(int(self.headers.get("Content-Length") or 0))   # before any refusal
-        if not any(p["can_write"] and (not self.via_token or (p["ai_write"] and p["id"] == self.token_portfolio))
+        if not any(p["can_write"] and (not self.via_token or (self.token_write and p["id"] == self.token_portfolio))
                    for p in db.user_portfolios(self.user)):
             self.send_error(403, "you may change no portfolio, so not the registry either")
             return
@@ -530,6 +535,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             # a new row books in the depot named (else "Manual"); an edit moves to it, if named
             if tx.get("depot"):
                 args += ["--depot", str(tx["depot"])]
+            if self.via_token and args[0] in ("add", "cash"):
+                args.append("--api")                    # its id api-…, not manual-…
         proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manual_tx.py"), portfolio] + args,
                               capture_output=True, text=True, timeout=60)
         self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
@@ -590,7 +597,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not self.may_change(portfolio):
             self.refuse_change(portfolio)
             return
-        db.set_ai_write(portfolio, bool(req.get("allow")))
+        db.set_ai_access(portfolio, bool(req.get("allow")))
         self.send_json({"portfolio": portfolio, "ai": bool(req.get("allow"))})
 
     def trade(self, portfolio):
@@ -630,6 +637,12 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 return
             token = db.new_api_token(self.user, label, portfolio)
             self.send_json({"token": token, "label": label, "portfolio": portfolio})
+            return
+        if path == "/token-write":
+            if not db.set_token_write(self.user, str(req.get("id") or ""), bool(req.get("allow"))):
+                self.send_error(404, "no such token")
+                return
+            self.send_json({"id": req.get("id"), "write": bool(req.get("allow"))})
             return
         if not db.revoke_api_token(self.user, str(req.get("id") or "")):
             self.send_error(404, "no such token")
@@ -685,7 +698,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         path = urllib.parse.urlparse(self.path).path
         if not (path.startswith("/api/") or path in ("/me", "/portfolios", "/host", "/instrument-search",
-                                                    "/live-index", "/quote", "/tokens")):
+                                                    "/live-index", "/quote", "/tokens", "/export-csv")):
             super().do_GET()       # the page's own files: no data in them, and login.html is one
             return
         self.user = self.login_user()
@@ -730,6 +743,15 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, f"no portfolio {portfolio} for you")
                 return
             self.send_json(db.api_tokens(self.user, portfolio))
+            return
+        if path == "/export-csv":
+            portfolio = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("portfolio") or [""])[0]
+            if not self.may_open(portfolio):
+                self.send_error(404, f"no portfolio {portfolio} for you")
+                return
+            proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "import_csv.py"), portfolio, "export"],
+                                  capture_output=True, text=True, timeout=60)
+            self.send_text(200 if proc.returncode == 0 else 500, proc.stdout if proc.returncode == 0 else proc.stderr)
             return
         if path == "/quote":
             what = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("instrument") or [""])[0]

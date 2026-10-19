@@ -16,7 +16,7 @@
  *   - the HTML of every tooltip, header tile and legend the renderers produce,
  *     in both modes and with "Show €" both on and off,
  *
- * into check_baseline.json. The clock is frozen, so two runs of unchanged code produce byte-
+ * into baselines/check_baseline.json. The clock is frozen, so two runs of unchanged code produce byte-
  * identical output and any diff is a real behaviour change.
  *
  * Use it around a refactor: --save on the code you trust, then a bare run after the edit. A clean
@@ -38,7 +38,7 @@ const SAVE = process.argv.includes('--save');
 // no --portfolio means the page's own default (config.json's defaultPortfolio), against the plain
 // baseline; a named one gets a baseline of its own, since each portfolio's figures differ
 const PORTFOLIO_ARG = process.argv.includes('--portfolio') ? process.argv[process.argv.indexOf('--portfolio') + 1] : '';
-const BASELINE = path.join(ROOT, PORTFOLIO_ARG ? `check_baseline.${PORTFOLIO_ARG}.json` : 'check_baseline.json');
+const BASELINE = path.join(ROOT, 'baselines', PORTFOLIO_ARG ? `check_baseline.${PORTFOLIO_ARG}.json` : 'check_baseline.json');
 
 /* ---------- the page's scripts, plus a few hooks into their scope ----------
    Concatenated in the order portfolio.html loads them, which is also the order they depend on.
@@ -338,6 +338,7 @@ function hoverAll(nodes, rows, tag, out) {
 
   const text = JSON.stringify(out, null, 1);
   if (SAVE || !fs.existsSync(BASELINE)) {
+    fs.mkdirSync(path.dirname(BASELINE), { recursive: true });
     fs.writeFileSync(BASELINE, text);
     console.log(`baseline written: ${BASELINE} (${(text.length / 1024).toFixed(0)} KB)`);
     return;

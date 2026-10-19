@@ -359,16 +359,24 @@
         </form>
         <pre class="importlog" id="trImportLog" hidden></pre>
         <form id="csvImportForm" class="configrow csvform">
-          <label for="csvImportText">Import CSV (Portfolioviz format)</label>
+          <label for="csvImportText">Import PViz CSV</label>
           <textarea id="csvImportText" rows="3" required spellcheck="false"
             placeholder="date,depot,type,isin,shares,price,fee,tax&#10;2026-06-04,Comdirect,buy,US0378331005,35,196.50,6.80,0&#10;2026-06-19,Comdirect,sell,US0378331005,20,201.10,9.30,14.20&#10;2026-07-01,Comdirect,dividend,US0378331005,15,0.25,,0.94&#10;2026-01-15,Comdirect,deposit,,,5000,,"></textarea>
           <button type="submit" class="dt-addsel">Import</button>
-          <div class="muted csvhelp">type: buy, sell, dividend, deposit, withdrawal · price per share
-            (a dividend: gross per share; deposit/withdrawal: the amount) · fee and tax in the portfolio
+          <div class="muted csvhelp">type: buy, sell, dividend, deposit, withdrawal, interest, split, tax ·
+            price per share (a dividend: gross per share; deposit, withdrawal, interest, tax: the amount;
+            a split: empty, its shares the ones it added) · fee and tax in the portfolio
             currency, empty if none · numbers like 1984.30. Every line is checked before anything is
             imported; lines already in the portfolio are skipped. Imported lines stay new until accepted.</div>
         </form>
         <pre class="importlog" id="csvImportLog" hidden></pre>
+        <!-- every transaction, in the format above, onto the clipboard: pasted into another portfolio's
+             import, it replicates this one (see the export script) -->
+        <div class="configrow csvexport" id="csvExportRow" hidden>
+          <label>Export PViz CSV</label>
+          <button type="button" id="csvExport" class="dt-addsel">Copy all transactions</button>
+          <span class="muted" id="csvExportMsg"></span>
+        </div>
       </div>
     </div>
 
@@ -420,19 +428,19 @@
         <span class="muted" id="portfolioType"></span>
         <span id="portfolioLabelMsg"></span>
       </form>
-      <!-- whether an API token (scripts, AI) may write to the current portfolio — see server.py's TOKENS -->
+      <!-- whether an API token (scripts, AI) may use the current portfolio at all — see server.py's TOKENS -->
       <div id="aiWriteRow" class="configrow" hidden>
         <label for="aiWrite">AI access</label>
-        <label class="check"><input type="checkbox" id="aiWrite"> Allow AI (API) write access</label>
+        <label class="check"><input type="checkbox" id="aiWrite"> Allow AI (API) access</label>
         <span class="err" id="aiWriteMsg"></span>
       </div>
-      <!-- the user's API tokens, shown while AI write access is allowed: made here, copied from
-           here to hand to an agent, revoked here (see renderTokens) -->
+      <!-- the user's API tokens, shown while AI access is allowed: made here, copied from here to
+           hand to an agent, allowed to write or not, revoked here (see renderTokens) -->
       <div id="tokenRow" class="configrow" hidden>
         <label></label>
         <!-- the second column, under the checkbox above it -->
         <div class="tokensec">
-          <div class="muted">Agents or scripts need a token to get write access, so they can 'log in'</div>
+          <div class="muted">Agents or scripts need a token to get access, so they can 'log in'</div>
           <div id="tokenList" class="proflist"></div>
           <form id="tokenForm" class="configrow">
             <input type="text" id="tokenLabel" maxlength="60" required placeholder="a label, e.g. 'claude'">

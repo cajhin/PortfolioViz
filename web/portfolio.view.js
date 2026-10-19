@@ -3636,8 +3636,9 @@ function applyPortfolioType(me) {
   document.getElementById('emptyPortfolioHow').innerHTML = text.how;
 }
 
-// The Config tab's "Allow AI (API) write access": whether an API token may write to this portfolio,
-// and an agent's trade.py session trade it. Switched back if the server says no.
+// The Config tab's "Allow AI (API) access": whether an API token may use this portfolio at all (and
+// write, if its own "allow writing" says so), and an agent's trade.py session trade it. Switched
+// back if the server says no.
 document.getElementById('aiWrite').addEventListener('change', async e => {
   const box = e.currentTarget, msg = document.getElementById('aiWriteMsg');
   msg.textContent = '';
@@ -3653,10 +3654,11 @@ document.getElementById('aiWrite').addEventListener('change', async e => {
 });
 
 // The Config tab's API tokens, for a script or an AI to call this server as the user
-// (Authorization: Bearer …) — each bound to this portfolio, and shown only while it allows AI write
-// access, since that is when one is any use. Each is kept, so its Copy token hands it to an agent at
-// any time; the list says what each is for and when it was last used, with a Revoke. A token made
-// before tokens were bound (no portfolio) is listed too, to be revoked: it no longer works.
+// (Authorization: Bearer …) — each bound to this portfolio, and shown only while it allows AI access,
+// since that is when one is any use. Each is kept, so its Copy token hands it to an agent at any
+// time; its "allow writing" says whether it may change anything or only read; the list says what
+// each is for and when it was last used, with a Revoke. A token made before tokens were bound (no
+// portfolio) is listed too, to be revoked: it no longer works.
 let TOKENS_LOADED = false;
 const showTokenRow = () => {
   document.getElementById('tokenRow').hidden = !(TOKENS_LOADED && document.getElementById('aiWrite').checked);
@@ -3682,7 +3684,7 @@ function renderTokens() {
       showTokenRow();
       document.getElementById('tokenList').replaceChildren(...list.map(t => {
         const row = document.createElement('div');
-        const what = Object.assign(document.createElement('span'), { textContent: t.label });
+        const what = Object.assign(document.createElement('span'), { textContent: `Token: '${t.label}'` });
         const when = Object.assign(document.createElement('span'), { className: 'muted',
           textContent: `made ${deDate(t.created.slice(0, 10))} · ` +
                        (t.last_used ? `last used ${deDate(t.last_used.slice(0, 10))}` : 'never used') });
@@ -3696,6 +3698,16 @@ function renderTokens() {
           copy.textContent = await copyText(t.token) ? 'Copied' : 'Copy failed';
           setTimeout(() => { copy.textContent = 'Copy token'; }, 1500);
         });
+        const write = Object.assign(document.createElement('label'), { className: 'check' });
+        const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!t.write });
+        write.append(box, ' allow writing');
+        box.addEventListener('change', async () => {
+          const r = await fetch('token-write', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: JSON.stringify({ id: t.id, allow: box.checked }) }).catch(() => null);
+          if (r && r.ok) return;
+          box.checked = !box.checked;
+          document.getElementById('tokenMsg').textContent = r ? `Not changed: ${routeFailure(r)}` : 'Not changed';
+        });
         const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel txdanger',
                                                                       textContent: 'Revoke' });
         btn.addEventListener('click', async () => {
@@ -3705,7 +3717,7 @@ function renderTokens() {
           if (r && r.ok) renderTokens();
           else document.getElementById('tokenMsg').textContent = r ? routeFailure(r) : 'Revoke failed';
         });
-        row.append(what, when, copy, btn);
+        row.append(what, write, copy, btn, when);
         return row;
       }));
     })
@@ -3936,7 +3948,7 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
   }
 });
 
-// The Transactions tab's "Import CSV (Portfolioviz format)": the pasted lines go to server.py's
+// The Transactions tab's "Import PViz CSV": the pasted lines go to server.py's
 // /import-csv route, which runs import_csv.py on them — all checked first, nothing imported on any
 // problem, duplicates skipped. Its report is shown as-is; whatever it imported is new (unverified)
 // until #csvPending accepts it or deletes it again. The textarea grows with what is pasted.
@@ -3970,6 +3982,28 @@ document.getElementById('csvImportForm').addEventListener('submit', async e => {
   // nothing new (all duplicates) changed nothing: no reload, and the paste stays to be looked at
   if (await postImportCsv('', csvText.value, log, btn) && !/\b0 new\b/.test(log.textContent)) reloadKeepingLog(log);
 });
+// "Export PViz CSV": every transaction of this portfolio in the same format (server.py's
+// /export-csv), onto the clipboard — pasted into another portfolio's import, it replicates this one.
+document.getElementById('csvExport').addEventListener('click', async e => {
+  const btn = e.currentTarget, msg = document.getElementById('csvExportMsg');
+  btn.disabled = true;
+  msg.textContent = '';
+  try {
+    const r = await fetch(`export-csv?portfolio=${encodeURIComponent(PORTFOLIO)}`, { cache: 'no-store' });
+    const text = await r.text();
+    if (!r.ok) throw new Error(text.trim() && !text.startsWith('<') ? text.trim() : routeFailure(r));
+    const lines = text.split('\n').filter(l => l && !l.startsWith('#')).length - 1;
+    const left = text.split('\n').filter(l => l.startsWith('#')).length;
+    msg.textContent = await copyText(text)
+      ? `${lines} transactions copied` + (left ? ` (${left} left out — see the # lines)` : '')
+      : 'Copy failed';
+  } catch (err) {
+    msg.textContent = `Export failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // accept: the new rows become ordinary transactions; delete: every row not yet accepted is gone —
 // the rollback of a bad paste, so it asks first. Either reloads, so the list shows it.
 async function settleCsv(action, btn) {
@@ -4026,6 +4060,8 @@ function txOption(inst) {
 }
 function refreshManualTools() {
   refreshGameTools();
+  // nothing to export from a portfolio with no transactions yet
+  document.getElementById('csvExportRow').hidden = !(TRADES.length || CASH.length);
   if (PORTFOLIO_TYPE !== 'normal' || !INSTRUMENTS.size) return;
   const sel = document.getElementById('txIsin');
   if (sel.options.length) return;

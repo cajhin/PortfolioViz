@@ -32,7 +32,7 @@ shares and pays €10); buy --shares adds the fee on top. A sale's fee comes off
 and so does a 20% tax on its gain, if any. The full rules, with examples: trade.py rules.
 
 Only game portfolios can be traded; any other is refused. An agent's session (TRADE_PORTFOLIO set)
-trades only a portfolio that allows AI write access. --id makes a call safe to repeat: a
+trades only a portfolio that allows AI access. --id makes a call safe to repeat: a
 second call with the same id answers with the first one's result instead of trading twice.
 --reason is kept with the trade.
 """
@@ -356,18 +356,18 @@ def latest_close(inst):
     return rows[-1]
 
 
-def require_ai_write(pid):
-    """An agent's session (TRADE_PORTFOLIO set) trades only where the portfolio allows AI to write —
+def require_ai_access(pid):
+    """An agent's session (TRADE_PORTFOLIO set) trades only where the portfolio allows AI access —
     its owner's checkbox on the Config tab. The owner trading it themselves, from the page or this
     command line, needs no such leave."""
-    if os.environ.get("TRADE_PORTFOLIO") and not (db.portfolio(pid) or {}).get("ai_write"):
-        raise Refusal(f"portfolio {pid!r} does not allow AI write access",
+    if os.environ.get("TRADE_PORTFOLIO") and not (db.portfolio(pid) or {}).get("ai_access"):
+        raise Refusal(f"portfolio {pid!r} does not allow AI access",
                       "its owner can allow it on the page's Config tab")
 
 
 def execute(pid, side, inst_text, shares=None, eur=None, all_=False, reason="", oid=None):
     require_game(pid)
-    require_ai_write(pid)
+    require_ai_access(pid)
     with locked(pid):
         rows = manual_tx.manual_rows(pid)
         tid = f"manual-{oid}" if oid else None

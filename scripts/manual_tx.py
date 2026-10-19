@@ -7,6 +7,7 @@ delete any of its transactions, imported ones included.
     python3 scripts/manual_tx.py <portfolio> delete <transaction_id>
     python3 scripts/manual_tx.py <portfolio> cash <YYYY-MM-DD> deposit|withdrawal|interest <amount> [--depot D]
     python3 scripts/manual_tx.py <portfolio> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal|interest <amount> [--depot D]
+    --api on add or cash: entered through the API (server.py, for a token) — its id api-…, not manual-…
 
 Rows go to the portfolio's ledger (origin 'manual') in the same format as a Trade Republic export
 row, so import_tr.py's one conversion turns every ledger into the portfolio's positions,
@@ -36,6 +37,16 @@ from import_tr import (DIVIDEND_TYPES, MANUAL_DEPOT, active_ledger, depot_of, nu
 FIELDS = ["datetime", "date", "account_type", "category", "type", "asset_class", "name", "symbol",
           "shares", "price", "amount", "fee", "tax", "currency", "original_amount",
           "original_currency", "fx_rate", "description", "transaction_id"]
+
+# A row entered through the API (an agent's or a script's token — server.py passes --api) is told
+# apart from one typed on the page by its id: api-… rather than manual-….
+VIA_API = False
+DESCRIPTION = {False: "entered by hand", True: "entered through the API"}
+
+
+def new_id():
+    return f"{'api' if VIA_API else 'manual'}-{uuid.uuid4()}"
+
 
 CASH_TYPES = {"deposit": "CUSTOMER_INBOUND", "withdrawal": "CUSTOMER_OUTBOUND_REQUEST",
               "interest": "INTEREST_PAYMENT"}
@@ -110,8 +121,8 @@ def make_row(rows, day, isin, kind, shares, price, fee, tid=None, keep_at=None, 
         "name": inst.get("name") or isin, "symbol": isin,
         "shares": f"{-shares if kind == 'sell' else shares:.10f}", "price": f"{price:.6f}",
         "amount": f"{-gross if kind == 'buy' else gross:.2f}", "fee": f"{-fee:.2f}" if fee else "",
-        "tax": f"{-tax:.2f}" if tax else "", "currency": "EUR", "description": "entered by hand",
-        "transaction_id": tid or f"manual-{uuid.uuid4()}"}, inst
+        "tax": f"{-tax:.2f}" if tax else "", "currency": "EUR", "description": DESCRIPTION[VIA_API],
+        "transaction_id": tid or new_id()}, inst
 
 
 def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
@@ -126,8 +137,8 @@ def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
     return {"datetime": stamp(rows, when, day, keep_at), "date": day, "account_type": "MANUAL",
             "category": "CASH", "type": CASH_TYPES[kind], "asset_class": "", "name": "", "symbol": "",
             "shares": "", "price": "", "amount": f"{-amount if kind == 'withdrawal' else amount:.2f}",
-            "fee": "", "tax": "", "currency": "EUR", "description": "entered by hand",
-            "transaction_id": tid or f"manual-{uuid.uuid4()}"}
+            "fee": "", "tax": "", "currency": "EUR", "description": DESCRIPTION[VIA_API],
+            "transaction_id": tid or new_id()}
 
 
 def manual_rows(portfolio):
@@ -221,7 +232,11 @@ def delete(portfolio, tid):
 
 
 def main():
+    global VIA_API
     args, opts = sys.argv[1:], {}
+    if "--api" in args:
+        args.remove("--api")
+        VIA_API = True
     for opt in ("--depot", "--tax"):
         if opt in args:
             i = args.index(opt)

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Import transactions in the Portfolioviz CSV format into a normal portfolio — for any broker's
-statement, converted by hand, a script or an AI; and accept or roll back what was imported.
+"""Import transactions in the Portfolioviz CSV format (PViz CSV) into a normal portfolio — for any
+broker's statement, converted by hand, a script or an AI; accept or roll back what was imported;
+and export a portfolio in the same format, to replicate it in another.
 
     python3 scripts/import_csv.py <portfolio> <file.csv | ->     # import (- reads stdin)
     python3 scripts/import_csv.py <portfolio> accept             # the new rows are verified
     python3 scripts/import_csv.py <portfolio> discard            # the new rows are deleted
+    python3 scripts/import_csv.py <portfolio> export             # every transaction, on stdout
 
 The format — one header line, then one transaction per line, comma-separated, any column order:
 
@@ -15,18 +17,25 @@ The format — one header line, then one transaction per line, comma-separated, 
     2026-01-15,Comdirect,deposit,,,5000,,
 
   date    YYYY-MM-DD, not in the future
-  depot   the securities account it was booked in — any name but "Manual", which is the hand-entered
-          rows' own (manual_tx.py)
-  type    buy | sell | dividend | deposit | withdrawal
-  isin    an instrument in the registry (add it there first); empty for deposit and withdrawal
-  shares  how many, positive; for a dividend, the shares it was paid on; empty for deposit/withdrawal
-  price   per share in the portfolio currency, positive (a dividend: gross per share);
-          for deposit and withdrawal, the amount
-  fee     charged on top of a buy, off a sale; zero or empty if none
-  tax     paid on a sale or withheld from a dividend; zero or empty if none — negative on a sale is
+  depot   the securities account it was booked in ("Manual" for hand-entered rows not booked elsewhere)
+  type    buy | sell | dividend | deposit | withdrawal | interest | split | tax
+  isin    an instrument in the registry (add it there first); empty for deposit, withdrawal,
+          interest and tax
+  shares  how many, positive; for a dividend, the shares it was paid on; for a split, the shares it
+          added (9 held, 4:1 → 27); empty for deposit, withdrawal, interest and tax
+  price   per share in the portfolio currency, positive (a dividend: gross per share; a sale may be
+          0 — a warrant expiring worthless); empty for a split; for deposit, withdrawal and interest,
+          the amount; for tax, what it did to the cash — a refund positive, a payment negative
+  fee     charged on top of a buy, off a sale, dividend or interest; zero or empty if none
+  tax     paid on a sale or withheld from a dividend or interest; zero or empty if none — negative is
           a refund
 Numbers are plain decimals with a point and no thousands separator. Blank lines, and lines starting
 with #, are skipped.
+
+`export` writes every transaction the portfolio has (deleted ones left out) in this format, oldest
+first: imported into a new, empty portfolio it gives the same positions and the same cash per
+depot. A warrant's exercise comes out as the sale it amounts to; a ledger row of a kind the format
+has no word for is left out, as a # comment saying so.
 
 Every line is checked first — format, the instrument in the registry, no sale of more than the depot
 holds at that point — and on any problem nothing is imported and every problem is listed. A line
@@ -44,19 +53,20 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 import db
-from import_tr import (MANUAL_DEPOT, active_ledger, depot_of, num, rebuild, registry_names,
-                       require_normal, short_at)
+from import_tr import active_ledger, depot_of, fmt, num, rebuild, registry_names, require_normal, short_at
 
 COLUMNS = ["date", "depot", "type", "isin", "shares", "price", "fee", "tax"]
-TYPES = ("buy", "sell", "dividend", "deposit", "withdrawal")
-CASH_TYPES = {"deposit": "CUSTOMER_INBOUND", "withdrawal": "CUSTOMER_OUTBOUND_REQUEST"}
+TYPES = ("buy", "sell", "dividend", "deposit", "withdrawal", "interest", "split", "tax")
+CASH_TYPES = {"deposit": "CUSTOMER_INBOUND", "withdrawal": "CUSTOMER_OUTBOUND_REQUEST",
+              "interest": "INTEREST_PAYMENT"}
+NO_INSTRUMENT = ("deposit", "withdrawal", "interest", "tax")
 NUMBER = re.compile(r"^-?\d+(\.\d+)?$")
-# what a ledger row's type is, in this format's words; anything else (a split, a tax refund) is
-# never a duplicate of a pasted line
+# what a ledger row's type is, in this format's words — to tell a duplicate by
 KIND = {"BUY": "buy", "SELL": "sell", "DIVIDEND": "dividend", "DISTRIBUTION": "dividend",
         "EARNINGS": "dividend", **{v: k for k, v in CASH_TYPES.items()},
         "TRANSFER_INBOUND": "deposit", "TRANSFER_INSTANT_INBOUND": "deposit",
-        "TRANSFER_OUTBOUND": "withdrawal", "TRANSFER_INSTANT_OUTBOUND": "withdrawal"}
+        "TRANSFER_OUTBOUND": "withdrawal", "TRANSFER_INSTANT_OUTBOUND": "withdrawal",
+        "SPLIT": "split", "TAX_OPTIMIZATION": "tax"}
 
 
 def parse(text):
@@ -91,8 +101,6 @@ def check(i, r, registry):
         bad.append(f"line {i}: date {r['date']!r} is not YYYY-MM-DD")
     if not r["depot"]:
         bad.append(f"line {i}: no depot")
-    elif r["depot"].lower() == MANUAL_DEPOT.lower():
-        bad.append(f"line {i}: depot {MANUAL_DEPOT!r} is for transactions entered by hand — name the real one")
     kind = r["type"].lower()
     if kind not in TYPES:
         return bad + [f"line {i}: type {r['type']!r} is not one of {', '.join(TYPES)}"]
@@ -101,12 +109,19 @@ def check(i, r, registry):
     if unreadable:
         return bad + unreadable
     shares, price, fee, tax = (num(r[c]) for c in ("shares", "price", "fee", "tax"))
-    if kind in CASH_TYPES:
+    if fee < 0:
+        bad.append(f"line {i}: the fee cannot be negative")
+    if kind in NO_INSTRUMENT:
         if r["isin"] or r["shares"]:
             bad.append(f"line {i}: a {kind} has no isin or shares — its amount goes in price")
-        if price <= 0:
+        if kind == "tax":
+            if not price:
+                bad.append(f"line {i}: a tax needs what it did to the cash, in price (a refund positive)")
+            if fee or tax:
+                bad.append(f"line {i}: a tax line has its amount in price, not in fee or tax")
+        elif price <= 0:
             bad.append(f"line {i}: a {kind} needs its amount, positive, in price")
-        if fee or tax:
+        elif kind != "interest" and (fee or tax):
             bad.append(f"line {i}: a {kind} has no fee or tax")
         return bad
     if r["isin"].upper() not in registry:
@@ -114,14 +129,11 @@ def check(i, r, registry):
                    "(+ New instrument… on the Transactions tab)")
     if shares <= 0:
         bad.append(f"line {i}: shares must be positive")
-    if price <= 0:
-        bad.append(f"line {i}: price must be positive")
-    if fee < 0:
-        bad.append(f"line {i}: the fee cannot be negative")
-    if kind == "dividend" and fee:
-        bad.append(f"line {i}: a dividend has no fee — only tax withheld")
-    if tax < 0 and kind != "sell":
-        bad.append(f"line {i}: only a sale's tax can be negative (a refund)")
+    if kind == "split":
+        if price or fee or tax:
+            bad.append(f"line {i}: a split has only the shares it added")
+    elif price < 0 or (price == 0 and kind != "sell"):
+        bad.append(f"line {i}: price must be positive (a sale's may be 0)")
     return bad
 
 
@@ -135,8 +147,15 @@ def ledger_row(r, at, registry):
            "tax": f"{-tax:.2f}" if tax else ""}
     if kind in CASH_TYPES:
         return {**row, "category": "CASH", "type": CASH_TYPES[kind], "name": "", "symbol": "",
-                "shares": "", "price": "", "amount": f"{price if kind == 'deposit' else -price:.2f}"}
+                "shares": "", "price": "", "amount": f"{-price if kind == 'withdrawal' else price:.2f}"}
+    if kind == "tax":       # TR's own word for a tax refund (or payment) of no one position
+        return {**row, "category": "CASH", "type": "TAX_OPTIMIZATION", "name": "", "symbol": "",
+                "shares": "", "price": "", "amount": "", "tax": f"{price:.2f}"}
     isin = r["isin"].upper()
+    if kind == "split":
+        return {**row, "category": "CORPORATE_ACTION", "type": "SPLIT", "symbol": isin,
+                "name": registry[isin].get("name") or isin, "shares": f"{shares:.10f}", "price": "",
+                "amount": ""}
     gross = shares * price
     return {**row, "category": "TRADING", "type": kind.upper(), "symbol": isin,
             "name": registry[isin].get("name") or isin,
@@ -148,6 +167,11 @@ def key(t):
     """What makes two rows the same transaction, but for the amount (compared with a cent's slack):
     date, depot, type, instrument and shares."""
     return (t["date"], depot_of(t).lower(), KIND.get(t["type"]), t["symbol"], round(abs(num(t["shares"])), 6))
+
+
+def amount_of(t):
+    """The amount two duplicates share: what changed hands, or a tax line's own figure."""
+    return abs(num(t["amount"])) or abs(num(t["tax"]))
 
 
 def import_csv(portfolio, text):
@@ -163,7 +187,7 @@ def import_csv(portfolio, text):
     # A row deleted on the page counts too: re-pasting it does not bring it back.
     existing = defaultdict(list)
     for t in db.ledger(portfolio, "tr") + db.ledger(portfolio, "csv") + db.ledger(portfolio, "manual"):
-        existing[key(t)].append(abs(num(t["amount"])))
+        existing[key(t)].append(amount_of(t))
     per_day = defaultdict(int)
     for t in ledger:
         per_day[t["date"]] += 1
@@ -174,7 +198,7 @@ def import_csv(portfolio, text):
         when = datetime.strptime(r["date"], "%Y-%m-%d")
         at = (when + timedelta(hours=12, seconds=per_day[r["date"]])).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         row = ledger_row(r, at, registry)
-        k, amount = key(row), abs(num(row["amount"]))
+        k, amount = key(row), amount_of(row)
         match = next((a for a in existing[k] if abs(a - amount) < 0.011), None)
         if match is not None:
             existing[k].remove(match)
@@ -201,12 +225,57 @@ def import_csv(portfolio, text):
 
 def describe(r, registry):
     kind = r["type"].lower()
-    if kind in CASH_TYPES:
+    if kind in NO_INSTRUMENT:
         return f"{r['date']} {r['depot']} {kind} {num(r['price']):g}"
     inst = registry.get(r["isin"].upper()) or {}
+    if kind == "split":
+        return f"{r['date']} {r['depot']} split: {num(r['shares']):g} more {inst.get('display') or r['isin']}"
     extra = "".join(f" + {c} {num(r[c]):g}" for c in ("fee", "tax") if num(r[c]))
     return (f"{r['date']} {r['depot']} {kind} {num(r['shares']):g} × "
             f"{inst.get('display') or inst.get('name') or r['isin']} at {num(r['price']):g}{extra}")
+
+
+def export(portfolio):
+    """Every active ledger row as a line of this format, oldest first — so that importing them into a
+    new portfolio rebuilds the same positions and the same cash per depot."""
+    rows = active_ledger(portfolio)
+    payout = {(t["symbol"], t["date"]): num(t["amount"]) for t in rows if t["type"] == "TILG"}
+    out = [",".join(COLUMNS)]
+    n = lambda v, places=8: fmt(v, places)
+    for t in rows:
+        kind, depot = t["type"], depot_of(t)
+        shares, amount, fee, tax = abs(num(t["shares"])), num(t["amount"]), -num(t["fee"]), -num(t["tax"])
+        cash = amount - fee - tax                       # what the row did to the cash, as booked
+        line = None
+        if kind in ("BUY", "SELL") and shares:
+            line = [kind.lower(), t["symbol"], n(shares), n(abs(amount) / shares), n(fee, 2), n(tax, 2)]
+        elif kind == "WARRANT_EXERCISE" and shares:   # the sale it amounts to, at what TILG paid
+            line = ["sell", t["symbol"], n(shares), n(payout.get((t["symbol"], t["date"]), 0.0) / shares), "", ""]
+        elif kind == "TILG":
+            continue                                    # paid out as that sale
+        elif KIND.get(kind) == "dividend" and amount > 0:
+            held = shares or 1.0
+            line = ["dividend", t["symbol"], n(held), n(amount / held), n(fee, 2), n(tax, 2)]
+        elif kind == "SPLIT" and shares:
+            line = ["split", t["symbol"], n(shares), "", "", ""]
+        elif kind == "TAX_OPTIMIZATION" and cash:
+            line = ["tax", "", "", n(cash, 2), "", ""]
+        elif kind == "INTEREST_PAYMENT" and amount > 0:
+            line = ["interest", "", "", n(amount, 2), n(fee, 2), n(tax, 2)]
+        elif t["category"] == "CASH" and KIND.get(kind) in ("deposit", "withdrawal", "interest") and cash:
+            line = ["deposit" if cash > 0 else "withdrawal", "", "", n(abs(cash), 2), "", ""]
+        if line is None:
+            out.append(f"# left out: {t['date']} {depot} {kind} {t['symbol']} {t['amount']}".rstrip())
+            continue
+        kind_, isin, sh, price, fee_, tax_ = line
+        zero = lambda v: "" if v in ("0", "") else v
+        out.append(",".join([t["date"], csv_cell(depot), kind_, isin, sh, price, zero(fee_), zero(tax_)]))
+    return "\n".join(out) + "\n"
+
+
+def csv_cell(text):
+    """A depot name as one CSV cell — quoted if it holds a comma or a quote."""
+    return f'"{text.replace(chr(34), chr(34) * 2)}"' if any(c in text for c in ',"') else text
 
 
 def accept(portfolio):
@@ -223,6 +292,11 @@ def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__.strip().split("\n\n")[1])
     portfolio, what = sys.argv[1:]
+    if what == "export":
+        if not db.portfolio(portfolio):
+            sys.exit(f"no portfolio {portfolio!r}")
+        sys.stdout.write(export(portfolio))
+        return
     text = None
     if what not in ("accept", "discard"):
         if what == "-":
