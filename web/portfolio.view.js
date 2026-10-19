@@ -3707,9 +3707,23 @@ function renderTokens() {
         box.addEventListener('change', async () => {
           const r = await fetch('token-write', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                                                  body: JSON.stringify({ id: t.id, allow: box.checked }) }).catch(() => null);
-          if (r && r.ok) return;
+          if (r && r.ok) { t.write = box.checked; return; }    // the agent prompt says read only or not
           box.checked = !box.checked;
           document.getElementById('tokenMsg').textContent = r ? `Not changed: ${routeFailure(r)}` : 'Not changed';
+        });
+        // everything an agent elsewhere needs to start: where, which portfolio, the token, and to read
+        // the instructions first (server.py's /agents.md)
+        const prompt = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel',
+          textContent: 'Copy agent prompt', title: 'Copy a short instruction for an AI agent, the token included' });
+        prompt.disabled = copy.disabled;
+        prompt.addEventListener('click', async () => {
+          const base = PUBLIC_URL || location.href.replace(/[^/]*([?#].*)?$/, '');
+          const label = document.getElementById('portfolioLabel').value || PORTFOLIO;
+          const text = `You have access to my Portfolioviz portfolio "${label}" (a ${PORTFOLIO_TYPE} portfolio) ` +
+            `at ${base} with the API token ${t.token}` + (t.write ? '' : ' (read only)') +
+            `. Before anything else, read ${base}agents.md and follow it.`;
+          prompt.textContent = await copyText(text) ? 'Copied' : 'Copy failed';
+          setTimeout(() => { prompt.textContent = 'Copy agent prompt'; }, 1500);
         });
         const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel txdanger',
                                                                       textContent: 'Revoke' });
@@ -3720,7 +3734,7 @@ function renderTokens() {
           if (r && r.ok) renderTokens();
           else document.getElementById('tokenMsg').textContent = r ? routeFailure(r) : 'Revoke failed';
         });
-        row.append(what, write, copy, btn, when);
+        row.append(what, write, copy, prompt, btn, when);
         return row;
       }));
     })
@@ -3803,11 +3817,19 @@ function staleServer() {
 const routeFailure = r => r.status === 404 ? STALE_MSG : r.status === 401 ? 'Logged out — reload to log in again.'
   : `${r.status} ${r.statusText}`;
 
-// The Config tab's last row: who is logged in (server.py's /me), and the way out. Served without
+// where agents elsewhere reach this server (server.py's public_url) — /me says; until then, here
+let PUBLIC_URL = '';
+// The Config tab's first row: who is logged in (server.py's /me), and the way out. Served without
 // logins (the regression check) there is nobody, and the row stays hidden.
 fetch('me', { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(({ user, restart }) => {
+  .then(({ user, restart, publicUrl }) => {
+    PUBLIC_URL = publicUrl ? publicUrl.replace(/\/?$/, '/') : '';
+    // an agent elsewhere cannot reach "localhost": say so where tokens are handed out
+    const note = document.getElementById('tokenUrlNote');
+    note.hidden = !/^https?:\/\/(localhost|127\.|\[::1\])/.test(PUBLIC_URL);
+    note.textContent = `This server knows itself only as ${PUBLIC_URL} — an agent on another machine cannot ` +
+      'reach that. An admin sets where others reach it: scripts/db.py config set publicUrl \'"https://…"\'';
     document.getElementById('userName').textContent = user;
     document.getElementById('logoutForm').hidden = false;
     document.getElementById('logoutSep').hidden = false;

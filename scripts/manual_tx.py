@@ -7,7 +7,9 @@ delete any of its transactions, imported ones included.
     python3 scripts/manual_tx.py <portfolio> delete <transaction_id>
     python3 scripts/manual_tx.py <portfolio> cash <YYYY-MM-DD> deposit|withdrawal|interest <amount> [--depot D]
     python3 scripts/manual_tx.py <portfolio> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal|interest <amount> [--depot D]
-    --api on add or cash: entered through the API (server.py, for a token) — its id api-…, not manual-…
+    --api: through the API (server.py, for a token) — a new row's id is api-…, not manual-…, and
+           it is unverified until its user accepts it on the page; an edit or delete touches only
+           a row still unverified — an accepted one is its user's to change
 
 Rows go to the portfolio's ledger (origin 'manual') in the same format as a Trade Republic export
 row, so import_tr.py's one conversion turns every ledger into the portfolio's positions,
@@ -39,7 +41,9 @@ FIELDS = ["datetime", "date", "account_type", "category", "type", "asset_class",
           "original_currency", "fx_rate", "description", "transaction_id"]
 
 # A row entered through the API (an agent's or a script's token — server.py passes --api) is told
-# apart from one typed on the page by its id: api-… rather than manual-….
+# apart from one typed on the page by its id, api-… rather than manual-…, and lands unverified, as a
+# pasted CSV does: its user accepts it, or rolls it back, on the page. Through the API, only such a
+# row — one not yet accepted — can be edited or deleted.
 VIA_API = False
 DESCRIPTION = {False: "entered by hand", True: "entered through the API"}
 
@@ -146,9 +150,17 @@ def manual_rows(portfolio):
     return db.ledger(portfolio, "manual")
 
 
-def save(portfolio, rows):
-    """The hand-entered rows as they now stand, all of them, oldest first."""
-    db.replace_ledger(portfolio, "manual", sorted(rows, key=lambda r: r["datetime"]))
+def save(portfolio, rows, new=None):
+    """The hand-entered rows as they now stand, all of them, oldest first; `new` the one just added —
+    unverified if it came through the API."""
+    db.replace_ledger(portfolio, "manual", sorted(rows, key=lambda r: r["datetime"]),
+                      unverified={new["transaction_id"]} if new and VIA_API else ())
+
+
+def require_pending(portfolio, tid):
+    """Through the API, exit unless the row is one not yet accepted."""
+    if VIA_API and db.is_verified(portfolio, tid):
+        sys.exit("that transaction is accepted — only its user can change it, on the page; ask them")
 
 
 def describe(day, kind, shares, price, fee, tax, name):
@@ -162,14 +174,14 @@ def add(portfolio, day, isin, kind, shares, price, fee, depot=MANUAL_DEPOT, tax=
     row, inst = make_row(rows, day, isin, kind, shares, price, fee, tax=tax)
     booked_in(row, depot)
     never_short(active_ledger(portfolio) + [row], isin, depot)
-    save(portfolio, rows + [row])
+    save(portfolio, rows + [row], new=row)
     print("added: " + describe(day, kind, shares, price, fee, tax, inst.get("display") or isin))
 
 
 def cash(portfolio, day, kind, amount, depot=MANUAL_DEPOT):
     rows = manual_rows(portfolio)
-    rows.append(booked_in(make_cash_row(rows, day, kind, amount), checked_depot(depot)))
-    save(portfolio, rows)
+    row = booked_in(make_cash_row(rows, day, kind, amount), checked_depot(depot))
+    save(portfolio, rows + [row], new=row)
     print(f"added: {day} {kind} {num(amount):g}")
 
 
@@ -187,6 +199,7 @@ def editable(portfolio, tid, types, what):
 def edit(portfolio, tid, day, kind, shares, price, fee, depot=None, tax=0):
     """Any buy, sale or dividend rewritten in place — what it says now, over what it said, so an
     imported row keeps whatever else the broker's export had on it (its original currency, say)."""
+    require_pending(portfolio, tid)
     old, rest = editable(portfolio, tid, TRADE_EDITABLE, "a buy, sale or dividend")
     row, inst = make_row(rest, day, old["symbol"], kind, shares, price, fee, tid=tid, tax=tax,
                          keep_at=old["datetime"] if old["date"] == day else None)
@@ -202,6 +215,7 @@ def edit(portfolio, tid, day, kind, shares, price, fee, depot=None, tax=0):
 def edit_cash(portfolio, tid, day, kind, amount, depot=None):
     """Any deposit, withdrawal or interest rewritten in place — its tax, if the export had one
     (interest), kept."""
+    require_pending(portfolio, tid)
     old, rest = editable(portfolio, tid, CASH_EDITABLE, "a deposit, withdrawal or interest")
     row = make_cash_row(rest, day, kind, amount, tid=tid,
                         keep_at=old["datetime"] if old["date"] == day else None)
@@ -215,6 +229,7 @@ def delete(portfolio, tid):
     """A hand-entered row is removed outright. An imported one stays in the ledger — so the next
     import of an overlapping export still recognises it as seen — marked deleted, which the
     rebuild leaves out. Clearing that mark (ledger.deleted) restores it."""
+    require_pending(portfolio, tid)
     rows = manual_rows(portfolio)
     keep = [r for r in rows if r["transaction_id"] != tid]
     if len(keep) < len(rows):

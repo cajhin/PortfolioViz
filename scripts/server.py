@@ -15,6 +15,7 @@ machine needs no login at all.
 import functools, http.cookies, http.server, json, os, py_compile, re, socket, sqlite3, subprocess, sys
 import tempfile, threading, urllib.parse, urllib.request
 
+import agents
 import api
 import db
 
@@ -27,7 +28,7 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # POST /login {user, password}, POST /register {user, password}, POST /logout — login.html's.
 # Register is open to anyone who reaches the page: the new user sees nothing until they create a
 # portfolio (or are granted one with scripts/manage-users.py). Both answer with the session cookie.
-# GET /me — {user, admin, restart}: who is logged in, whether they are an admin (the global
+# GET /me — {user, admin, restart, publicUrl}: who is logged in, whether they are an admin (the global
 # `admins` setting, a list of user names — never sent to the page with the other settings), and,
 # for an admin, whether this server's code changed on disk since it started (see RESTART).
 # POST /restart — an admin's "Restart server": the server replaces itself (same process, port and
@@ -105,6 +106,15 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # replaced. A portfolio's own routes answer only for a portfolio the user may open — any other is a
 # 404, the same as one that does not exist. api/config's defaultPortfolio is the user's: the global
 # one if they may open it, else the first they may.
+#
+# GET /agents.md (also /llms.txt), /agents/csv, /agents/game-rules — instructions for agents using a
+# portfolio over HTTP from elsewhere (scripts/agents.py): public, like login.html, so an agent can
+# read how to get a token before it has one. Every refusal a token gets points there. The address
+# they give is public_url(): the global `publicUrl` setting, which an admin sets to where others
+# reach this server (db.py config set publicUrl '"https://…"'), else where the request came in.
+# GET /instrument?isin=ISIN — {registered, id, name, display}: whether that one instrument is in the
+# registry — never the registry whole, which names what every other portfolio holds.
+# GET /game-status — a game's cash and positions valued live (trade.py status).
 #
 # GET /host — the machine this server runs on, so the page can tell the dev copy from the live one
 # (see markDevHost). Not knowable from the browser: both are reached through localhost or a proxy.
@@ -224,11 +234,13 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return user
         found = db.token_login(auth[7:].strip())
         if not found:
-            self.send_text(401, "unknown API token, or one made before tokens were bound to a portfolio")
+            self.send_text(401, "unknown API token, or one made before tokens were bound to a portfolio - "
+                                "ask your user for a new one; see agents.md")
             return None
         user, self.token_portfolio, self.token_write = found
         if not (db.portfolio(self.token_portfolio) or {}).get("ai_access"):
-            self.send_text(403, f"portfolio {self.token_portfolio} does not allow AI (API) access")
+            self.send_text(403, f"portfolio {self.token_portfolio} does not allow AI (API) access - ask its "
+                                "owner to allow it on the Config tab; see agents.md")
             return None
         url = urllib.parse.urlparse(self.path)
         asked = (urllib.parse.parse_qs(url.query).get("portfolio") or [""])[0]
@@ -253,9 +265,20 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not self.may_open(portfolio):
             self.send_error(404, f"no portfolio {portfolio} for you")
         elif self.via_token and db.access(self.user, portfolio):
-            self.send_error(403, "this token may not write - ask portfolio owner to 'allow writing' on the Config tab")
+            self.send_error(403, "this token may not write - ask portfolio owner to 'allow writing' on the "
+                                 "Config tab (see agents.md)")
         else:
             self.send_error(403, f"you may not {what} {portfolio}")
+
+    def public_url(self):
+        """Where others reach this server: the `publicUrl` setting, else where this request came in —
+        through a proxy, as the proxy says — which from this machine is only "localhost"."""
+        set_ = str(db.settings("").get("publicUrl") or "").rstrip("/")
+        if set_:
+            return set_
+        proto = self.headers.get("X-Forwarded-Proto") or "http"
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "localhost"
+        return f"{proto}://{host}{(self.headers.get('X-Forwarded-Prefix') or '').rstrip('/')}"
 
     def same_origin(self):
         """A POST a browser sends says where from; none at all (curl) has no cookie to abuse."""
@@ -323,7 +346,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         parsed = urllib.parse.urlparse(self.path)          # a token may have added its ?portfolio=
         if self.via_token and parsed.path not in TOKEN_WRITES:
-            self.send_error(403, "not with an API token - log in on the page")
+            self.send_error(403, "not with an API token - this is for its user, on the page (see agents.md)")
             return
         if parsed.path == "/portfolios":
             req = self.read_json()
@@ -535,8 +558,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             # a new row books in the depot named (else "Manual"); an edit moves to it, if named
             if tx.get("depot"):
                 args += ["--depot", str(tx["depot"])]
-            if self.via_token and args[0] in ("add", "cash"):
-                args.append("--api")                    # its id api-…, not manual-…
+        if self.via_token:
+            args.append("--api")        # an api-… id, unverified; only unverified rows changed
         proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manual_tx.py"), portfolio] + args,
                               capture_output=True, text=True, timeout=60)
         self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
@@ -568,7 +591,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             path = os.path.join(tmp, name)      # its own name, so import_tr.py's report shows it
             with open(path, "wb") as fh:
                 fh.write(data)
-            proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "import_tr.py"), portfolio, path],
+            proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "import_tr.py"), portfolio, path]
+                                  + (["--api"] if self.via_token else []),     # unverified, as any token write
                                   capture_output=True, text=True, timeout=120)
         body = (proc.stdout + proc.stderr).encode("utf-8")
         self.send_response(200 if proc.returncode == 0 else 500)
@@ -697,8 +721,20 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             return
         path = urllib.parse.urlparse(self.path).path
+        docs = {"/agents.md": "md", "/llms.txt": "md", "/agents/csv": "csv", "/agents/game-rules": "rules"}
+        if path in docs:                    # public: how an agent gets in is no secret
+            text = {"md": lambda: agents.entry(self.public_url()), "csv": agents.csv_spec,
+                    "rules": agents.rules}[docs[path]]()
+            body = text.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/markdown; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if not (path.startswith("/api/") or path in ("/me", "/portfolios", "/host", "/instrument-search",
-                                                    "/live-index", "/quote", "/tokens", "/export-csv")):
+                                                    "/live-index", "/quote", "/tokens", "/export-csv",
+                                                    "/game-status", "/instrument")):
             super().do_GET()       # the page's own files: no data in them, and login.html is one
             return
         self.user = self.login_user()
@@ -706,7 +742,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         if path == "/me":
             admin = is_admin(self.user)
-            self.send_json({"user": self.user, "admin": admin, "restart": admin and code_changed()})
+            self.send_json({"user": self.user, "admin": admin, "restart": admin and code_changed(),
+                            "publicUrl": self.public_url()})
             return
         if path.startswith("/api/"):
             status, ctype, text = self.api_get()
@@ -743,6 +780,23 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, f"no portfolio {portfolio} for you")
                 return
             self.send_json(db.api_tokens(self.user, portfolio))
+            return
+        if path == "/instrument":
+            isin = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("isin") or [""])[0].strip().upper()
+            inst = next((i for i in db.instruments() if i["id"] == isin), None)
+            self.send_json({"isin": isin, "registered": bool(inst),
+                            **({k: inst[k] for k in ("id", "name", "display")} if inst else {})})
+            return
+        if path == "/game-status":
+            portfolio = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("portfolio") or [""])[0]
+            if not self.may_open(portfolio):
+                self.send_error(404, f"no portfolio {portfolio} for you")
+                return
+            if portfolio_type(portfolio) != "game":
+                self.send_error(400, "not a game - see api/positions and api/cash")
+                return
+            out = self.run_json(["trade.py", "status", portfolio], timeout=60)
+            self.send_text(200 if out.get("ok") else 400, json.dumps(out, ensure_ascii=False))
             return
         if path == "/export-csv":
             portfolio = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("portfolio") or [""])[0]

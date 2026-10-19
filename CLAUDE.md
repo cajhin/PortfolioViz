@@ -36,6 +36,9 @@ scripts/                every Python script; each finds the repo as its own fold
                             portfolio — same style; admin only, never given to an agent
   manage-users.py         the page's users: add, passwd, grant/revoke portfolios, delete, list-users,
                             list-portfolios — same style, admin only
+  agents.py               the instructions agents elsewhere read (/agents.md, /agents/csv,
+                            /agents/game-rules) — built from import_csv.py's docstring and
+                            trading-rules.md
   add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
                             "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 data/portfolio.db       ALL the data — gitignored; backed up by hand (`scripts/db.py backup`)
@@ -137,7 +140,15 @@ that one (`?portfolio=` may be left out; another is refused). It is refused outr
 portfolio's `ai_access` is off; it reads otherwise, and writes only with its own `can_write` (the
 token's "allow writing", off for a new one), only through server.py's `TOKEN_WRITES`
 (transactions, imports, trades, instruments, Update) — never accepting its own CSV import, which
-is its user's check of it, and never anything about portfolios, users, tokens or the server. On
+is its user's check of it, and never anything about portfolios, users, tokens or the server.
+Whatever a token writes to a normal portfolio lands **unverified** (`manual_tx.py`/`import_tr.py`
+`--api`, and every CSV import), for its user to accept or delete on the page; a token may edit or
+delete only rows still unverified. A game's trades are live and final, so they are not. An agent
+working from elsewhere learns all this from `/agents.md` (public, `scripts/agents.py`; the format and
+the rules at `/agents/csv` and `/agents/game-rules`, fetched when needed), which every refusal a
+token gets points to; the Config tab's "Copy agent prompt" hands it the URL and the token. Both give
+the global `publicUrl` setting as the server's address — where others reach it — else the address the
+request came in on, which from this machine is only localhost (the Config tab says so). On
 the command line, an agent's `trade.py` session (`TRADE_PORTFOLIO` set) trades only a game with
 `ai_access` on (`manage-portfolios.py create --ai`, or the checkbox).
 

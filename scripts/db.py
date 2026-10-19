@@ -509,18 +509,31 @@ def ledger(pid, origin, deleted=True):
 
 
 def add_ledger_rows(pid, origin, new, verified=True):
+    """`verified` for all of them, or a set of the transaction ids that are verified."""
     with tx() as c:
         c.executemany("INSERT INTO ledger (portfolio, transaction_id, origin, datetime, verified, data) "
                       "VALUES (?, ?, ?, ?, ?, ?)",
-                      [(pid, r["transaction_id"], origin, r["datetime"], int(verified),
+                      [(pid, r["transaction_id"], origin, r["datetime"],
+                        int(r["transaction_id"] in verified if isinstance(verified, set) else verified),
                         json.dumps(r, ensure_ascii=False)) for r in new])
 
 
-def replace_ledger(pid, origin, new):
-    """All of one origin's rows at once — how a hand-entered row is added, edited or removed."""
+def replace_ledger(pid, origin, new, unverified=()):
+    """All of one origin's rows at once — how a hand-entered row is added, edited or removed. Each row
+    keeps whether it is verified; a new one is, unless its id is in `unverified`."""
     with tx() as c:
+        was = {r[0]: bool(r[1]) for r in c.execute(
+            "SELECT transaction_id, verified FROM ledger WHERE portfolio = ? AND origin = ?", (pid, origin))}
         c.execute("DELETE FROM ledger WHERE portfolio = ? AND origin = ?", (pid, origin))
-        add_ledger_rows(pid, origin, new)
+        add_ledger_rows(pid, origin, new, verified={r["transaction_id"] for r in new
+                                                    if r["transaction_id"] not in unverified
+                                                    and was.get(r["transaction_id"], True)})
+
+
+def is_verified(pid, tid):
+    """Whether one ledger row is verified; None if there is none."""
+    r = conn().execute("SELECT verified FROM ledger WHERE portfolio = ? AND transaction_id = ?", (pid, tid)).fetchone()
+    return None if r is None else bool(r[0])
 
 
 def ledger_entry(pid, tid):

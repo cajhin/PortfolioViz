@@ -106,8 +106,9 @@ def read_csv(path):
 
 # ---------- the ledger: every TR row ever imported, deduplicated by transaction_id ----------
 
-def merge_into_ledger(portfolio, files):
-    """Each export's rows not imported before, into the portfolio's ledger (origin 'tr')."""
+def merge_into_ledger(portfolio, files, verified=True):
+    """Each export's rows not imported before, into the portfolio's ledger (origin 'tr') — through
+    the API (--api), unverified until their user accepts them."""
     seen = {r["transaction_id"] for r in db.rows("SELECT transaction_id FROM ledger WHERE portfolio = ?", (portfolio,))}
     rows = []
     for f in files:
@@ -125,7 +126,7 @@ def merge_into_ledger(portfolio, files):
             added += 1
         print(f"{os.path.basename(f)}: {len(new)} rows — {added} new, {len(new) - added} already imported")
     rows.sort(key=lambda r: (r["datetime"], r["transaction_id"]))
-    db.add_ledger_rows(portfolio, "tr", rows)
+    db.add_ledger_rows(portfolio, "tr", rows, verified=verified)
 
 
 # ---------- conversion ----------
@@ -346,13 +347,16 @@ def rebuild(portfolio):
 
 
 def main():
-    if len(sys.argv) < 2:
-        sys.exit(f"usage: {sys.argv[0]} <portfolio> [<transactions.csv> ...]")
-    portfolio, files = sys.argv[1], sys.argv[2:]
+    args = sys.argv[1:]
+    api = "--api" in args                       # through the API: imported rows land unverified
+    args = [a for a in args if a != "--api"]
+    if not args:
+        sys.exit(f"usage: {sys.argv[0]} <portfolio> [<transactions.csv> ...] [--api]")
+    portfolio, files = args[0], args[1:]
     with db.tx():
         # a rebuild alone changes nothing a game's rules guard, so a game may have one
         require_normal(portfolio, ("normal",) if files else ("normal", "game"))
-        merge_into_ledger(portfolio, files)
+        merge_into_ledger(portfolio, files, verified=not api)
         rebuild(portfolio)
 
 
