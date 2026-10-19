@@ -991,6 +991,9 @@ function renderWatch() {
     .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
   document.getElementById('watchHead').textContent =
     `${rows.length} tracked, never held`;
+  document.getElementById('watchDelHead').hidden = !WATCH_EDIT;
+  document.getElementById('watchAddRow').hidden = !WATCH_EDIT;
+  if (WATCH_EDIT) fillWatchPicker(rows);
   const tb = document.querySelector('#tblWatch tbody');
   tb.replaceChildren(...rows.map(inst => {
     // enough of a position-shaped object for openDetail()/sourceTag() to work on: no trades will
@@ -1007,10 +1010,57 @@ function renderWatch() {
       `<td class="dotcell"><span class="dot" style="background:${sectorFill(d)}"></span>${d.label}</td>` +
       `<td>${inst.sector || '–'}</td>` +
       `<td>${last ? fmtMoney2(last.price) : '–'}</td>`;
+    if (WATCH_EDIT) {
+      const td = Object.assign(document.createElement('td'), { className: 'txdel' });
+      const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel',
+                                                                    textContent: 'Remove' });
+      btn.addEventListener('click', e => { e.stopPropagation(); postWatch({ remove: inst.id }); });
+      td.appendChild(btn);
+      tr.appendChild(td);
+    }
     return tr;
   }));
   applySort('tblWatch');
 }
+
+// Adding to and removing from the watchlist — the portfolio's own users only (WATCH_EDIT, set with
+// its type): server.py's /watchlist changes the portfolio's `watchlist` setting, and a reload back
+// onto this tab shows it with its prices. The picker offers what is registered, has prices and is
+// neither held nor watched yet, after "+ New instrument…", which registers one first (the same
+// dialog as the Transactions tab's) and then adds it.
+let WATCH_EDIT = false;
+function fillWatchPicker(watched) {
+  const held = new Set([...ITEMS, ...CLOSED].map(d => d.identifier));
+  const skip = new Set(watched.map(i => i.id));
+  const none = Object.assign(document.createElement('option'), { value: '', textContent: 'Choose instrument…' });
+  none.disabled = none.selected = true;
+  const add = Object.assign(document.createElement('option'), { value: NEW_INSTRUMENT, textContent: '+ New instrument…' });
+  document.getElementById('watchIsin').replaceChildren(none, add, ...[...new Set(INSTRUMENTS.values())]
+    .filter(inst => (SOURCES.get(inst.id) || {}).symbol && !held.has(inst.id) && !skip.has(inst.id))
+    .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name)).map(txOption));
+}
+async function postWatch(change) {
+  const msg = document.getElementById('watchMsg');
+  msg.textContent = '';
+  try {
+    const r = await fetch(`watchlist?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change) });
+    if (!r.ok) throw new Error(routeFailure(r));
+    reloadOnTransactions('watch');
+  } catch (err) {
+    msg.textContent = `Not changed: ${err.message}`;
+  }
+}
+document.getElementById('watchAddForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const isin = document.getElementById('watchIsin').value;
+  if (isin && isin !== NEW_INSTRUMENT) postWatch({ add: isin });
+});
+document.getElementById('watchIsin').addEventListener('change', e => {
+  if (e.target.value !== NEW_INSTRUMENT) return;
+  INST_FOR = 'watch';
+  openInstrumentDialog();
+});
 
 // The stat-tile row + per-depot breakdown, split out of renderMeta so an as-of pick can
 // refresh just this part with reconstructed figures without touching the (always-live) table.
@@ -3090,6 +3140,7 @@ async function show(view) {
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('watchCard').hidden = view !== 'watch';
+  document.getElementById('publicCard').hidden = view !== 'watch' || !PUBLIC_COUNT;
   document.getElementById('configCard').hidden = view !== 'config';
   document.getElementById('tip').classList.remove('on');
   // as-of reconstruction exists for the map, the pie, and (partially — see renderMeta) the
@@ -3575,7 +3626,7 @@ function renderPortfolioPicker() {
     .then(list => {
       const me = list.find(p => p.id === PORTFOLIO);
       // a portfolio that does not exist gets no entry of its own — a blank one stands in, so the
-      // first real pick is still a change
+      // first real pick is still a change; someone else's public one gets its own (see viewPublic)
       const blank = me ? [] : [Object.assign(document.createElement('option'), { value: '', textContent: '—' })];
       sel.replaceChildren(...blank, ...list.map(p => {
         const o = document.createElement('option');
@@ -3586,7 +3637,10 @@ function renderPortfolioPicker() {
       sel.value = me ? PORTFOLIO : '';
       sel.hidden = !list.length;
       renderOtherPortfolios(list);
-      if (!me) return list;
+      if (!me) {
+        PUBLIC.then(pub => { const p = pub.find(q => q.id === PORTFOLIO); if (p) viewPublic(p); });
+        return list;
+      }
       document.getElementById('portfolioLabel').value = me.label || PORTFOLIO;
       // every server.py that knows about portfolio types says one; none at all means the running
       // server predates this page — say so, rather than let "no type" read as either
@@ -3596,6 +3650,55 @@ function renderPortfolioPicker() {
     })
     .catch(() => { sel.hidden = true; return null; });
   sel.addEventListener('change', () => gotoPortfolio(sel.value));
+}
+
+// Other users' public portfolios (server.py's /public-portfolios): listed on the Watch tab under
+// their owners, each a link to it. Opening one is viewing it — read only, on its map alone: the
+// header picker names it "owner / label" in red, the tab buttons are gone, and so is Update (the
+// server refuses all of it anyway; this only keeps the page from offering it).
+const PUBLIC = fetch('public-portfolios', { cache: 'no-store' })
+  .then(r => r.ok ? r.json() : []).catch(() => []);
+const publicName = p => `${p.owners.join(', ') || 'nobody'} / ${p.label || p.id}`;
+let PUBLIC_COUNT = 0;                // show() shows the frame with the Watch tab only if there are any
+function renderPublic() {
+  PUBLIC.then(pub => {
+    PUBLIC_COUNT = pub.length;
+    document.getElementById('publicCard').hidden = VIEW !== 'watch' || !pub.length;
+    const byOwner = new Map();
+    pub.forEach(p => {
+      const who = p.owners.join(', ') || 'nobody';
+      byOwner.set(who, [...(byOwner.get(who) || []), p]);
+    });
+    document.getElementById('publicList').replaceChildren(...[...byOwner].sort(([a], [b]) => a.localeCompare(b))
+      .map(([who, list]) => {
+        const row = document.createElement('div');
+        row.append(Object.assign(document.createElement('b'), { textContent: `${who}: ` }));
+        list.forEach(p => {
+          const a = Object.assign(document.createElement('a'), { href: '#', textContent: p.label || p.id,
+                                                                title: `${p.type} portfolio ${p.id}` });
+          a.addEventListener('click', e => { e.preventDefault(); gotoPortfolio(p.id, 'map'); });
+          row.append(a);
+        });
+        return row;
+      }));
+  });
+}
+renderPublic();
+let VIEWING = null;
+function viewPublic(p) {
+  VIEWING = p;
+  const sel = document.getElementById('portfolioSel');
+  const o = Object.assign(document.createElement('option'), { value: p.id, textContent: publicName(p) });
+  sel.querySelector('option[value=""]')?.remove();
+  sel.prepend(o);
+  sel.value = p.id;
+  sel.hidden = false;
+  sel.classList.add('viewing');
+  sel.title = 'Someone else\'s public portfolio — viewed, read only';
+  // the map is all there is to see: no tabs at all (their row of buttons goes as a whole)
+  document.getElementById('btnMap').closest('.seg').hidden = true;
+  document.getElementById('btnUpdatePrices').hidden = true;
+  if (VIEW !== 'map') show('map');
 }
 
 // A portfolio's type (which server.py reports): normal — a regular portfolio, every transaction
@@ -3625,19 +3728,44 @@ function applyPortfolioType(me) {
   const note = document.getElementById('txSourceNote');
   note.textContent = text.note(me.label || PORTFOLIO);
   note.hidden = !note.textContent;
-  // the AI flag is the portfolio's; only who may change it may switch it
+  // so are Public and the AI flag; only who may change the portfolio may switch them
+  const pub = document.getElementById('publicFlag');
+  pub.checked = !!me.public;
+  pub.disabled = me.write === false;
+  document.getElementById('publicRow').hidden = false;
   const ai = document.getElementById('aiWrite');
   ai.checked = !!me.ai;
   ai.disabled = me.write === false;
   document.getElementById('aiWriteRow').hidden = false;
   showTokenRow();
-  // the edit column depends on this, and the list may already be drawn without it
+  // the edit column depends on this, and the list may already be drawn without it — the
+  // watchlist's add and remove likewise
+  WATCH_EDIT = me.write !== false;
+  WATCH_DRAWN_FOR = null;
+  // only once the data is in: drawn from an empty registry, the table would count as drawn, and
+  // load()'s own draw — the one with the data — would be skipped
+  if (VIEW === 'watch' && INSTRUMENTS.size) renderWatch();
   TRADES_DRAWN_FOR = null;
   if (VIEW === 'trades' && ITEMS.length) renderTrades();
   refreshManualTools();
   document.getElementById('portfolioType').textContent = text.tag;
   document.getElementById('emptyPortfolioHow').innerHTML = text.how;
 }
+
+// The Config tab's "Public": every other logged-in user may view this portfolio, read only. Switched
+// back if the server says no.
+document.getElementById('publicFlag').addEventListener('change', async e => {
+  const box = e.currentTarget, msg = document.getElementById('publicMsg');
+  msg.textContent = '';
+  try {
+    const r = await fetch(`portfolio-public?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ public: box.checked }) });
+    if (!r.ok) throw new Error(routeFailure(r));
+  } catch (err) {
+    box.checked = !box.checked;
+    msg.textContent = `Not changed: ${err.message}`;
+  }
+});
 
 // The Config tab's "Allow AI (API) access": whether an API token may use this portfolio at all (and
 // write, if its own "allow writing" says so), and an agent's trade.py session trade it. Switched
@@ -4044,9 +4172,9 @@ document.getElementById('csvDiscard').addEventListener('click', e => {
 
 // Every change to a manual portfolio rebuilds its CSVs on the server, and a reload is what brings
 // them in (the same as after Update) — back onto this tab, so the list shows the change at once.
-function reloadOnTransactions() {
+function reloadOnTransactions(view = 'trades') {
   const q = new URLSearchParams(location.search);
-  q.set('view', 'trades');
+  q.set('view', view);
   if ('?' + q.toString() === location.search) location.reload();
   else location.search = q.toString();
 }
@@ -4196,7 +4324,7 @@ function txCashMode() {
 document.getElementById('txType').addEventListener('change', txCashMode);
 document.getElementById('txDate').addEventListener('change', prefillTxPrice);
 document.getElementById('txIsin').addEventListener('change', e => {
-  if (e.target.value === NEW_INSTRUMENT) { openInstrumentDialog(); return; }
+  if (e.target.value === NEW_INSTRUMENT) { INST_FOR = 'tx'; openInstrumentDialog(); return; }
   TX_ISIN_PREV = e.target.value;
   prefillTxPrice();
 });
@@ -4428,10 +4556,14 @@ document.getElementById('instSector').addEventListener('change', e => {
   if (![...e.target.options].some(o => o.value === name)) e.target.insertBefore(new Option(name, name), e.target.lastChild);
   e.target.value = name;
 });
+// who opened the dialog: the Transactions tab's add row ('tx') or the watchlist's ('watch')
+let INST_FOR = 'tx';
 // however the dialog closes, an instrument select left on "+ New instrument…" goes back
 instDialog.addEventListener('close', () => {
   const sel = document.getElementById('txIsin');
   if (sel.value === NEW_INSTRUMENT) sel.value = TX_ISIN_PREV;
+  const watch = document.getElementById('watchIsin');
+  if (watch.value === NEW_INSTRUMENT) watch.value = '';
 });
 ['instClose', 'instCancel'].forEach(id =>
   document.getElementById(id).addEventListener('click', () => instDialog.close()));
@@ -4511,6 +4643,11 @@ document.getElementById('instForm').addEventListener('submit', async e => {
     const { instrument: inst } = await r.json();
     INSTRUMENTS.set(inst.id, inst);
     SOURCES.set(inst.id, { id: inst.id, source: 'yahoo', symbol: inst.symbol, quote_currency: inst.quote_currency });
+    if (INST_FOR === 'watch') {                       // registered for the watchlist: add it there
+      instDialog.close();
+      postWatch({ add: inst.id });
+      return;
+    }
     const sel = document.getElementById('txIsin');
     // in its alphabetical place among the others, after the two fixed entries at the top
     const label = inst.display || inst.name;

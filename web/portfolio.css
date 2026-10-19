@@ -205,6 +205,7 @@
                 font-size: 0.82rem; color: var(--text-secondary); }
   .modeswitch input { accent-color: var(--series-1); margin: 0; cursor: pointer; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .seg[hidden] { display: none; }
   .seg button {
     appearance: none; border: 0; background: transparent; cursor: pointer;
     font: inherit; font-size: 0.82rem; color: var(--text-secondary);
@@ -540,6 +541,11 @@
   .txdel .dt-addsel { padding: 1px 10px; font-size: 0.75rem; }
   /* the Config tab's AI checkbox and API tokens */
   .check { display: inline-flex; align-items: center; gap: 6px; }
+  /* the Watch tab's public portfolios, one line per owner */
+  .publist { display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; margin-top: 6px; }
+  .publist a { color: var(--text-primary); margin-right: 14px; }
+  /* the header picker while viewing someone else's public portfolio */
+  .pick.viewing { color: var(--loss); border-color: var(--loss); }
   .tokensec { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; flex: 1 1 0; min-width: 0; }
   /* the Portfolioviz CSV paste: a textarea that grows with what is pasted (see csvGrow) */
   .csvform { align-items: flex-start; align-self: stretch; }

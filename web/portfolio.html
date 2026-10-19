@@ -411,9 +411,26 @@
       <table id="tblWatch">
         <thead><tr>
           <th>Source</th><th>Position</th><th>Sector</th><th>Last close</th>
+          <th id="watchDelHead" class="txdel" hidden></th>
         </tr></thead>
         <tbody></tbody>
+        <!-- the portfolio's own users add here: a registered instrument, or "+ New instrument…"
+             (the Transactions tab's dialog) — see the watchlist script -->
+        <tfoot id="watchAddRow" hidden><tr><td colspan="5">
+          <form id="watchAddForm" class="configrow">
+            <select id="watchIsin" class="pick" required aria-label="Instrument"></select>
+            <button type="submit" class="dt-addsel">Add to watchlist</button>
+            <span class="err" id="watchMsg"></span>
+          </form>
+        </td></tr></tfoot>
       </table>
+    </div>
+
+    <!-- the Watch tab's second frame: other users' public portfolios, by owner; each opens read only,
+         on its map (see renderPublic). Shown with the Watch tab, while there are any. -->
+    <div class="card" id="publicCard" hidden>
+      <div class="closedhead"><b>Public portfolios</b></div>
+      <div id="publicList" class="publist"></div>
     </div>
 
     <!-- settings that act on the server rather than on the view; each POSTs to start.sh, so a page
@@ -436,6 +453,13 @@
         <span id="portfolioLabelMsg"></span>
       </form>
       <!-- whether an API token (scripts, AI) may use the current portfolio at all — see server.py's TOKENS -->
+      <!-- whether every other logged-in user may view this portfolio (read only) — see renderPublic -->
+      <div id="publicRow" class="configrow" hidden>
+        <label for="publicFlag">Public</label>
+        <label class="check"><input type="checkbox" id="publicFlag"> Other users can view this portfolio,
+          including its transactions</label>
+        <span class="err" id="publicMsg"></span>
+      </div>
       <div id="aiWriteRow" class="configrow" hidden>
         <label for="aiWrite">AI access</label>
         <label class="check"><input type="checkbox" id="aiWrite"> Allow AI (API) access</label>

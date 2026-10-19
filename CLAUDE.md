@@ -50,7 +50,7 @@ backup/                 the files the data came from before the database (config
 The database's tables (`scripts/schema.sql`) fall into three groups that differ by
 **lifecycle**, and that is the distinction to preserve:
 
-- **a portfolio's own** (IMPORTED) — `portfolio` (id, label, type, ai_access), its keys in `setting`,
+- **a portfolio's own** (IMPORTED) — `portfolio` (id, label, type, ai_access, public), its keys in `setting`,
   `ledger`, and `position`/`activity`/`cash`. The `ledger` is its real source — every TR
   row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
   hand-entered or traded row (origin `manual`), and every row pasted as Portfolioviz CSV (origin
@@ -160,7 +160,12 @@ to one they have. Anyone who reaches the page can create a user; it sees nothing
 creates a portfolio (granted to its creator) or is granted one — `scripts/manage-users.py grant`,
 which is also how every portfolio made by a script gets an owner. Update fetches one granted
 portfolio's instruments, never the whole registry; registering an instrument takes write access to
-some portfolio. An admin — a user named in the global `admins` setting (a list; never sent to
+some portfolio. A portfolio can be made **public** (Config tab, `portfolio.public`): every other
+logged-in user may then open it — all of it, transactions included, read only (server.py's
+`may_open`, never `may_change`; no Update either). The Watch tab lists other users' public
+portfolios under their owners (who may change them); opening one shows its map alone, the header
+picker naming it "owner / label" in red. An API token never reaches another's portfolio. An admin —
+a user named in the global `admins` setting (a list; never sent to
 the page) — gets a red "Restart Server" button under Update whenever server.py or a module it
 imports changed on disk since it started; the server then replaces itself in place. The Config tab
 lists the user's other portfolios and deletes one they may change — `manage-portfolios.py purge`,

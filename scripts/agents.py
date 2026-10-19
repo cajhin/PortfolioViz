@@ -71,6 +71,8 @@ they are still unverified; an accepted transaction is your user's — ask them t
   here: before sending, make sure the transaction is not in `api/activities` already.
 - **Correct or withdraw one of your unverified rows:** `POST manual-tx?edit=<transactionId>` (the same
   JSON; the instrument stays) or `POST manual-tx?delete=<transactionId>`.
+- **Watchlist** — instruments the portfolio follows without holding them: `POST watchlist`
+  `{{"add": "<ISIN>"}}` or `{{"remove": "<ISIN>"}}` (registered instruments only).
 - **Instruments** must be registered before a transaction can name them. Find the ISIN with
   `instrument-search`, check it with `instrument?isin=`; if it is not registered, ask your user
   before registering it

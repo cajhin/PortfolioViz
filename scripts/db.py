@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _columns(c, table):
@@ -185,7 +185,15 @@ def _to_10(c):
         c.execute("UPDATE api_token SET can_write = 1")
 
 
-MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9, 10: _to_10}
+def _to_11(c):
+    """A portfolio may be public: viewable, read only, by every other logged-in user."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'portfolio'").fetchone() \
+            and "public" not in _columns(c, "portfolio"):
+        c.execute("ALTER TABLE portfolio ADD COLUMN public INTEGER NOT NULL DEFAULT 0")
+
+
+MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9, 10: _to_10,
+              11: _to_11}
 
 
 def migrate(c):
@@ -383,7 +391,7 @@ def write_fx(pair, rates):
 
 
 # ---------- portfolios ----------
-# A portfolio is one row in `portfolio` (id, label, type, ai_access) plus its own settings (watchlist,
+# A portfolio is one row in `portfolio` (id, label, type, ai_access, public) plus its own settings (watchlist,
 # benchmarkIsin, ...) — together what its profile.json used to say.
 
 POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares", "currency",
@@ -398,7 +406,7 @@ PORTFOLIO_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "c
 
 
 def portfolio(pid):
-    """The portfolio's row as {id, label, type, ai_access}, or None."""
+    """The portfolio's row as {id, label, type, ai_access, public}, or None."""
     r = conn().execute("SELECT * FROM portfolio WHERE id = ?", (pid,)).fetchone()
     return dict(r) if r else None
 
@@ -459,6 +467,22 @@ def renumber_portfolios():
                 c.execute("UPDATE setting SET value = ? WHERE portfolio = '' AND key = 'defaultPortfolio'",
                           (json.dumps(new),))
             out.append((old, new))
+    return out
+
+
+def set_public(pid, public):
+    with tx() as c:
+        return c.execute("UPDATE portfolio SET public = ? WHERE id = ?", (int(public), pid)).rowcount
+
+
+def public_portfolios(name):
+    """The public portfolios the user is not granted, oldest first, each with `owners` — the users
+    who may change it, which is who it is shown under."""
+    out = rows("SELECT * FROM portfolio WHERE public AND id NOT IN "
+               "(SELECT portfolio FROM user_portfolio WHERE user = ?) ORDER BY rowid", (name,))
+    for p in out:
+        p["owners"] = [r["user"] for r in rows("SELECT user FROM user_portfolio WHERE portfolio = ? AND can_write "
+                                               "ORDER BY user", (p["id"],))]
     return out
 
 

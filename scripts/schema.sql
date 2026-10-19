@@ -94,12 +94,14 @@ CREATE TABLE IF NOT EXISTS fx_rate (
 -- entries (import_tr.py, import_csv.py, manual_tx.py), any of them changed later; game — no past
 -- to edit, only trades now under trading-rules.md (trade.py), its cash moved by
 -- manage-portfolios.py. ai_access: whether an API token (server.py) may use it at all, and an
--- agent's trade.py session trade it.
+-- agent's trade.py session trade it. public: whether every other logged-in user may view it —
+-- all of it, read only.
 CREATE TABLE IF NOT EXISTS portfolio (
   id       TEXT PRIMARY KEY,
   label    TEXT NOT NULL,
   type     TEXT NOT NULL CHECK (type IN ('normal', 'game')),
-  ai_access INTEGER NOT NULL DEFAULT 0
+  ai_access INTEGER NOT NULL DEFAULT 0,
+  public    INTEGER NOT NULL DEFAULT 0
 );
 
 -- A portfolio's source of truth (a game's too — its trades are hand-entered rows): every Trade

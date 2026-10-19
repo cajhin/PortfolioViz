@@ -51,8 +51,13 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # it has no memory between requests, unlike every other price this page ever shows. Pre- and
 # post-market bars are included where Yahoo has them (US stocks and ETFs; not indices).
 #
-# GET /portfolios — the page's portfolio picker: one {id, label, type, write, ai} per portfolio the
-# user may open.
+# GET /portfolios — the page's portfolio picker: one {id, label, type, write, ai, public} per
+# portfolio granted to the user.
+# POST /watchlist?portfolio=ID {add: ISIN} | {remove: ISIN} — the Watch tab's add and remove: the
+# portfolio's own `watchlist` setting. Only a registered instrument can be added (it needs prices).
+# GET /public-portfolios — every other user's public portfolio: {id, label, type, owners} — the Watch
+# tab's list. A public portfolio is open to every logged-in user, read only: may_open, not may_change.
+# POST /portfolio-public?portfolio=ID {public} — the Config tab's "Public".
 #
 # POST /portfolios {label, type} → {id} — the Config tab's "Create new portfolio", type "normal" or
 # "game": an empty portfolio with an empty watchlist under the next id (pid17), granted to its
@@ -159,7 +164,7 @@ def portfolio_type(pid):
 
 def list_portfolios(user):
     return [{"id": p["id"], "label": p["label"], "type": p["type"], "write": bool(p["can_write"]),
-             "ai": bool(p["ai_access"])} for p in db.user_portfolios(user)]
+             "ai": bool(p["ai_access"]), "public": bool(p["public"])} for p in db.user_portfolios(user)]
 
 # TOKENS. A script or an AI logs in with one of its user's API tokens (Authorization: Bearer …) in
 # place of the session cookie. A token is bound to the portfolio it was made for: every route acts on
@@ -167,7 +172,8 @@ def list_portfolios(user):
 # portfolio allows AI (API) access, reading included; it writes only if its own "allow writing" is
 # ticked, and only through TOKEN_WRITES — never accepting its own CSV import (that is the user's
 # check of it), and never anything about portfolios, users, tokens or the server.
-TOKEN_WRITES = ("/manual-tx", "/import-csv", "/import-tr", "/trade", "/instrument", "/update-prices")
+TOKEN_WRITES = ("/manual-tx", "/import-csv", "/import-tr", "/trade", "/instrument", "/update-prices",
+                "/watchlist")
 
 def script_env():
     """The environment a script runs in: never an agent's binding (TRADE_PORTFOLIO), which would
@@ -253,8 +259,12 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         return user
 
     def may_open(self, portfolio):
-        return (PORTFOLIO_ID.match(portfolio or "") and db.access(self.user, portfolio) is not None
-                and (not self.via_token or portfolio == self.token_portfolio))
+        """Granted — or public, to anyone logged in on the page; a token only ever its own."""
+        if not PORTFOLIO_ID.match(portfolio or ""):
+            return False
+        if self.via_token:
+            return portfolio == self.token_portfolio and db.access(self.user, portfolio) is not None
+        return db.access(self.user, portfolio) is not None or bool((db.portfolio(portfolio) or {}).get("public"))
 
     def may_change(self, portfolio):
         """Granted with write access — and, for an API token, the token's own "allow writing"."""
@@ -413,6 +423,18 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/restart":
             self.restart()
             return
+        if parsed.path == "/watchlist":
+            self.watchlist((urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
+            return
+        if parsed.path == "/portfolio-public":
+            portfolio = (urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0]
+            req = self.read_json()
+            if not self.may_change(portfolio):
+                self.refuse_change(portfolio)
+                return
+            db.set_public(portfolio, bool(req.get("public")))
+            self.send_json({"portfolio": portfolio, "public": bool(req.get("public"))})
+            return
         if parsed.path == "/portfolio-ai":
             self.portfolio_ai((urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
             return
@@ -426,7 +448,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         portfolio = (urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0]
-        if not self.may_open(portfolio):
+        # its own users only: someone viewing a public portfolio does not fetch prices for it
+        if not self.may_open(portfolio) or db.access(self.user, portfolio) is None:
             self.send_error(404, f"no portfolio {portfolio} for you")
             return
         try:
@@ -616,6 +639,24 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             return {}
 
+    def watchlist(self, portfolio):
+        req = self.read_json()
+        if not self.may_change(portfolio):
+            self.refuse_change(portfolio)
+            return
+        add, remove = (str(req.get(k) or "").strip().upper() for k in ("add", "remove"))
+        if not (add or remove):
+            self.send_error(400, "give add or remove, an ISIN")
+            return
+        if add and not any(i["id"] == add for i in db.instruments()):
+            self.send_error(400, f"{add} is not registered - register it first (+ New instrument)")
+            return
+        listed = [x for x in (db.settings(portfolio).get("watchlist") or []) if x != remove]
+        if add and add not in listed:
+            listed.append(add)
+        db.set_setting("watchlist", listed, portfolio)
+        self.send_json({"portfolio": portfolio, "watchlist": listed})
+
     def portfolio_ai(self, portfolio):
         req = self.read_json()
         if not self.may_change(portfolio):
@@ -734,7 +775,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         if not (path.startswith("/api/") or path in ("/me", "/portfolios", "/host", "/instrument-search",
                                                     "/live-index", "/quote", "/tokens", "/export-csv",
-                                                    "/game-status", "/instrument")):
+                                                    "/game-status", "/instrument", "/public-portfolios")):
             super().do_GET()       # the page's own files: no data in them, and login.html is one
             return
         self.user = self.login_user()
@@ -780,6 +821,10 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(404, f"no portfolio {portfolio} for you")
                 return
             self.send_json(db.api_tokens(self.user, portfolio))
+            return
+        if path == "/public-portfolios":
+            self.send_json([] if self.via_token else
+                           [{k: p[k] for k in ("id", "label", "type", "owners")} for p in db.public_portfolios(self.user)])
             return
         if path == "/instrument":
             isin = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("isin") or [""])[0].strip().upper()
