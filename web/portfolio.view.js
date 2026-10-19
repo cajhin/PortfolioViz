@@ -311,12 +311,22 @@ const liveStamp = d => `${pad2(new Date(d.liveAt).getHours())}:${pad2(new Date(d
 // off the live position in ITEMS: a range's reconstruction (computeAsOf) carries no live price and
 // dates every position by the range's end, which here is just today.
 const isToday = s => new Date(s).toDateString() === new Date().toDateString();
+const livePos = d => ITEMS.find(x => x.identifier === d.identifier) || d;
 const posCurLabel = d => {
   if (rangeAt()) return curLabel();
-  const p = ITEMS.find(x => x.identifier === d.identifier) || d;
+  const p = livePos(d);
   return p.livePrice > 0 && p.liveAt && isToday(p.liveAt)
     ? `Value at ${pad2(new Date(p.liveAt).getHours())}:${pad2(new Date(p.liveAt).getMinutes())}`
     : p.lastPriceDate ? `Value on ${deDate(p.lastPriceDate)}` : curLabel();
+};
+// the newest price known for a position, whatever the range, and where it came from: the live
+// quote's own source ("gettex mid", "GOOGL pre-market"), else the symbol whose close it is, else
+// Parqet's own quote from the export — e.g. "€131,54 · gettex mid"
+const posPriceStamp = d => {
+  const p = livePos(d);
+  if (!(p.lastPrice > 0)) return '';
+  const src = p.livePrice > 0 ? p.liveSource : p.priceSource ? `${p.priceSource} close` : 'Parqet';
+  return `${fmtMoneyPre(p.lastPrice)} · ${src}`;
 };
 const tipHead = (d, withPrice) =>
   `<div class="t">${d.label || d.name}` +
@@ -477,7 +487,7 @@ function attachTip(items, nodes) {
     n.addEventListener('pointerenter', e => {
       tip.innerHTML =
         tipHead(d, false) +
-        `<div class="pf">${d.depot}</div>` +
+        `<div class="pf">${[d.depot, posPriceStamp(d)].filter(Boolean).join(' · ')}</div>` +
         tipRow('Share', fmtShare(d.share)) +
         tipRow(purLabel(true), fmtMoney2(d.pur)) +
         tipRow(posCurLabel(d), fmtMoney2(d.cur)) +
