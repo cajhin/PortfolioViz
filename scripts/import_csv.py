@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import transactions in the Portfolioviz CSV format into a manual portfolio — for any broker's
+"""Import transactions in the Portfolioviz CSV format into a normal portfolio — for any broker's
 statement, converted by hand, a script or an AI; and accept or roll back what was imported.
 
     python3 scripts/import_csv.py <portfolio> <file.csv | ->     # import (- reads stdin)
@@ -45,7 +45,7 @@ from datetime import date, datetime, timedelta
 
 import db
 from import_tr import (MANUAL_DEPOT, active_ledger, depot_of, num, rebuild, registry_names,
-                       require_manual, short_at)
+                       require_normal, short_at)
 
 COLUMNS = ["date", "depot", "type", "isin", "shares", "price", "fee", "tax"]
 TYPES = ("buy", "sell", "dividend", "deposit", "withdrawal")
@@ -232,7 +232,7 @@ def main():
                 text = fh.read()
     # the change and the rebuild it causes land together, or (on any refusal) not at all
     with db.tx():
-        require_manual(portfolio)
+        require_normal(portfolio)
         if what == "accept":
             accept(portfolio)
         elif what == "discard":

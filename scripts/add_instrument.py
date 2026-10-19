@@ -17,7 +17,7 @@ through follows from it. If Yahoo returns no prices for the symbol, both rows ar
 and nothing is left behind.
 
 Check a --symbols match by name before using it: Yahoo's ISIN search once returned iShares
-S&P SmallCap 600 for the MSCI Japan Small Cap ISIN (see REFRESH_PARQET_DATA.md).
+S&P SmallCap 600 for the MSCI Japan Small Cap ISIN.
 """
 import json, os, re, subprocess, sys, urllib.parse, urllib.request
 

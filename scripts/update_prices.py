@@ -284,7 +284,7 @@ def main():
         portfolio = args[i + 1]
         del args[i:i + 2]
     if len(args) > 1 or (args and portfolio):
-        sys.exit(f"usage: {sys.argv[0]} [<slug|id> | --portfolio NAME] [--from YYYY-MM-DD]")
+        sys.exit(f"usage: {sys.argv[0]} [<slug|id> | --portfolio ID] [--from YYYY-MM-DD]")
 
     # one price_source row per instrument is the table's own key — no duplicate to refuse here
     instruments = {r["id"]: r for r in db.instruments()}

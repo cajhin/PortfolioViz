@@ -88,22 +88,28 @@ CREATE TABLE IF NOT EXISTS fx_rate (
 ) WITHOUT ROWID;
 
 -- ---------- portfolios: was private-profiles/<p>/ ----------
--- type: where its transactions come from. parqet — a Parqet refresh (import_parqet.py); manual —
--- Trade Republic imports and hand entries (import_tr.py, manual_tx.py); game — trades under
--- trading-rules.md alone (trade.py), its cash moved by manage-portfolios.py
+-- id: pid1, pid2, … — a running number (meta's portfolio_seq), never reused; what URLs, scripts and
+-- tokens know it by. label: what the page shows.
+-- type: normal — a regular portfolio, editable: Trade Republic imports, CSV pastes and hand
+-- entries (import_tr.py, import_csv.py, manual_tx.py), any of them changed later; game — no past
+-- to edit, only trades now under trading-rules.md (trade.py), its cash moved by
+-- manage-portfolios.py. ai_write: whether an API token (server.py) and an agent's trade.py
+-- session may write to it.
 CREATE TABLE IF NOT EXISTS portfolio (
-  name  TEXT PRIMARY KEY,
-  label TEXT NOT NULL,
-  type  TEXT NOT NULL CHECK (type IN ('parqet', 'manual', 'game'))
+  id       TEXT PRIMARY KEY,
+  label    TEXT NOT NULL,
+  type     TEXT NOT NULL CHECK (type IN ('normal', 'game')),
+  ai_write INTEGER NOT NULL DEFAULT 0
 );
 
--- A manual portfolio's source of truth: every Trade Republic row imported (origin 'tr', kept even
--- when deleted on the page, so a re-import does not revive it) and every hand-entered or traded
+-- A portfolio's source of truth (a game's too — its trades are hand-entered rows): every Trade
+-- Republic row imported (origin 'tr', kept even when deleted on the page, so a re-import does not
+-- revive it) and every hand-entered or traded
 -- row (origin 'manual'), and every row pasted in the Portfolioviz CSV format (origin 'csv',
 -- import_csv.py). `data` is the row as JSON, every column of the export kept. A pasted row starts
 -- unverified (`verified` 0) until accepted on the page, and until then can be rolled back.
 CREATE TABLE IF NOT EXISTS ledger (
-  portfolio      TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
+  portfolio      TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
   transaction_id TEXT NOT NULL,
   origin         TEXT NOT NULL CHECK (origin IN ('tr', 'manual', 'csv')),
   datetime       TEXT NOT NULL,
@@ -113,10 +119,10 @@ CREATE TABLE IF NOT EXISTS ledger (
   PRIMARY KEY (portfolio, transaction_id)
 );
 
--- What the page reads: a Parqet portfolio's export as imported, or what import_tr.py rebuilt from
+-- What the page reads: what import_tr.py rebuilt from
 -- the ledger. Numbers stay text, exactly as written, so the page reads what it always read.
 CREATE TABLE IF NOT EXISTS position (
-  portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
   depot TEXT, name TEXT, identifier TEXT, assetType TEXT, isSold TEXT, shares TEXT,
   currency TEXT, currentValue TEXT, purchaseValue TEXT, lastPriceDate TEXT, lastPrice TEXT,
   realizedGainNet TEXT, unrealizedGainNet TEXT, earliestActivityDate TEXT, activityCount TEXT
@@ -124,7 +130,7 @@ CREATE TABLE IF NOT EXISTS position (
 CREATE INDEX IF NOT EXISTS position_portfolio ON position (portfolio);
 
 CREATE TABLE IF NOT EXISTS activity (
-  portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
   depot TEXT, name TEXT, identifier TEXT, type TEXT, datetime TEXT, shares TEXT, price TEXT,
   amount TEXT, amountNet TEXT, fee TEXT, tax TEXT, realizedGains TEXT, realizedGainsNet TEXT,
   currency TEXT, transactionId TEXT, verified TEXT
@@ -133,7 +139,7 @@ CREATE INDEX IF NOT EXISTS activity_portfolio ON activity (portfolio);
 
 -- each booking's effect on its depot's cash (manual portfolios only)
 CREATE TABLE IF NOT EXISTS cash (
-  portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
   depot TEXT, datetime TEXT, date TEXT, kind TEXT, amount TEXT, transactionId TEXT, verified TEXT
 );
 CREATE INDEX IF NOT EXISTS cash_portfolio ON cash (portfolio);
@@ -150,7 +156,7 @@ CREATE TABLE IF NOT EXISTS user (
 -- what a user may open; can_write for its changes (rename, import, transactions)
 CREATE TABLE IF NOT EXISTS user_portfolio (
   user      TEXT NOT NULL REFERENCES user (name) ON DELETE CASCADE,
-  portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
   can_write INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (user, portfolio)
 );
@@ -160,4 +166,18 @@ CREATE TABLE IF NOT EXISTS session (
   token_hash TEXT PRIMARY KEY,
   user       TEXT NOT NULL REFERENCES user (name) ON DELETE CASCADE,
   expires    TEXT NOT NULL
+);
+
+-- a user's API tokens, for scripts and AI (server.py's Authorization: Bearer): made on a portfolio's
+-- Config tab and bound to that portfolio alone, looked up by their sha256, and kept as they are too
+-- (token) so their user can copy one again from the page. A token writes only while its portfolio
+-- allows it (portfolio.ai_write); one with no portfolio (made before tokens were bound) is refused.
+CREATE TABLE IF NOT EXISTS api_token (
+  token_hash TEXT PRIMARY KEY,
+  user       TEXT NOT NULL REFERENCES user (name) ON DELETE CASCADE,
+  label      TEXT NOT NULL,
+  created    TEXT NOT NULL,
+  last_used  TEXT,
+  token      TEXT,
+  portfolio  TEXT REFERENCES portfolio (id) ON DELETE CASCADE
 );

@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Import a Trade Republic transaction export into a portfolio, in place of a Parqet refresh.
+"""Import a Trade Republic transaction export into a portfolio, and rebuild a portfolio from its ledger.
 
     python3 scripts/import_tr.py <portfolio> <transactions*.csv> [...]
     python3 scripts/import_tr.py <portfolio>                  # just rebuild from what is already in
 
-Manual portfolios only — type "manual". A parqet one is refused, since its positions and activities
-belong to the Parqet refresh (import_parqet.py), and so is a game, which only trades (trade.py).
+Normal portfolios only — a game is refused, since it only trades (trade.py).
 
 Trade Republic's export (app → Profile → Transaction export) is one CSV of every booking, each
 with a `transaction_id`. Every row ever imported is kept, untouched, in the database's ledger
 (origin 'tr'), keyed by that id — so importing the same file twice, or two exports whose date
 ranges overlap, adds only the rows not seen before. What the page reads — the portfolio's
 positions, activities and cash — is then rebuilt from the whole ledger on every run, in exactly
-the schema REFRESH_PARQET_DATA.md imports from Parqet. Rows entered by hand (manual_tx.py — a
+Parqet's schema, which the page reads. Rows entered by hand (manual_tx.py — a
 virtual demo portfolio, say) are in the same ledger (origin 'manual'), and so are rows pasted in
 the Portfolioviz CSV format (import_csv.py, origin 'csv'), all in the same TR row format, and the
 rebuild reads them all. Positions, activities and cash are output, never input: a fix to the
@@ -55,7 +54,7 @@ REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_cla
 
 # Positions and activities are in Parqet's schema (db.POSITION_FIELDS, db.ACTIVITY_FIELDS), each
 # activity with the ledger row it came from as its transactionId — what the Transactions tab's
-# delete names. A Parqet portfolio's activities have none, and nothing there is deletable.
+# edit and delete name.
 DIVIDEND_TYPES = {"DIVIDEND", "DISTRIBUTION", "EARNINGS"}
 
 # cash: every booking's effect on its depot's cash, tagged by what moved it. The page sums it
@@ -271,17 +270,15 @@ def convert(ledger):
     return activities, positions, notes
 
 
-def require_manual(portfolio, types=("manual",)):
-    """The portfolio's name, or exit: it must exist and be a manual one (or of `types`).
+def require_normal(portfolio, types=("normal",)):
+    """The portfolio's id, or exit: it must exist and be a normal one (or of `types`).
 
-    A parqet one has its positions and activities written by the refresh, and rebuilding them from
-    these ledgers would throw its other depots away; a game takes trades under trading-rules.md
-    alone (trade.py) — so only "manual" is let through."""
+    A game takes trades under trading-rules.md alone (trade.py) — so only "normal" is let through."""
     p = db.portfolio(portfolio)
     if not p:
         sys.exit(f"no portfolio {portfolio!r} (create it on the page's Config tab)")
     if p["type"] not in types:
-        sys.exit(f"{portfolio} is a {p['type']} portfolio, not a manual one — refusing to change it")
+        sys.exit(f"{portfolio} is a {p['type']} portfolio, not a normal one — refusing to change it")
     return portfolio
 
 
@@ -315,6 +312,12 @@ def rebuild(portfolio):
     its row is verified: only a pasted one not yet accepted is not. One transaction: the page
     never sees half of a rebuild."""
     ledger = active_ledger(portfolio)
+    # a portfolio once filled by a Parqet refresh (an import path since removed) has activities that
+    # no ledger row stands behind: a rebuild would throw them away
+    if not ledger and db.rows("SELECT 1 FROM activity WHERE portfolio = ? AND ifnull(transactionId, '') = '' "
+                              "LIMIT 1", (portfolio,)):
+        sys.exit(f"{portfolio} holds a Parqet import, which cannot be rebuilt or changed — purge it "
+                 "(manage-portfolios.py purge), and import its transactions anew")
     activities, positions, notes = convert(ledger)
     cash = cash_rows(ledger)
     new = db.unverified(portfolio)
@@ -348,7 +351,7 @@ def main():
     portfolio, files = sys.argv[1], sys.argv[2:]
     with db.tx():
         # a rebuild alone changes nothing a game's rules guard, so a game may have one
-        require_manual(portfolio, ("manual",) if files else ("manual", "game"))
+        require_normal(portfolio, ("normal",) if files else ("normal", "game"))
         merge_into_ledger(portfolio, files)
         rebuild(portfolio)
 

@@ -274,9 +274,8 @@
 
     <div class="card tablescroll" id="tradesCard" hidden>
       <!-- which of the two kinds of portfolio this is decides what else this tab offers (see
-           applyPortfolioSource): a Parqet one only says where its transactions come from; a manual
-           one gets an Edit and a Verified flag per row, the add row at the list's foot, and the
-           imports below it.
+           applyPortfolioType): a normal one gets an Edit and a Verified flag per row, the add row at
+           the list's foot, and the imports below it; a game only its "Trade now" row.
            #txImport, the table and #txAdd move into #emptyPortfolio while the portfolio has nothing
            yet (showEmptyPortfolio) —
            a new portfolio's first entry is exactly when #app, and this tab with it, is hidden -->
@@ -317,13 +316,32 @@
           <td id="txNet"></td>
           <td><input type="text" inputmode="decimal" class="dec" pattern="[0-9]{1,3}(\.[0-9]{3})+(,[0-9]+)?|[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?|[0-9]+([.,][0-9]+)?" id="txFee" form="txForm" placeholder="Fee" aria-label="Fee"></td>
           <td></td>
-          <td class="txver"></td>
+          <td class="txver" id="txVerFoot" hidden></td>
           <td class="txdel"><button type="submit" form="txForm" class="dt-addsel">Add</button></td>
         </tr></tfoot>
       </table>
       <div id="txAdd" class="txtools" hidden>
         <form id="txForm"></form>
         <div class="err" id="txMsg"></div>
+      </div>
+      <!-- a game's only way in: a trade now, at a live price, under trading-rules.md — trade.py's
+           quote and buy/sell, through server.py's /quote and /trade (see the game trade script) -->
+      <div id="gameTrade" class="txtools" hidden>
+        <form id="gameTradeForm" class="configrow">
+          <label for="gtIsin">Trade now</label>
+          <select id="gtSide" class="pick" aria-label="Buy or sell">
+            <option value="buy">Buy</option><option value="sell">Sell</option>
+          </select>
+          <select id="gtIsin" class="pick" required aria-label="Instrument"></select>
+          <input type="text" inputmode="decimal" class="dec" id="gtAmount" required aria-label="Amount">
+          <select id="gtUnit" class="pick" aria-label="Unit">
+            <option value="eur">€ (fee included)</option><option value="shares">shares</option>
+            <option value="all">all held</option>
+          </select>
+          <button type="button" id="gtQuote" class="dt-addsel">Quote</button>
+          <button type="submit" class="dt-addsel" id="gtGo">Buy now</button>
+        </form>
+        <pre class="importlog" id="gameTradeLog" hidden></pre>
       </div>
       <!-- the imports, at the tab's foot: a Trade Republic export, or lines pasted in the
            Portfolioviz CSV format (scripts/import_csv.py — its docstring is the format's spec).
@@ -393,7 +411,7 @@
     <!-- settings that act on the server rather than on the view; each POSTs to start.sh, so a page
          served any other way gets an error back from it (see createPortfolio) -->
     <div class="card" id="configCard" hidden>
-      <!-- renames the label only; the portfolio's name, shown alongside, stays as it is -->
+      <!-- renames the label only; the portfolio's id, shown alongside, stays as it is -->
       <form id="portfolioLabelForm" class="configrow">
         <label for="portfolioLabel">Current portfolio</label>
         <input type="text" id="portfolioLabel" required>
@@ -402,14 +420,38 @@
         <span class="muted" id="portfolioType"></span>
         <span id="portfolioLabelMsg"></span>
       </form>
+      <!-- whether an API token (scripts, AI) may write to the current portfolio — see server.py's TOKENS -->
+      <div id="aiWriteRow" class="configrow" hidden>
+        <label for="aiWrite">AI access</label>
+        <label class="check"><input type="checkbox" id="aiWrite"> Allow AI (API) write access</label>
+        <span class="err" id="aiWriteMsg"></span>
+      </div>
+      <!-- the user's API tokens, shown while AI write access is allowed: made here, copied from
+           here to hand to an agent, revoked here (see renderTokens) -->
+      <div id="tokenRow" class="configrow" hidden>
+        <label></label>
+        <!-- the second column, under the checkbox above it -->
+        <div class="tokensec">
+          <div class="muted">Agents or scripts need a token to get write access, so they can 'log in'</div>
+          <div id="tokenList" class="proflist"></div>
+          <form id="tokenForm" class="configrow">
+            <input type="text" id="tokenLabel" maxlength="60" required placeholder="a label, e.g. 'claude'">
+            <button type="submit" class="dt-addsel">Create new token</button>
+            <span class="err" id="tokenMsg"></span>
+          </form>
+        </div>
+      </div>
+      <!-- above: this portfolio; below: new ones, the user's other portfolios, and the user -->
+      <hr class="configsep">
       <form id="newPortfolioForm" class="configrow">
-        <label for="newPortfolioName">Create new portfolio</label>
-        <input type="text" id="newPortfolioName" placeholder="Name, e.g. Family Trust" required>
+        <label for="newPortfolioLabel">Create new portfolio</label>
+        <input type="text" id="newPortfolioLabel" placeholder="Label, e.g. Family Trust" required>
         <select id="newPortfolioType" class="pick" aria-label="Type">
-          <option value="manual">Manual transactions</option>
-          <option value="parqet">by Parqet</option>
+          <option value="normal">Normal</option>
+          <option value="game">Game</option>
         </select>
         <button type="submit" class="dt-addsel">Create</button>
+        <span class="muted" id="newPortfolioTypeText"></span>
         <span class="err" id="newPortfolioErr"></span>
       </form>
       <!-- the user's other portfolios, each a link to it and a Delete (see renderOtherPortfolios) -->

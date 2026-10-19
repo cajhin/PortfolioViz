@@ -125,5 +125,4 @@ INSERT INTO setting (portfolio, key, value) VALUES ('', 'timelineStart', '"2019-
 INSERT INTO setting (portfolio, key, value) VALUES ('', 'currency', '"EUR"');
 INSERT INTO setting (portfolio, key, value) VALUES ('', 'benchmarkIsin', '"IE00B4L5Y983"');
 INSERT INTO setting (portfolio, key, value) VALUES ('', 'benchmarkLabel', '"MSCI World"');
-INSERT INTO setting (portfolio, key, value) VALUES ('', 'defaultPortfolio', '"main"');
 COMMIT;

@@ -321,11 +321,11 @@ const posCurLabel = d => {
 };
 // the newest price known for a position, whatever the range, and where it came from: the live
 // quote's own source ("gettex mid", "GOOGL pre-market"), else the symbol whose close it is, else
-// Parqet's own quote from the export — e.g. "€131,54 · gettex mid"
+// the last trade's price — e.g. "€131,54 · gettex mid"
 const posPriceStamp = d => {
   const p = livePos(d);
   if (!(p.lastPrice > 0)) return '';
-  const src = p.livePrice > 0 ? p.liveSource : p.priceSource ? `${p.priceSource} close` : 'Parqet';
+  const src = p.livePrice > 0 ? p.liveSource : p.priceSource ? `${p.priceSource} close` : 'last trade';
   return `${fmtMoneyPre(p.lastPrice)} · ${src}`;
 };
 const tipHead = (d, withPrice) =>
@@ -930,11 +930,14 @@ function renderTrades() {
     (cashRows.length ? ` · ${cashRows.length} cash bookings` : '');
   // a manual portfolio's rows each name the ledger row they came from, and can be edited by it;
   // each says whether it is verified — only a pasted CSV row not yet accepted is not ("0")
-  const deletable = PORTFOLIO_TYPE === 'manual';
+  const deletable = PORTFOLIO_TYPE === 'normal';
   document.getElementById('txDelHead').hidden = !deletable;
-  document.getElementById('txVerHead').hidden = !deletable;
   const isNew = t => t.verified === '0';
   const fresh = rows.filter(isNew).length;
+  // the Verified column only while there is something to verify — every row is ✓ otherwise
+  const showVer = deletable && fresh > 0;
+  document.getElementById('txVerHead').hidden = !showVer;
+  document.getElementById('txVerFoot').hidden = !showVer;
   document.getElementById('csvPending').hidden = !(deletable && fresh);
   document.getElementById('csvPendingText').textContent =
     `${fresh} new transaction${fresh === 1 ? '' : 's'}, not yet verified`;
@@ -957,7 +960,7 @@ function renderTrades() {
       `<td>${num(t.tax) > 0.005 ? fmtMoney2(num(t.tax)) : '–'}</td>`;
     if (deletable) {
       tr.classList.toggle('unverified', isNew(t));
-      tr.insertAdjacentHTML('beforeend', isNew(t) ? '<td class="txver new">new</td>' : '<td class="txver">✓</td>');
+      if (showVer) tr.insertAdjacentHTML('beforeend', isNew(t) ? '<td class="txver new">new</td>' : '<td class="txver">✓</td>');
       const td = document.createElement('td');
       td.className = 'txdel';
       if (t.transactionId) {
@@ -3504,7 +3507,7 @@ Promise.all([get(CONFIG_PATH), get(INSTRUMENTS_PATH), get(PRICE_SOURCES_PATH), g
     // a 404 for a portfolio the server does not list is no failure: there is none of that name yet
     // (or none at all) — offer to pick or create one. Anything else gets the loader and its reason.
     if (err && err.message === '404') {
-      PORTFOLIOS.then(list => list && !list.some(p => p.name === PORTFOLIO) ? showNoPortfolio(list) : showLoader(err));
+      PORTFOLIOS.then(list => list && !list.some(p => p.id === PORTFOLIO) ? showNoPortfolio(list) : showLoader(err));
       return;
     }
     showLoader(err);
@@ -3550,9 +3553,11 @@ fetch('host', { cache: 'no-store' })
 // one reloads with ?portfolio= — PORTFOLIO is fixed for a page's lifetime, the same way the CSVs are,
 // and the URL keeps the choice bookmarkable and lets two portfolios sit in two tabs. New portfolios
 // are made on the Config tab (see createPortfolio), not here.
-const gotoPortfolio = name => {
+// `view` opens that tab there (once — see the ?view= handling), else the default one
+const gotoPortfolio = (name, view) => {
   const q = new URLSearchParams(location.search);
   q.set('portfolio', name);
+  if (view) q.set('view', view);
   location.search = q.toString();
 };
 // PORTFOLIOS is that list once it is in — or null, served without /portfolios — for whoever else
@@ -3560,19 +3565,19 @@ const gotoPortfolio = name => {
 let PORTFOLIOS = Promise.resolve(null);
 function renderPortfolioPicker() {
   const sel = document.getElementById('portfolioSel');
-  document.getElementById('portfolioFolder').textContent = `name: ${PORTFOLIO}`;
+  document.getElementById('portfolioFolder').textContent = `id: ${PORTFOLIO}`;
   document.getElementById('portfolioLabel').value = PORTFOLIO;    // until /portfolios brings the label
   PORTFOLIOS = fetch('portfolios', { cache: 'no-store' })
     .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
     .then(list => {
-      const me = list.find(p => p.name === PORTFOLIO);
+      const me = list.find(p => p.id === PORTFOLIO);
       // a portfolio that does not exist gets no entry of its own — a blank one stands in, so the
       // first real pick is still a change
       const blank = me ? [] : [Object.assign(document.createElement('option'), { value: '', textContent: '—' })];
       sel.replaceChildren(...blank, ...list.map(p => {
         const o = document.createElement('option');
-        o.value = p.name;
-        o.textContent = p.label || p.name;
+        o.value = p.id;
+        o.textContent = p.label || p.id;
         return o;
       }));
       sel.value = me ? PORTFOLIO : '';
@@ -3581,44 +3586,49 @@ function renderPortfolioPicker() {
       if (!me) return list;
       document.getElementById('portfolioLabel').value = me.label || PORTFOLIO;
       // every server.py that knows about portfolio types says one; none at all means the running
-      // server predates this page — say so, rather than let "no type" read as Parqet
+      // server predates this page — say so, rather than let "no type" read as either
       if (!('type' in me)) staleServer();
-      else applyPortfolioType(me.type, me.label);
+      else applyPortfolioType(me);
       return list;
     })
     .catch(() => { sel.hidden = true; return null; });
   sel.addEventListener('change', () => gotoPortfolio(sel.value));
 }
 
-// A portfolio's type (which server.py reports) says where its transactions come from: Parqet, by
-// hand (manual) or trade.py under trading-rules.md (game). That decides the Transactions tab: a
-// parqet or game portfolio's list is read-only, with a note saying where it comes from; a manual
-// one gets the import, a delete per row and the add form. server.py and the scripts refuse the
-// others regardless, so hiding the tools here is a courtesy, not the guard. Unknown (no
-// /portfolios to ask) shows neither.
+// A portfolio's type (which server.py reports): normal — a regular portfolio, every transaction
+// editable, entered by hand or imported; game — no past to edit, only buying and selling now, at a
+// live price under trading-rules.md (trade.py). That decides the Transactions tab: a normal one
+// gets the imports, an Edit per row and the add row; a game only its "Trade now" row. server.py and
+// the scripts refuse the others regardless, so hiding the tools here is a courtesy, not the guard.
+// Unknown (no /portfolios to ask) shows neither.
 let PORTFOLIO_TYPE = null;
 const TYPE_TEXT = {
-  manual: { note: '', tag: '· manual — transactions entered or imported here',
+  normal: { note: () => '', tag: '· normal — regular portfolio, editable',
+            create: 'Regular portfolio, editable',
             how: 'Add transactions by hand, import a Trade Republic export, or paste them as CSV, below.' },
-  parqet: { note: label => `All ${label} transactions are imported from Parqet. Create a 'manual' ` +
-                           'portfolio to edit transactions or import Trade Republic exports.',
-            tag: '· controlled by Parqet — no manual changes',
-            how: 'It is controlled by Parqet: ask Claude to follow <code>REFRESH_PARQET_DATA.md</code> for it, then reload.' },
-  game:   { note: label => `${label} is a game: every transaction is a trade made with scripts/trade.py ` +
-                           'under trading-rules.md, and none can be entered or changed here.',
-            tag: '· game — trades only through trade.py, under trading-rules.md',
-            how: 'It is a game: trade it with <code>scripts/trade.py</code>, then reload.' },
+  game:   { note: label => `${label} is a game: you cannot edit the past, only buy and sell now, at a live ` +
+                           'price under trading-rules.md.',
+            tag: '· game — no edits, only buy and sell now',
+            create: 'You cannot edit the past, only buy and sell now — starts with €10.000',
+            how: 'It is a game: buy and sell now, below.' },
 };
-function applyPortfolioType(type, label) {
-  PORTFOLIO_TYPE = TYPE_TEXT[type] ? type : 'parqet';
-  const manual = PORTFOLIO_TYPE === 'manual', text = TYPE_TEXT[PORTFOLIO_TYPE];
-  document.getElementById('txImport').hidden = !manual;
-  document.getElementById('txAdd').hidden = !manual;
-  document.getElementById('txAddRow').hidden = !manual;
+function applyPortfolioType(me) {
+  PORTFOLIO_TYPE = TYPE_TEXT[me.type] ? me.type : 'game';
+  const normal = PORTFOLIO_TYPE === 'normal', text = TYPE_TEXT[PORTFOLIO_TYPE];
+  document.getElementById('txImport').hidden = !normal;
+  document.getElementById('txAdd').hidden = !normal;
+  document.getElementById('txAddRow').hidden = !normal;
+  document.getElementById('gameTrade').hidden = normal || me.write === false;
   const note = document.getElementById('txSourceNote');
-  note.hidden = manual;
-  note.textContent = manual ? '' : text.note(label || PORTFOLIO);
-  // the delete column depends on this, and the list may already be drawn without it
+  note.textContent = text.note(me.label || PORTFOLIO);
+  note.hidden = !note.textContent;
+  // the AI flag is the portfolio's; only who may change it may switch it
+  const ai = document.getElementById('aiWrite');
+  ai.checked = !!me.ai;
+  ai.disabled = me.write === false;
+  document.getElementById('aiWriteRow').hidden = false;
+  showTokenRow();
+  // the edit column depends on this, and the list may already be drawn without it
   TRADES_DRAWN_FOR = null;
   if (VIEW === 'trades' && ITEMS.length) renderTrades();
   refreshManualTools();
@@ -3626,33 +3636,133 @@ function applyPortfolioType(type, label) {
   document.getElementById('emptyPortfolioHow').innerHTML = text.how;
 }
 
+// The Config tab's "Allow AI (API) write access": whether an API token may write to this portfolio,
+// and an agent's trade.py session trade it. Switched back if the server says no.
+document.getElementById('aiWrite').addEventListener('change', async e => {
+  const box = e.currentTarget, msg = document.getElementById('aiWriteMsg');
+  msg.textContent = '';
+  try {
+    const r = await fetch(`portfolio-ai?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ allow: box.checked }) });
+    if (!r.ok) throw new Error(routeFailure(r));
+  } catch (err) {
+    box.checked = !box.checked;
+    msg.textContent = `Not changed: ${err.message}`;
+  }
+  showTokenRow();
+});
+
+// The Config tab's API tokens, for a script or an AI to call this server as the user
+// (Authorization: Bearer …) — each bound to this portfolio, and shown only while it allows AI write
+// access, since that is when one is any use. Each is kept, so its Copy token hands it to an agent at
+// any time; the list says what each is for and when it was last used, with a Revoke. A token made
+// before tokens were bound (no portfolio) is listed too, to be revoked: it no longer works.
+let TOKENS_LOADED = false;
+const showTokenRow = () => {
+  document.getElementById('tokenRow').hidden = !(TOKENS_LOADED && document.getElementById('aiWrite').checked);
+};
+// the Clipboard API wants a secure page (https, or localhost); served over plain http to another
+// machine, the old way still works
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* not allowed here */ }
+  const area = Object.assign(document.createElement('textarea'), { value: text });
+  area.style.cssText = 'position:fixed;opacity:0';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { /* nothing more to try */ }
+  area.remove();
+  return ok;
+}
+function renderTokens() {
+  fetch(`tokens?portfolio=${encodeURIComponent(PORTFOLIO)}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+    .then(list => {
+      TOKENS_LOADED = true;
+      showTokenRow();
+      document.getElementById('tokenList').replaceChildren(...list.map(t => {
+        const row = document.createElement('div');
+        const what = Object.assign(document.createElement('span'), { textContent: t.label });
+        const when = Object.assign(document.createElement('span'), { className: 'muted',
+          textContent: `made ${deDate(t.created.slice(0, 10))} · ` +
+                       (t.last_used ? `last used ${deDate(t.last_used.slice(0, 10))}` : 'never used') });
+        const copy = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel',
+                                                                       textContent: 'Copy token' });
+        if (!t.token || !t.portfolio) {
+          copy.disabled = true;
+          when.textContent += ' · no longer works — revoke it and create a new one';
+        }
+        copy.addEventListener('click', async () => {
+          copy.textContent = await copyText(t.token) ? 'Copied' : 'Copy failed';
+          setTimeout(() => { copy.textContent = 'Copy token'; }, 1500);
+        });
+        const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel txdanger',
+                                                                      textContent: 'Revoke' });
+        btn.addEventListener('click', async () => {
+          if (!confirm(`Revoke the token "${t.label}"? Whatever uses it can no longer get in.`)) return;
+          const r = await fetch('token-revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                  body: JSON.stringify({ id: t.id }) }).catch(() => null);
+          if (r && r.ok) renderTokens();
+          else document.getElementById('tokenMsg').textContent = r ? routeFailure(r) : 'Revoke failed';
+        });
+        row.append(what, when, copy, btn);
+        return row;
+      }));
+    })
+    .catch(() => { /* served without logins, or by an older server.py */ });
+}
+document.getElementById('tokenForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const label = document.getElementById('tokenLabel').value.trim(), msg = document.getElementById('tokenMsg');
+  msg.textContent = '';
+  try {
+    const r = await fetch('tokens', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ label, portfolio: PORTFOLIO }) });
+    if (!r.ok) throw new Error(routeFailure(r));
+    document.getElementById('tokenLabel').value = '';
+    renderTokens();
+  } catch (err) {
+    msg.textContent = `Not created: ${err.message}`;
+  }
+});
+renderTokens();
+
+// The Config tab's "Create new portfolio": what the type picked means, beside it.
+const newType = document.getElementById('newPortfolioType');
+const showNewType = () => {
+  document.getElementById('newPortfolioTypeText').textContent = (TYPE_TEXT[newType.value] || {}).create || '';
+};
+newType.addEventListener('change', showNewType);
+showNewType();
+
 // The Config tab's "Other portfolios": every portfolio the user may open but this one, each a link to
 // it and — where they may change it — a Delete. That purges it on the server (all its data, for
 // good), so it asks first; the current portfolio is not offered, so the page never
 // deletes what it is showing.
 function renderOtherPortfolios(list) {
-  const others = list.filter(p => p.name !== PORTFOLIO);
+  const others = list.filter(p => p.id !== PORTFOLIO);
   document.getElementById('otherPortfolios').hidden = !others.length;
   document.getElementById('otherPortfolioList').replaceChildren(...others.map(p => {
     const row = document.createElement('div');
-    const link = Object.assign(document.createElement('a'), { href: '#', textContent: p.label || p.name });
-    link.addEventListener('click', e => { e.preventDefault(); gotoPortfolio(p.name); });
+    const link = Object.assign(document.createElement('a'), { href: '#', textContent: p.label || p.id });
+    // from the Config tab, to the same tab of the other portfolio
+    link.addEventListener('click', e => { e.preventDefault(); gotoPortfolio(p.id, 'config'); });
     const what = Object.assign(document.createElement('span'), { className: 'muted',
-      textContent: `${p.name} · ${p.type}${p.write === false ? ' · read only' : ''}` });
+      textContent: `${p.id} · ${p.type}${p.write === false ? ' · read only' : ''}` });
     row.append(link, what);
     if (p.write === false) return row;
     const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel', textContent: 'Delete' });
     const msg = Object.assign(document.createElement('span'), { className: 'err' });
     btn.addEventListener('click', async () => {
-      if (!confirm(`Delete portfolio "${p.label || p.name}" (${p.name}) and all its data — positions, ` +
+      if (!confirm(`Delete portfolio "${p.label || p.id}" (${p.id}) and all its data — positions, ` +
                    'transactions, settings? This cannot be undone.')) return;
       btn.disabled = true;
       msg.textContent = '';
       try {
-        const r = await fetch(`portfolio-delete?portfolio=${encodeURIComponent(p.name)}`, { method: 'POST' });
+        const r = await fetch(`portfolio-delete?portfolio=${encodeURIComponent(p.id)}`, { method: 'POST' });
         if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : (await r.text()).trim() || routeFailure(r));
         row.remove();
-        [...document.getElementById('portfolioSel').options].find(o => o.value === p.name)?.remove();
+        [...document.getElementById('portfolioSel').options].find(o => o.value === p.id)?.remove();
         if (!document.getElementById('otherPortfolioList').children.length)
           document.getElementById('otherPortfolios').hidden = true;
       } catch (err) {
@@ -3742,29 +3852,28 @@ document.getElementById('portfolioLabelForm').addEventListener('submit', async e
   }
 });
 
-// The Config tab's "Create new portfolio": derives the portfolio's name from the label typed ("Family
-// Trust" → family-trust), has server.py create it, empty, and switches to it. Empty until its first refresh — the page shows
-// showEmptyPortfolio's note there.
+// The Config tab's "Create new portfolio": has server.py create it under the next id (pid17), the
+// label typed being what the page shows, and switches to it — empty, so showEmptyPortfolio's note
+// stands in for the charts until its first transaction.
 async function createPortfolio(label) {
   const err = document.getElementById('newPortfolioErr');
   err.textContent = '';
-  const name = label.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  if (!name) { err.textContent = `"${label}" has no letters or digits to name a directory after.`; return; }
   try {
     const type = document.getElementById('newPortfolioType').value;
     const r = await fetch('portfolios', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ name, label, type }) });
-    // statusText, not the body: send_error's body is an HTML page, its status line the message
-    if (!r.ok) throw new Error(r.status === 404 ? STALE_MSG : r.statusText || `HTTP ${r.status}`);
-    gotoPortfolio(name);
+                                        body: JSON.stringify({ label, type }) });
+    if (!r.ok) {
+      const text = (await r.text()).trim();
+      throw new Error(r.status === 404 ? STALE_MSG : text && !text.startsWith('<') ? text : r.statusText || `HTTP ${r.status}`);
+    }
+    gotoPortfolio((await r.json()).id);
   } catch (e) {
     err.textContent = `Could not create portfolio "${label}": ${e.message}`;
   }
 }
 document.getElementById('newPortfolioForm').addEventListener('submit', e => {
   e.preventDefault();
-  const label = document.getElementById('newPortfolioName').value.trim();
+  const label = document.getElementById('newPortfolioLabel').value.trim();
   if (label) createPortfolio(label);
 });
 
@@ -3916,7 +4025,8 @@ function txOption(inst) {
   return o;
 }
 function refreshManualTools() {
-  if (PORTFOLIO_TYPE !== 'manual' || !INSTRUMENTS.size) return;
+  refreshGameTools();
+  if (PORTFOLIO_TYPE !== 'normal' || !INSTRUMENTS.size) return;
   const sel = document.getElementById('txIsin');
   if (sel.options.length) return;
   const priced = [...new Set(INSTRUMENTS.values())]
@@ -4123,6 +4233,101 @@ function openTxEditor(tr, t) {
   row.appendChild(td);
   tr.after(row);
 }
+
+// A game's "Trade now" (see #gameTrade): no date, no price to type — trade.py's own quote and its
+// buy or sell, at a live price under trading-rules.md, through server.py's /quote and /trade. Its
+// refusals (market closed, not enough cash, more than is held) are shown as they come; a trade done
+// reloads onto this tab, its report kept. Instruments: what the game holds first, then every priced
+// one in the registry.
+function refreshGameTools() {
+  if (PORTFOLIO_TYPE !== 'game' || !INSTRUMENTS.size) return;
+  const sel = document.getElementById('gtIsin');
+  if (sel.options.length) return;
+  const held = new Set(ITEMS.map(d => d.identifier));
+  const priced = [...new Set(INSTRUMENTS.values())].filter(inst => (SOURCES.get(inst.id) || {}).symbol)
+    .sort((a, b) => (a.display || a.name).localeCompare(b.display || b.name));
+  const group = (label, list) => {
+    const g = Object.assign(document.createElement('optgroup'), { label });
+    g.append(...list.map(txOption));
+    return g;
+  };
+  const none = Object.assign(document.createElement('option'), { value: '', textContent: 'Choose instrument…' });
+  none.disabled = none.selected = true;
+  const mine = priced.filter(inst => held.has(inst.id));
+  sel.replaceChildren(none, ...(mine.length ? [group('Held', mine)] : []),
+                      group('All', priced.filter(inst => !held.has(inst.id))));
+  gtModes();
+}
+// a buy is for an amount of euros (fee included) or of shares; a sale for shares or all of them
+function gtModes() {
+  const sell = document.getElementById('gtSide').value === 'sell';
+  const unit = document.getElementById('gtUnit'), amount = document.getElementById('gtAmount');
+  unit.querySelector('[value="eur"]').disabled = sell;
+  unit.querySelector('[value="all"]').disabled = !sell;
+  if (unit.selectedOptions[0].disabled) unit.value = sell ? 'shares' : 'eur';
+  amount.disabled = unit.value === 'all';
+  amount.required = !amount.disabled;
+  amount.placeholder = unit.value === 'eur' ? `Amount (${CCY})` : 'Shares';
+  document.getElementById('gtGo').textContent = sell ? 'Sell now' : 'Buy now';
+}
+['gtSide', 'gtUnit'].forEach(id => document.getElementById(id).addEventListener('change', gtModes));
+const gtLog = document.getElementById('gameTradeLog');
+const gtName = () => document.getElementById('gtIsin').selectedOptions[0]?.textContent || '';
+async function gtCall(url, init) {
+  const r = await fetch(url, init);
+  const text = (await r.text()).trim();
+  try { return JSON.parse(text); }
+  catch { return { ok: false, error: text && !text.startsWith('<') ? text : routeFailure(r) }; }
+}
+const gtRefusal = q => `${q.error}${q.hint ? ` — ${q.hint}` : ''}`;
+document.getElementById('gtQuote').addEventListener('click', async e => {
+  const isin = document.getElementById('gtIsin').value;
+  if (!isin) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  gtLog.hidden = false;
+  gtLog.textContent = `Quoting ${gtName()}…`;
+  try {
+    const q = await gtCall(`quote?instrument=${encodeURIComponent(isin)}`, { cache: 'no-store' });
+    gtLog.textContent = !q.ok ? gtRefusal(q)
+      : !q.tradable_now ? `${gtName()}: no trade possible now — ${q.why}` +
+                          (q.last_close ? `. Last close ${fmtMoney2(q.last_close)} on ${deDate(q.last_close_date)}.` : '')
+      : `${gtName()}: a buy pays ${fmtMoney2(q.buy_price)}, a sale gets ${fmtMoney2(q.sell_price)} — ${q.venue}` +
+        (Number.isFinite(q.price_age_min) ? `, ${q.price_age_min} min old` : '') + '. Each trade costs a €10 fee.';
+  } catch (err) {
+    gtLog.textContent = `Quote failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+document.getElementById('gameTradeForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const side = document.getElementById('gtSide').value, isin = document.getElementById('gtIsin').value;
+  const unit = document.getElementById('gtUnit').value;
+  const amount = decimal(document.getElementById('gtAmount').value);
+  if (!isin) return;
+  if (unit !== 'all' && !(num(amount) > 0)) { gtLog.hidden = false; gtLog.textContent = 'Give a positive amount.'; return; }
+  const what = unit === 'all' ? 'all held' : unit === 'eur' ? fmtMoney2(num(amount)) : `${amount} shares`;
+  if (!confirm(`${side === 'buy' ? 'Buy' : 'Sell'} ${what} of ${gtName()} now, at the live price?`)) return;
+  const btn = document.getElementById('gtGo');
+  btn.disabled = true;
+  gtLog.hidden = false;
+  gtLog.textContent = 'Trading…';
+  try {
+    const t = await gtCall(`trade?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ side, isin, ...(unit === 'all' ? { all: true } : { [unit]: amount }) }) });
+    if (!t.ok) { gtLog.textContent = gtRefusal(t); return; }
+    gtLog.textContent = `${side === 'buy' ? 'Bought' : 'Sold'} ${t.shares.toLocaleString('de-DE')} × ${gtName()} ` +
+      `at ${fmtMoney2(t.price)} (${t.venue}) · fee ${fmtMoney2(t.fee)}` +
+      (t.tax ? ` · tax ${fmtMoney2(t.tax)}` : '') + ` · cash now ${fmtMoney2(t.cash)}`;
+    reloadKeepingLog(gtLog);
+  } catch (err) {
+    gtLog.textContent = `Trade failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 /* ---------- new instrument ----------
    Opened by "+ New instrument…" in the add form. Two look-ups, through server.py's

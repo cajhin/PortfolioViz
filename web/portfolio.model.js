@@ -282,13 +282,14 @@ function cashSummary(date = null) {
   return [...by.values()];
 }
 
-// The portfolio named in the URL wins; failing that, the defaultPortfolio setting, then "main".
+// The portfolio whose id is in the URL wins; failing that, the defaultPortfolio setting, else none
+// (the view then offers the user's portfolios, or to create one).
 // Called by the view once the settings are in hand, before any portfolio route is asked for.
 function resolvePortfolio(configText) {
   if (PORTFOLIO) return PORTFOLIO;
   let cfg = {};
   try { cfg = configText ? JSON.parse(configText) : {}; } catch { /* keep the fallback */ }
-  return (PORTFOLIO = cfg.defaultPortfolio || 'main');
+  return (PORTFOLIO = cfg.defaultPortfolio || '');
 }
 
 // The global settings with the portfolio's own keys laid over it, back as text so ingest() and

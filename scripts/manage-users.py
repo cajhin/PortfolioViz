@@ -13,7 +13,7 @@ manage-portfolios.py.
 server.py lets nobody in without a login, and shows a user only the portfolios granted to them —
 scripts/db.py's `user_portfolio`. Anyone who can reach the page can also create a user there
 ("Create user"), who then sees only the portfolios they create. Every portfolio that existed
-before, or that a script made (an agent's game, a Parqet refresh), is granted here. A grant
+before, or that a script made (an agent's game), is granted here. A grant
 lets the user change the portfolio too (rename, import, transactions), unless --read-only.
 
 A password is read from the terminal, never the command line (it would land in the shell's
@@ -82,8 +82,8 @@ def revoke(name, portfolios):
 
 def list_portfolios():
     users = db.users()
-    return {"portfolios": [{"name": p["name"], "label": p["label"], "type": p["type"],
-                          "users": {u["name"]: u["portfolios"][p["name"]] for u in users if p["name"] in u["portfolios"]}}
+    return {"portfolios": [{"id": p["id"], "label": p["label"], "type": p["type"],
+                          "users": {u["name"]: u["portfolios"][p["id"]] for u in users if p["id"] in u["portfolios"]}}
                          for p in db.portfolios()]}
 
 

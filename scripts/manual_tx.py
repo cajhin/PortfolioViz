@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enter transactions by hand into a manual portfolio — a virtual demo portfolio, say — and edit or
+"""Enter transactions by hand into a normal portfolio — a virtual demo portfolio, say — and edit or
 delete any of its transactions, imported ones included.
 
     python3 scripts/manual_tx.py <portfolio> add <YYYY-MM-DD> <id> buy|sell|dividend <shares> <price> [<fee>] [--tax T] [--depot D]
@@ -31,7 +31,7 @@ from datetime import date, datetime, timedelta
 
 import db
 from import_tr import (DIVIDEND_TYPES, MANUAL_DEPOT, active_ledger, depot_of, num, rebuild,
-                       registry_names, require_manual, short_at)
+                       registry_names, require_normal, short_at)
 
 FIELDS = ["datetime", "date", "account_type", "category", "type", "asset_class", "name", "symbol",
           "shares", "price", "amount", "fee", "tax", "currency", "original_amount",
@@ -238,7 +238,7 @@ def main():
     rest = args[2:] + (["0"] if fn in (add, edit) and len(args) == 7 else [])   # no fee given
     # the change and the rebuild it causes land together, or (on any refusal) not at all
     with db.tx():
-        portfolio = require_manual(args[0])
+        portfolio = require_normal(args[0])
         fn(portfolio, *rest, **opts)
         rebuild(portfolio)
 

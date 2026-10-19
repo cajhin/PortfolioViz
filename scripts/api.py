@@ -17,7 +17,7 @@ check_portfolio.js reads the same routes without a server, through this same cod
     api/portfolio?portfolio=P       a portfolio's own settings (private-profiles/<p>/profile.json)
     api/positions?portfolio=P         its positions (positions.csv), open and closed
     api/activities?portfolio=P        its activities (activities.csv)
-    api/cash?portfolio=P              its cash bookings (cash.csv) — none for a Parqet portfolio
+    api/cash?portfolio=P              its cash bookings (cash.csv)
 An unknown portfolio is a 404 on each of the four, its body (plain text) saying why — the page
 shows it in place of the data it could not load.
 """
@@ -34,15 +34,15 @@ def to_csv(fields, rows):
     return out.getvalue()
 
 
-def no_portfolio(name):
+def no_portfolio(pid):
     """Why a portfolio cannot be shown, in words for the page's error box."""
-    names = [p["name"] for p in db.portfolios()]
-    if not names:
+    ids = [p["id"] for p in db.portfolios()]
+    if not ids:
         return ("The database has no portfolios yet — it was created empty (scripts/sqlite-install.sh). "
-                "Copy a backup over data/portfolio.db (made with scripts/db.py backup), or fill a portfolio: "
-                "REFRESH_PARQET_DATA.md for Parqet, scripts/manage-portfolios.py create for a game.")
-    return (f"No portfolio {name!r} in the database — it has {', '.join(names)}. Pick one with "
-            f"?portfolio=<name>, or change the default: scripts/db.py config set defaultPortfolio '\"<name>\"'.")
+                "Copy a backup over data/portfolio.db (made with scripts/db.py backup), or create a portfolio "
+                "on the page's Config tab.")
+    return (f"No portfolio {pid!r} in the database — it has {', '.join(ids)}. Pick one with "
+            f"?portfolio=<id>, or change the default: scripts/db.py config set defaultPortfolio '\"<id>\"'.")
 
 
 def get(path):
@@ -67,14 +67,14 @@ def get(path):
     if route == "api/live":
         return 200, CSV, to_csv(db.LIVE_FIELDS, db.live())
     if route in ("api/portfolio", "api/positions", "api/activities", "api/cash"):
-        name = q.get("portfolio", "")
-        cfg = db.portfolio_config(name)
+        pid = q.get("portfolio", "")
+        cfg = db.portfolio_config(pid)
         if cfg is None:
-            return 404, "text/plain; charset=utf-8", no_portfolio(name)
+            return 404, "text/plain; charset=utf-8", no_portfolio(pid)
         if route == "api/portfolio":
             return 200, JSON, json.dumps(cfg, indent=2, ensure_ascii=False)
         table = {"api/positions": "position", "api/activities": "activity", "api/cash": "cash"}[route]
-        return 200, CSV, to_csv(db.PORTFOLIO_TABLES[table], db.portfolio_rows(name, table))
+        return 200, CSV, to_csv(db.PORTFOLIO_TABLES[table], db.portfolio_rows(pid, table))
     return 404, CSV, ""
 
 

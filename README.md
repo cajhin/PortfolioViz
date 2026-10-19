@@ -1,17 +1,18 @@
-Custom visualization for portfolio data pulled from Parqet and (currently) Yahoo.
+Custom visualization for portfolio data: your transactions (imported from Trade Republic, pasted as CSV from any broker, or entered by hand), priced from Yahoo and gettex.
 Coded by (and for) Claude, I only made the design decisions.
 
 To init:
-1. enable Parqet Claude connector (either via Parqet or Claude web)
-2. clone repo; run `scripts/sqlite-install.sh` — installs sqlite3 if missing and creates the database (data/portfolio.db, not in git) with the base registry and settings
-3. settings live in the database: `python3 scripts/db.py config` shows them, `python3 scripts/db.py config set timelineStart '"2019-01-01"'` changes one; adjust timeline start to your liking (default 1.1.2019; careful, 30 years back will need to pull a lot of price history that is probably irrelevant to today's stock market)
-4. run Claude in repo; tell it to REFRESH_PARQET_DATA.md; this pulls all port transactions into the portfolio main. For more portfolios, use "Create new portfolio" on the Config tab (label, watchlist, optional benchmark); then fill it from Parqet (have Claude refresh that portfolio) or make it manual and import a Trade Republic transaction export on the same tab (re-importing an overlapping export only adds what is new), or enter buys and sells by hand on the Transactions tab to track a virtual demo portfolio (new instruments are registered from there too, by ISIN and Yahoo symbol)
-5. run start.sh for local webserver
-6. click [Update]; this pulls all missing daily EOB ticks for 1.1.2019..today for the current portfolio's stocks from Yahoo (thank you Y).
+1. clone repo; run `scripts/sqlite-install.sh` — installs sqlite3 if missing and creates the database (data/portfolio.db, not in git) with the base registry and settings
+2. settings live in the database: `python3 scripts/db.py config` shows them, `python3 scripts/db.py config set timelineStart '"2019-01-01"'` changes one; adjust timeline start to your liking (default 1.1.2019; careful, 30 years back will need to pull a lot of price history that is probably irrelevant to today's stock market)
+3. run start.sh for local webserver; create a user on the login page
+4. "Create new portfolio" on the Config tab — Normal (a regular portfolio, every transaction editable) or Game (you cannot edit the past, only buy and sell now; starts with €10,000). Fill a normal one on the Transactions tab: import a Trade Republic transaction export (re-importing an overlapping export only adds what is new), paste transactions as CSV (any broker — a script or an AI can convert its statement), or enter them by hand (new instruments are registered from there too, by ISIN and Yahoo symbol)
+5. click [Update]; this pulls all missing daily EOB ticks for 1.1.2019..today for the current portfolio's stocks from Yahoo (thank you Y).
 
 Back up the database by hand: `python3 scripts/db.py backup` (to the NAS, toast/nas/bkp/portfolioviz). An obsolete portfolio goes with `scripts/manage-portfolios.py purge <portfolio> --yes --backup-dir <dir>` (backs up there first; `--no-backup` instead to skip that).
 
-Game portfolios for AI agents (or for you, from a terminal): `scripts/manage-portfolios.py --help` to create and fund them (admin only), `scripts/trade.py --help` to trade (all an agent gets). Games are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
+Game portfolios for you (Transactions tab: Trade now) or for AI agents: `scripts/manage-portfolios.py --help` to create and fund them from a terminal (admin only), `scripts/trade.py --help` to trade (all an agent gets — and only on a portfolio that allows AI write access).
+
+Scripts and AI over HTTP: make an API token on the Config tab and send it as `Authorization: Bearer <token>`. It reads what you may read, and writes only to a portfolio whose "Allow AI (API) write access" box is ticked. Games are live-only — trades execute at live bid/ask prices, €10 fee each, 20% tax on gains, cash never below zero — so agents can be compared fairly. The rules: `trading-rules.md`.
 
 Notes:
 - you can tell Claude directly to analyze the known data (like 'calc the max downdraw for all my stocks' or 'how many successful trades did i do in 2025?')

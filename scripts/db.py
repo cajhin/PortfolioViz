@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 9
 
 
 def _columns(c, table):
@@ -137,7 +137,45 @@ def _to_5(c):
             c.execute(f"ALTER TABLE {table} ADD COLUMN verified TEXT")
 
 
-MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5}
+def _to_6(c):
+    """Two types, normal and game: manual is normal, and so is a Parqet one (its import path is
+    gone — import_tr.rebuild will not overwrite what it imported). A portfolio says whether AI may
+    write to it; a game already in use is an agent's, so it may. A new CHECK means a new table, as
+    in _to_4."""
+    if "ai_write" in _columns(c, "portfolio"):
+        return
+    c.execute("CREATE TABLE portfolio_new (name TEXT PRIMARY KEY, label TEXT NOT NULL, "
+              "type TEXT NOT NULL CHECK (type IN ('normal', 'game')), ai_write INTEGER NOT NULL DEFAULT 0)")
+    c.execute("INSERT INTO portfolio_new (name, label, type, ai_write) SELECT name, label, "
+              "CASE WHEN type = 'game' THEN 'game' ELSE 'normal' END, type = 'game' FROM portfolio ORDER BY rowid")
+    c.execute("DROP TABLE portfolio")
+    c.execute("ALTER TABLE portfolio_new RENAME TO portfolio")
+
+
+def _to_7(c):
+    """An API token is kept as it is too, so its user can copy it again. One made before has only
+    its hash: it still works, but cannot be shown — its user makes a new one."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'api_token'").fetchone() \
+            and "token" not in _columns(c, "api_token"):
+        c.execute("ALTER TABLE api_token ADD COLUMN token TEXT")
+
+
+def _to_8(c):
+    """An API token is bound to one portfolio. One made before has none, and is refused until its
+    user makes a new one."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'api_token'").fetchone() \
+            and "portfolio" not in _columns(c, "api_token"):
+        c.execute("ALTER TABLE api_token ADD COLUMN portfolio TEXT REFERENCES portfolio (name) ON DELETE CASCADE")
+
+
+def _to_9(c):
+    """A portfolio is known by its id, not a name: the column is renamed, and every foreign key
+    naming it follows (SQLite rewrites them). Existing ids stay as they are — manage-portfolios.py
+    renumber gives them pid{n} ones, when their admin says so."""
+    _rename_column(c, "portfolio", "name", "id")
+
+
+MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9}
 
 
 def migrate(c):
@@ -335,8 +373,8 @@ def write_fx(pair, rates):
 
 
 # ---------- portfolios ----------
-# A portfolio is one row in `portfolio` (label, type) plus its own settings (watchlist,
-# benchmarkIsin, parqetPortfolios, ...) — together what its profile.json used to say.
+# A portfolio is one row in `portfolio` (id, label, type, ai_write) plus its own settings (watchlist,
+# benchmarkIsin, ...) — together what its profile.json used to say.
 
 POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares", "currency",
                    "currentValue", "purchaseValue", "lastPriceDate", "lastPrice", "realizedGainNet",
@@ -344,66 +382,107 @@ POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares
 ACTIVITY_FIELDS = ["depot", "name", "identifier", "type", "datetime", "shares", "price", "amount",
                    "amountNet", "fee", "tax", "realizedGains", "realizedGainsNet", "currency",
                    "transactionId", "verified"]
-# verified: "0" for a pasted row not yet accepted (import_csv.py), "1" for any other ledger row,
-# empty for a Parqet portfolio's — which has no ledger, and nothing to accept
+# verified: "0" for a pasted row not yet accepted (import_csv.py), "1" for any other ledger row
 CASH_FIELDS = ["depot", "datetime", "date", "kind", "amount", "transactionId", "verified"]
 PORTFOLIO_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "cash": CASH_FIELDS}
 
 
-def portfolio(name):
-    """The portfolio's row as {name, label, type}, or None."""
-    r = conn().execute("SELECT * FROM portfolio WHERE name = ?", (name,)).fetchone()
+def portfolio(pid):
+    """The portfolio's row as {id, label, type, ai_write}, or None."""
+    r = conn().execute("SELECT * FROM portfolio WHERE id = ?", (pid,)).fetchone()
     return dict(r) if r else None
 
 
 def portfolios():
-    return rows("SELECT * FROM portfolio ORDER BY name")
+    return rows("SELECT * FROM portfolio ORDER BY rowid")
 
 
-def portfolio_config(name):
+def portfolio_config(pid):
     """Its label and type with its own settings — what its profile.json used to hold."""
-    p = portfolio(name)
+    p = portfolio(pid)
     if not p:
         return None
-    return {"label": p["label"], "type": p["type"], **settings(name)}
+    return {"label": p["label"], "type": p["type"], **settings(pid)}
 
 
-TYPES = ("parqet", "manual", "game")
+TYPES = ("normal", "game")
 
 
-def create_portfolio(name, label, type_):
-    """A new, empty portfolio with an empty watchlist; sqlite3.IntegrityError if the name is taken."""
+def next_portfolio_id(c):
+    """pid1, pid2, … — a running number (meta's portfolio_seq), never handed out twice, not even after
+    a purge, so an old link or log line can never point at another portfolio."""
+    row = c.execute("SELECT value FROM meta WHERE key = 'portfolio_seq'").fetchone()
+    taken = [int(r[0][3:]) for r in c.execute("SELECT id FROM portfolio WHERE id GLOB 'pid[0-9]*'")]
+    n = max([int(row[0]) if row else 0] + taken) + 1
+    c.execute("INSERT INTO meta (key, value) VALUES ('portfolio_seq', ?) "
+              "ON CONFLICT (key) DO UPDATE SET value = excluded.value", (str(n),))
+    return f"pid{n}"
+
+
+def create_portfolio(label, type_, ai_write=False):
+    """A new, empty portfolio with an empty watchlist, under the next portfolio id; that id."""
     with tx() as c:
-        c.execute("INSERT INTO portfolio (name, label, type) VALUES (?, ?, ?)", (name, label or name, type_))
-        c.execute("INSERT INTO setting (portfolio, key, value) VALUES (?, 'watchlist', '[]')", (name,))
+        pid = next_portfolio_id(c)
+        c.execute("INSERT INTO portfolio (id, label, type, ai_write) VALUES (?, ?, ?, ?)",
+                  (pid, label or pid, type_, int(ai_write)))
+        c.execute("INSERT INTO setting (portfolio, key, value) VALUES (?, 'watchlist', '[]')", (pid,))
+    return pid
 
 
-def set_label(name, label):
+# every table with a `portfolio` column naming one by its id
+PORTFOLIO_COLUMNS = ("setting", "ledger", "position", "activity", "cash", "user_portfolio", "api_token")
+
+
+def renumber_portfolios():
+    """Every portfolio whose id is not a pid{n} yet gets the next one, oldest first, and everything
+    naming it follows — its rows in PORTFOLIO_COLUMNS and the global defaultPortfolio. [(old, new)]."""
+    out = []
     with tx() as c:
-        return c.execute("UPDATE portfolio SET label = ? WHERE name = ?", (label, name)).rowcount
+        c.execute("PRAGMA defer_foreign_keys = ON")      # parent and children change one by one
+        default = settings("").get("defaultPortfolio")
+        for (old,) in c.execute("SELECT id FROM portfolio WHERE id NOT GLOB 'pid[0-9]*' ORDER BY rowid").fetchall():
+            new = next_portfolio_id(c)
+            c.execute("UPDATE portfolio SET id = ? WHERE id = ?", (new, old))
+            for table in PORTFOLIO_COLUMNS:
+                c.execute(f"UPDATE {table} SET portfolio = ? WHERE portfolio = ?", (new, old))
+            if default == old:
+                c.execute("UPDATE setting SET value = ? WHERE portfolio = '' AND key = 'defaultPortfolio'",
+                          (json.dumps(new),))
+            out.append((old, new))
+    return out
 
 
-def purge_portfolio(name):
+def set_ai_write(pid, allow):
+    with tx() as c:
+        return c.execute("UPDATE portfolio SET ai_write = ? WHERE id = ?", (int(allow), pid)).rowcount
+
+
+def set_label(pid, label):
+    with tx() as c:
+        return c.execute("UPDATE portfolio SET label = ? WHERE id = ?", (label, pid)).rowcount
+
+
+def purge_portfolio(pid):
     """Every row the portfolio has — ledgers, positions, activities, cash, settings. The registry and
     the prices stay: they are shared."""
     with tx() as c:
-        c.execute("DELETE FROM setting WHERE portfolio = ?", (name,))
-        return c.execute("DELETE FROM portfolio WHERE name = ?", (name,)).rowcount   # cascades
+        c.execute("DELETE FROM setting WHERE portfolio = ?", (pid,))
+        return c.execute("DELETE FROM portfolio WHERE id = ?", (pid,)).rowcount   # cascades
 
 
-def portfolio_rows(name, table):
+def portfolio_rows(pid, table):
     """A portfolio's positions, activities or cash, as text, in the order they were written."""
     fields = PORTFOLIO_TABLES[table]
-    return rows(f"SELECT {', '.join(fields)} FROM {table} WHERE portfolio = ? ORDER BY rowid", (name,))
+    return rows(f"SELECT {', '.join(fields)} FROM {table} WHERE portfolio = ? ORDER BY rowid", (pid,))
 
 
-def replace_portfolio_rows(name, table, new):
+def replace_portfolio_rows(pid, table, new):
     fields = PORTFOLIO_TABLES[table]
     with tx() as c:
-        c.execute(f"DELETE FROM {table} WHERE portfolio = ?", (name,))
+        c.execute(f"DELETE FROM {table} WHERE portfolio = ?", (pid,))
         c.executemany(f"INSERT INTO {table} (portfolio, {', '.join(fields)}) VALUES "
                       f"(?, {', '.join('?' * len(fields))})",
-                      [[name] + [r.get(f) for f in fields] for r in new])
+                      [[pid] + [r.get(f) for f in fields] for r in new])
 
 
 # ---------- ledgers ----------
@@ -411,66 +490,66 @@ def replace_portfolio_rows(name, table, new):
 # rows entered by hand or traded (origin 'manual') and the rows pasted in the Portfolioviz CSV
 # format (origin 'csv'), each the TR export's row as a dict.
 
-def ledger(name, origin, deleted=True):
+def ledger(pid, origin, deleted=True):
     """One origin's rows, oldest first (same-time rows in the order they were written). An
     imported row deleted on the page is left out unless `deleted`."""
     return [json.loads(r[0]) for r in conn().execute(
         "SELECT data FROM ledger WHERE portfolio = ? AND origin = ?" + ("" if deleted else " AND NOT deleted")
-        + " ORDER BY datetime, rowid", (name, origin))]
+        + " ORDER BY datetime, rowid", (pid, origin))]
 
 
-def add_ledger_rows(name, origin, new, verified=True):
+def add_ledger_rows(pid, origin, new, verified=True):
     with tx() as c:
         c.executemany("INSERT INTO ledger (portfolio, transaction_id, origin, datetime, verified, data) "
                       "VALUES (?, ?, ?, ?, ?, ?)",
-                      [(name, r["transaction_id"], origin, r["datetime"], int(verified),
+                      [(pid, r["transaction_id"], origin, r["datetime"], int(verified),
                         json.dumps(r, ensure_ascii=False)) for r in new])
 
 
-def replace_ledger(name, origin, new):
+def replace_ledger(pid, origin, new):
     """All of one origin's rows at once — how a hand-entered row is added, edited or removed."""
     with tx() as c:
-        c.execute("DELETE FROM ledger WHERE portfolio = ? AND origin = ?", (name, origin))
-        add_ledger_rows(name, origin, new)
+        c.execute("DELETE FROM ledger WHERE portfolio = ? AND origin = ?", (pid, origin))
+        add_ledger_rows(pid, origin, new)
 
 
-def ledger_entry(name, tid):
+def ledger_entry(pid, tid):
     """(origin, row) of one ledger row, whatever its origin, or None."""
     r = conn().execute("SELECT origin, data FROM ledger WHERE portfolio = ? AND transaction_id = ?",
-                       (name, tid)).fetchone()
+                       (pid, tid)).fetchone()
     return (r[0], json.loads(r[1])) if r else None
 
 
-def update_ledger_row(name, tid, row):
+def update_ledger_row(pid, tid, row):
     """One row rewritten in place — same id, same origin, its flags (deleted, verified) kept."""
     with tx() as c:
         c.execute("UPDATE ledger SET datetime = ?, data = ? WHERE portfolio = ? AND transaction_id = ?",
-                  (row["datetime"], json.dumps(row, ensure_ascii=False), name, tid))
+                  (row["datetime"], json.dumps(row, ensure_ascii=False), pid, tid))
 
 
-def mark_deleted(name, tid):
+def mark_deleted(pid, tid):
     """An imported row deleted on the page: kept, so a re-import still knows it, but left out."""
     with tx() as c:
         return c.execute("UPDATE ledger SET deleted = 1 WHERE portfolio = ? AND transaction_id = ? "
-                         "AND origin IN ('tr', 'csv')", (name, tid)).rowcount
+                         "AND origin IN ('tr', 'csv')", (pid, tid)).rowcount
 
 
-def unverified(name):
+def unverified(pid):
     """The transaction ids of the rows pasted but not yet accepted."""
     return {r[0] for r in conn().execute(
-        "SELECT transaction_id FROM ledger WHERE portfolio = ? AND NOT verified", (name,))}
+        "SELECT transaction_id FROM ledger WHERE portfolio = ? AND NOT verified", (pid,))}
 
 
-def accept_unverified(name):
+def accept_unverified(pid):
     """Every pasted row not yet accepted, accepted: no longer new, no longer rolled back."""
     with tx() as c:
-        return c.execute("UPDATE ledger SET verified = 1 WHERE portfolio = ? AND NOT verified", (name,)).rowcount
+        return c.execute("UPDATE ledger SET verified = 1 WHERE portfolio = ? AND NOT verified", (pid,)).rowcount
 
 
-def discard_unverified(name):
+def discard_unverified(pid):
     """Every pasted row not yet accepted, gone — the rollback of a bad paste."""
     with tx() as c:
-        return c.execute("DELETE FROM ledger WHERE portfolio = ? AND NOT verified", (name,)).rowcount
+        return c.execute("DELETE FROM ledger WHERE portfolio = ? AND NOT verified", (pid,)).rowcount
 
 
 # ---------- access ----------
@@ -528,30 +607,30 @@ def delete_user(name):
         return c.execute("DELETE FROM user WHERE name = ?", (name,)).rowcount   # cascades
 
 
-def grant(name, portfolio_name, can_write=True):
+def grant(name, portfolio, can_write=True):
     with tx() as c:
         c.execute("INSERT INTO user_portfolio (user, portfolio, can_write) VALUES (?, ?, ?) "
                   "ON CONFLICT (user, portfolio) DO UPDATE SET can_write = excluded.can_write",
-                  (name, portfolio_name, 1 if can_write else 0))
+                  (name, portfolio, 1 if can_write else 0))
 
 
-def revoke(name, portfolio_name):
+def revoke(name, portfolio):
     with tx() as c:
         return c.execute("DELETE FROM user_portfolio WHERE user = ? AND portfolio = ?",
-                         (name, portfolio_name)).rowcount
+                         (name, portfolio)).rowcount
 
 
-def access(name, portfolio_name):
+def access(name, portfolio):
     """None if the user may not open the portfolio, else whether they may change it."""
     r = conn().execute("SELECT can_write FROM user_portfolio WHERE user = ? AND portfolio = ?",
-                       (name, portfolio_name)).fetchone()
+                       (name, portfolio)).fetchone()
     return None if r is None else bool(r[0])
 
 
 def user_portfolios(name):
     """The portfolio rows the user may open, each with its `can_write`."""
-    return rows("SELECT p.*, g.can_write FROM portfolio p JOIN user_portfolio g ON g.portfolio = p.name "
-                "WHERE g.user = ? ORDER BY p.name", (name,))
+    return rows("SELECT p.*, g.can_write FROM portfolio p JOIN user_portfolio g ON g.portfolio = p.id "
+                "WHERE g.user = ? ORDER BY p.rowid", (name,))
 
 
 def _token_hash(token):
@@ -581,6 +660,54 @@ def session_user(token):
 def end_session(token):
     with tx() as c:
         c.execute("DELETE FROM session WHERE token_hash = ?", (_token_hash(token),))
+
+
+# A user's API tokens, each bound to one portfolio: looked up by hash like a session, but no expiry —
+# one lasts until revoked, or its portfolio is purged —
+# and kept as it is as well, for its user to copy from the page: short and easy to hand to an agent
+# rather than hardened (10 letters and digits, ~58 bits). Its id, for listing and revoking, is the
+# hash's first 12 characters.
+TOKEN_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"   # no 0/O, 1/l/I
+
+
+def new_api_token(name, label, portfolio):
+    token = "".join(secrets.choice(TOKEN_CHARS) for _ in range(10))
+    with tx() as c:
+        c.execute("INSERT INTO api_token (token_hash, user, label, created, token, portfolio) "
+                  "VALUES (?, ?, ?, ?, ?, ?)", (_token_hash(token), name, label,
+                                                datetime.now().isoformat(timespec="seconds"), token, portfolio))
+    return token
+
+
+def api_tokens(name, portfolio):
+    """The user's tokens for the portfolio, each with the token itself (None for one made before
+    tokens were kept) — and any of theirs bound to none, made before tokens were bound."""
+    return [{"id": r["token_hash"][:12], "label": r["label"], "created": r["created"],
+             "last_used": r["last_used"], "token": r["token"], "portfolio": r["portfolio"]}
+            for r in rows("SELECT * FROM api_token WHERE user = ? AND (portfolio = ? OR portfolio IS NULL) "
+                          "ORDER BY created", (name, portfolio))]
+
+
+def revoke_api_token(name, token_id):
+    if len(token_id or "") != 12:
+        return 0
+    with tx() as c:
+        return c.execute("DELETE FROM api_token WHERE user = ? AND substr(token_hash, 1, 12) = ?",
+                         (name, token_id)).rowcount
+
+
+def token_login(token):
+    """(user, portfolio) of an API token bound to a portfolio, or None; notes when it was last used."""
+    if not token:
+        return None
+    h = _token_hash(token)
+    r = conn().execute("SELECT user, portfolio FROM api_token WHERE token_hash = ? AND portfolio IS NOT NULL",
+                       (h,)).fetchone()
+    if r:
+        with tx() as c:
+            c.execute("UPDATE api_token SET last_used = ? WHERE token_hash = ?",
+                      (datetime.now().isoformat(timespec="seconds"), h))
+    return (r[0], r[1]) if r else None
 
 
 # ---------- backup ----------

@@ -31,7 +31,8 @@ buy --eur is everything that leaves the portfolio's cash, the fee included (--eu
 shares and pays €10); buy --shares adds the fee on top. A sale's fee comes off its proceeds,
 and so does a 20% tax on its gain, if any. The full rules, with examples: trade.py rules.
 
-Only game portfolios can be traded; any other is refused. --id makes a call safe to repeat: a
+Only game portfolios can be traded; any other is refused. An agent's session (TRADE_PORTFOLIO set)
+trades only a portfolio that allows AI write access. --id makes a call safe to repeat: a
 second call with the same id answers with the first one's result instead of trading twice.
 --reason is kept with the trade.
 """
@@ -46,7 +47,7 @@ from update_prices import GETTEX_MAX_AGE_MIN, gettex_quote
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)                  # the repo — this file lives in scripts/
-NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+PORTFOLIO_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")   # pid17 — or an older id, not renumbered yet
 ISIN = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
 
 
@@ -70,42 +71,41 @@ def quiet(fn, *args, **kw):
 
 # ---------- portfolios ----------
 
-def check_name(name, must_exist=True):
-    """The portfolio's name, checked."""
-    if not NAME.match(name or ""):
-        raise Refusal(f"{name!r} is not a portfolio name",
-                      "lowercase letters, digits, - and _, starting with a letter or digit")
-    if must_exist and not db.portfolio(name):
-        raise Refusal(f"no portfolio {name!r}", "check the name — portfolios are set up by their owner")
-    return name
+def check_id(pid, must_exist=True):
+    """The portfolio's id, checked."""
+    if not PORTFOLIO_ID.match(pid or ""):
+        raise Refusal(f"{pid!r} is not a portfolio id", "a portfolio id looks like pid17")
+    if must_exist and not db.portfolio(pid):
+        raise Refusal(f"no portfolio {pid!r}", "check the id — portfolios are set up by their owner")
+    return pid
 
 
-def portfolio(name):
+def portfolio(pid):
     """The portfolio's settings, with its label and type."""
-    return db.portfolio_config(name) or {}
+    return db.portfolio_config(pid) or {}
 
 
-def require_game(name):
+def require_game(pid):
     # an agent's session is bound to its own portfolio: its start script sets TRADE_PORTFOLIO, and
     # another portfolio — someone else's game, to look at or to trade — is refused. (The variable cannot
     # be changed from inside the session: a command not starting with this script is not allowed.)
     bound = os.environ.get("TRADE_PORTFOLIO")
-    if bound and name != bound:
-        raise Refusal(f"this session trades portfolio {bound!r} only, not {name!r}")
-    cfg = portfolio(check_name(name))
+    if bound and pid != bound:
+        raise Refusal(f"this session trades portfolio {bound!r} only, not {pid!r}")
+    cfg = portfolio(check_id(pid))
     if cfg.get("type") != "game":
-        raise Refusal(f"portfolio {name!r} is not a game",
+        raise Refusal(f"portfolio {pid!r} is not a game",
                       "only game portfolios can be traded")
-    return name
+    return pid
 
 
 @contextlib.contextmanager
-def locked(name):
+def locked(pid):
     """One change at a time per portfolio: two callers at once (two agents, or one and its admin moving cash)
     would otherwise each read the ledger, add their row, and the second write lose the first.
     A lock file, not a database transaction: a trade looks prices up (and may fetch a new
     instrument's history, which writes to the database) before it books."""
-    path = os.path.join(os.path.dirname(db.DB_PATH), "locks", f"{name}.lock")
+    path = os.path.join(os.path.dirname(db.DB_PATH), "locks", f"{pid}.lock")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
@@ -249,14 +249,14 @@ def sale_tax(rows, isin, shares, value, fee):
     return round(max(gain, 0) * TAX_RATE, 2), round(gain, 2)
 
 
-def cash_of(name):
+def cash_of(pid):
     """The portfolio's cash now — every booking's effect, as the last rebuild wrote it."""
-    return round(sum(num(c["amount"]) for c in db.portfolio_rows(name, "cash")), 2)
+    return round(sum(num(c["amount"]) for c in db.portfolio_rows(pid, "cash")), 2)
 
 
-def held(name, isin):
+def held(pid, isin):
     """Shares of `isin` in the portfolio now."""
-    rows = manual_tx.manual_rows(name)
+    rows = manual_tx.manual_rows(pid)
     return round(sum(num(r["shares"]) for r in rows if r["symbol"] == isin and r["type"] in ("BUY", "SELL")), 6)
 
 
@@ -356,21 +356,31 @@ def latest_close(inst):
     return rows[-1]
 
 
-def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="", oid=None):
-    require_game(name)
-    with locked(name):
-        rows = manual_tx.manual_rows(name)
+def require_ai_write(pid):
+    """An agent's session (TRADE_PORTFOLIO set) trades only where the portfolio allows AI to write —
+    its owner's checkbox on the Config tab. The owner trading it themselves, from the page or this
+    command line, needs no such leave."""
+    if os.environ.get("TRADE_PORTFOLIO") and not (db.portfolio(pid) or {}).get("ai_write"):
+        raise Refusal(f"portfolio {pid!r} does not allow AI write access",
+                      "its owner can allow it on the page's Config tab")
+
+
+def execute(pid, side, inst_text, shares=None, eur=None, all_=False, reason="", oid=None):
+    require_game(pid)
+    require_ai_write(pid)
+    with locked(pid):
+        rows = manual_tx.manual_rows(pid)
         tid = f"manual-{oid}" if oid else None
         if tid:
             prior = next((r for r in rows if r["transaction_id"] == tid), None)
             if prior:
-                return {"repeat": True, **trade_view(prior), "cash": cash_of(name)}
+                return {"repeat": True, **trade_view(prior), "cash": cash_of(pid)}
         inst = resolve(inst_text, register=(side == "buy"))
         if not series(inst):
             fetch_prices(inst)           # a first buy of a new instrument: its history, for valuing it later
         px = venue_price(inst, side)
         price = px["price"]
-        cash = cash_of(name)
+        cash = cash_of(pid)
         if side == "buy":
             if ((eur or 0) > 0) == ((shares or 0) > 0):
                 raise Refusal("give either --eur or --shares, as a positive number")
@@ -388,7 +398,7 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
                               f"the portfolio holds €{cash:.2f}",
                               f"buy for at most --eur {cash:.2f}, or sell something first")
         else:
-            have = held(name, inst["isin"])
+            have = held(pid, inst["isin"])
             if all_:
                 shares = have
             elif not (shares or 0) > 0:
@@ -407,10 +417,10 @@ def execute(name, side, inst_text, shares=None, eur=None, all_=False, reason="",
             row["tax"] = f"{-tax:.2f}"         # signed as TR books a sale's tax: money going out
         rows.append(row)
         with db.tx():                    # the trade and the rebuild it causes, together
-            manual_tx.save(name, rows)
-            quiet(import_tr.rebuild, name)
+            manual_tx.save(pid, rows)
+            quiet(import_tr.rebuild, pid)
         out = {**trade_view(row), "name": inst["name"], "venue": px["venue"],
-               "price_age_min": px["price_age_min"], "cash": cash_of(name)}
+               "price_age_min": px["price_age_min"], "cash": cash_of(pid)}
         out.update(bid=px["bid"], ask=px["ask"])
         for k in ("spread_pct", "last", "surcharge_pct"):
             if k in px:
@@ -461,12 +471,12 @@ def live_mark(isin):
     return mark
 
 
-def summary(name):
+def summary(pid):
     """The portfolio as it stands: cash, positions at their current value (see live_mark), and the
     result against the money put in — cash included, the one fair way to set two portfolios side by
     side."""
-    positions = [p for p in db.portfolio_rows(name, "position") if p["isSold"] == "0"]
-    cash_rows = db.portfolio_rows(name, "cash")
+    positions = [p for p in db.portfolio_rows(pid, "position") if p["isSold"] == "0"]
+    cash_rows = db.portfolio_rows(pid, "cash")
     cash = sum(num(c["amount"]) for c in cash_rows)
     net_in = sum(num(c["amount"]) for c in cash_rows if c["kind"] in ("deposit", "withdrawal"))
     latest = import_tr.latest_prices()
@@ -487,7 +497,7 @@ def summary(name):
                          "cost": round(num(p["purchaseValue"]), 2), "gain": round(value - num(p["purchaseValue"]), 2)})
     invested = sum(h["value"] for h in holdings)
     total = invested + cash
-    return {"portfolio": name, "label": portfolio(name).get("label") or name, "date": today(),
+    return {"portfolio": pid, "label": portfolio(pid).get("label") or pid, "date": today(),
             "cash": round(cash, 2), "positions": holdings,
             "value_positions": round(invested, 2), "value_total": round(total, 2),
             "net_deposits": round(net_in, 2),
@@ -495,13 +505,13 @@ def summary(name):
             "result_pct": round((total - net_in) / net_in * 100, 2) if net_in > 0 else None}
 
 
-def status(name):
-    return summary(require_game(name))
+def status(pid):
+    return summary(require_game(pid))
 
 
-def history(name):
-    rows = manual_tx.manual_rows(require_game(name))
-    return {"portfolio": name,
+def history(pid):
+    rows = manual_tx.manual_rows(require_game(pid))
+    return {"portfolio": pid,
             "transactions": [trade_view(r) if r["category"] == "TRADING" else
                              {"id": r["transaction_id"].removeprefix("manual-"), "date": r["date"],
                               "side": "deposit" if num(r["amount"]) > 0 else "withdrawal",

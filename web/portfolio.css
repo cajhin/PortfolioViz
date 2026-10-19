@@ -517,6 +517,7 @@
   .configrow .muted { color: var(--text-muted); font-size: 0.82rem; }
   #configCard { display: flex; flex-direction: column; gap: 14px; }
   #configCard[hidden] { display: none; }
+  .configsep { width: 100%; margin: 0; border: none; border-top: 1px solid var(--border); }
   .configrow[hidden] { display: none; }
   #otherPortfolios > label:first-child { align-self: flex-start; }   /* beside a list, at its top */
   .proflist { display: flex; flex-direction: column; gap: 6px; }
@@ -533,6 +534,9 @@
   .txtools .importlog { align-self: stretch; }
   .txnote { margin: 6px 0 2px; font-size: 0.85rem; color: var(--text-secondary); }
   .txdel .dt-addsel { padding: 1px 10px; font-size: 0.75rem; }
+  /* the Config tab's AI checkbox and API tokens */
+  .check { display: inline-flex; align-items: center; gap: 6px; }
+  .tokensec { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; flex: 1 1 0; min-width: 0; }
   /* the Portfolioviz CSV paste: a textarea that grows with what is pasted (see csvGrow) */
   .csvform { align-items: flex-start; align-self: stretch; }
   /* a typical line is ~60 characters ("2026-06-04,Trade Republic,sell,US0378331005,…"): 72 fit it
