@@ -419,6 +419,13 @@
     <!-- settings that act on the server rather than on the view; each POSTs to start.sh, so a page
          served any other way gets an error back from it (see createPortfolio) -->
     <div class="card" id="configCard" hidden>
+      <!-- who is logged in (see server.py's /me), hidden until that is known -->
+      <form id="logoutForm" class="configrow" hidden>
+        <label>Logged in as</label>
+        <b id="userName"></b>
+        <button type="submit" class="dt-addsel">Log out</button>
+      </form>
+      <hr class="configsep" id="logoutSep" hidden>
       <!-- renames the label only; the portfolio's id, shown alongside, stays as it is -->
       <form id="portfolioLabelForm" class="configrow">
         <label for="portfolioLabel">Current portfolio</label>
@@ -453,7 +460,7 @@
       <hr class="configsep">
       <form id="newPortfolioForm" class="configrow">
         <label for="newPortfolioLabel">Create new portfolio</label>
-        <input type="text" id="newPortfolioLabel" placeholder="Label, e.g. Family Trust" required>
+        <input type="text" id="newPortfolioLabel" placeholder="a label, e.g. 'My stocks'" required>
         <select id="newPortfolioType" class="pick" aria-label="Type">
           <option value="normal">Normal</option>
           <option value="game">Game</option>
@@ -467,12 +474,6 @@
         <label>Other portfolios</label>
         <div id="otherPortfolioList" class="proflist"></div>
       </div>
-      <!-- who is logged in (see server.py's /me), hidden until that is known -->
-      <form id="logoutForm" class="configrow" hidden>
-        <label>Logged in as</label>
-        <b id="userName"></b>
-        <button type="submit" class="dt-addsel">Log out</button>
-      </form>
     </div>
     </div>
     </div>

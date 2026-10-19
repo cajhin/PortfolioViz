@@ -824,7 +824,10 @@ function renderMeta(items, closed = []) {
   applySort('tbl');
   renderClosedPositions();
 
-  renderHeaderTotals(ITEMS, CLOSED);
+  // The headline tiles are live figures — unless a range is in force on the map or pie, where they
+  // are the range's (refreshHeader, once computeAsOf has the series it needs). Drawing the live ones
+  // here as well would flash the lifetime gain under a "Gain since …" label until then.
+  if (!((AS_OF || AS_FROM) && (VIEW === 'map' || VIEW === 'pie'))) renderHeaderTotals(ITEMS, CLOSED);
 
   document.getElementById('loader').hidden = true;
   document.getElementById('app').hidden = false;
@@ -3807,6 +3810,7 @@ fetch('me', { cache: 'no-store' })
   .then(({ user, restart }) => {
     document.getElementById('userName').textContent = user;
     document.getElementById('logoutForm').hidden = false;
+    document.getElementById('logoutSep').hidden = false;
     document.getElementById('btnRestart').hidden = !restart;
   })
   .catch(() => { /* not logged in, or not server.py */ });
