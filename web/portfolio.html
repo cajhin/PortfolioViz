@@ -63,6 +63,8 @@
         <div class="updatecol">
           <select id="portfolioSel" class="pick" aria-label="Portfolio" hidden></select>
           <button type="button" id="btnUpdatePrices" class="dt-addsel">Update</button>
+          <!-- an admin's, only while the server's own code changed since it started (see /me) -->
+          <button type="button" id="btnRestart" class="dt-addsel restartbtn" hidden>Restart Server</button>
         </div>
       </div>
       <div class="tip" id="curTip"></div>
@@ -273,27 +275,21 @@
     <div class="card tablescroll" id="tradesCard" hidden>
       <!-- which of the two kinds of portfolio this is decides what else this tab offers (see
            applyPortfolioSource): a Parqet one only says where its transactions come from; a manual
-           one gets the import above the list, an Edit per row, and the add row at its foot.
+           one gets an Edit and a Verified flag per row, the add row at the list's foot, and the
+           imports below it.
            #txImport, the table and #txAdd move into #emptyPortfolio while the portfolio has nothing
            yet (showEmptyPortfolio) —
            a new portfolio's first entry is exactly when #app, and this tab with it, is hidden -->
       <div class="txnote" id="txSourceNote" hidden></div>
-      <div id="txImport" class="txtools" hidden>
-        <form id="trImportForm" class="configrow">
-          <label for="trImportFile">Import Trade Republic file</label>
-          <input type="file" id="trImportFile" accept=".csv,text/csv" required>
-          <button type="submit" class="dt-addsel">Import</button>
-          <button type="button" id="manualReload" class="dt-addsel" hidden>Reload</button>
-        </form>
-        <pre class="importlog" id="trImportLog" hidden></pre>
-      </div>
       <div class="closedhead"><b id="tradesHead"></b></div>
       <table id="tblTrades">
         <thead><tr>
           <th>Date</th><th>Depot</th><th>Position</th><th>Type</th><th>Shares</th>
           <th>Price</th>
           <th title="Where the price stands now against what this trade booked, on today's split scale. Green means the trade beat not making it: a buy whose price has risen, a sale whose price has fallen.">Now %</th>
-          <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th><th id="txDelHead" class="txdel" hidden></th>
+          <th>Amount</th><th>Net</th><th>Fee</th><th>Tax</th>
+          <th id="txVerHead" class="txver" hidden title="Imported as CSV and not yet accepted: new. Everything else: ✓">Verified</th>
+          <th id="txDelHead" class="txdel" hidden></th>
         </tr></thead>
         <tbody></tbody>
         <!-- the add row (manual portfolios only), each field under the column it fills. The fields
@@ -302,7 +298,9 @@
              priced instruments. Now % carries the price hint; Amount and Net follow the input. -->
         <tfoot id="txAddRow" hidden><tr>
           <td><input type="date" id="txDate" form="txForm" required aria-label="Date"></td>
-          <td class="muted">Manual</td>
+          <!-- a depot the portfolio already has, or any new name; "Manual" if left as it is -->
+          <td><input type="text" id="txDepot" form="txForm" list="txDepots" required maxlength="40"
+            value="Manual" aria-label="Depot" autocomplete="off"><datalist id="txDepots"></datalist></td>
           <td><select id="txIsin" class="pick" form="txForm" required aria-label="Instrument"></select></td>
           <td><select id="txType" class="pick" form="txForm" aria-label="Type">
             <option value="buy">Buy</option><option value="sell">Sell</option>
@@ -317,12 +315,41 @@
           <td id="txNet"></td>
           <td><input type="number" id="txFee" form="txForm" min="0" step="any" placeholder="Fee" aria-label="Fee"></td>
           <td></td>
+          <td class="txver"></td>
           <td class="txdel"><button type="submit" form="txForm" class="dt-addsel">Add</button></td>
         </tr></tfoot>
       </table>
       <div id="txAdd" class="txtools" hidden>
         <form id="txForm"></form>
         <div class="err" id="txMsg"></div>
+      </div>
+      <!-- the imports, at the tab's foot: a Trade Republic export, or lines pasted in the
+           Portfolioviz CSV format (scripts/import_csv.py — its docstring is the format's spec).
+           A paste lands unverified; #csvPending accepts it or rolls it back, while any is left. -->
+      <div id="txImport" class="txtools" hidden>
+        <div id="csvPending" class="configrow" hidden>
+          <label id="csvPendingText"></label>
+          <button type="button" id="csvAccept" class="dt-addsel">Accept new transactions</button>
+          <button type="button" id="csvDiscard" class="dt-addsel">Delete new transactions</button>
+        </div>
+        <form id="trImportForm" class="configrow">
+          <label for="trImportFile">Import Trade Republic file</label>
+          <input type="file" id="trImportFile" accept=".csv,text/csv" required>
+          <button type="submit" class="dt-addsel">Import</button>
+          <button type="button" id="manualReload" class="dt-addsel" hidden>Reload</button>
+        </form>
+        <pre class="importlog" id="trImportLog" hidden></pre>
+        <form id="csvImportForm" class="configrow csvform">
+          <label for="csvImportText">Import CSV (Portfolioviz format)</label>
+          <textarea id="csvImportText" rows="3" required spellcheck="false"
+            placeholder="date,depot,type,isin,shares,price,fee,tax&#10;2026-06-04,Comdirect,buy,US0378331005,35,196.50,6.80,0&#10;2026-06-19,Comdirect,sell,US0378331005,20,201.10,9.30,14.20&#10;2026-07-01,Comdirect,dividend,US0378331005,15,0.25,,0.94&#10;2026-01-15,Comdirect,deposit,,,5000,,"></textarea>
+          <button type="submit" class="dt-addsel">Import</button>
+          <div class="muted csvhelp">type: buy, sell, dividend, deposit, withdrawal · price per share
+            (a dividend: gross per share; deposit/withdrawal: the amount) · fee and tax in the portfolio
+            currency, empty if none · numbers like 1984.30. Every line is checked before anything is
+            imported; lines already in the portfolio are skipped. Imported lines stay new until accepted.</div>
+        </form>
+        <pre class="importlog" id="csvImportLog" hidden></pre>
       </div>
     </div>
 

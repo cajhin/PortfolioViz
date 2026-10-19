@@ -20,7 +20,8 @@ import db
 from import_tr import num, read_csv
 
 POSITION_FIELDS = db.POSITION_FIELDS
-ACTIVITY_FIELDS = db.ACTIVITY_FIELDS[:-1]          # Parqet's own schema has no transactionId
+# Parqet's own schema has no transactionId, and nothing to verify
+ACTIVITY_FIELDS = [f for f in db.ACTIVITY_FIELDS if f not in ("transactionId", "verified")]
 
 
 def load(path, fields):

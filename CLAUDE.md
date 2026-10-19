@@ -26,6 +26,9 @@ scripts/                every Python script; each finds the repo as its own fold
   import_tr.py            imports a Trade Republic transaction export into a manual portfolio, and
                             rebuilds a manual portfolio's positions/activities/cash from its ledger
   import_parqet.py        imports a Parqet refresh (two CSVs) into a Parqet portfolio
+  import_csv.py           imports transactions pasted in the Portfolioviz CSV format (any broker,
+                            converted by hand, script or AI) into a manual portfolio — unverified
+                            until accepted, or rolled back; its docstring is the format's spec
   manual_tx.py            adds/edits/deletes a transaction in a manual portfolio (the page's backend)
   trade.py                trades a game portfolio from the command line — live only, JSON out
   manage-portfolios.py    creates game portfolios, moves their cash, lists them, purges an obsolete
@@ -48,8 +51,10 @@ The database's tables (`scripts/schema.sql`) fall into three groups that differ 
   `ledger`, and `position`/`activity`/`cash`. A Parqet portfolio's positions and activities are
   replaced wholesale by each refresh; a manual portfolio's `ledger` is its real source — every TR
   row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
-  hand-entered or traded row (origin `manual`) — and `position`/`activity`/`cash` are rebuilt from
-  it on every change.
+  hand-entered or traded row (origin `manual`), and every row pasted as Portfolioviz CSV (origin
+  `csv`, booked in the depot it names, `verified` 0 until accepted on the page, and until then
+  deleted all at once by "Delete new transactions") — and `position`/`activity`/`cash` are rebuilt
+  from it on every change, each row carrying that `verified` flag.
 - **the registry** (CURATED) — `instrument`, `price_source`, `sector_color`, plus the global
   `setting`s. Hand- or agent-maintained, never clobbered by an import, not regenerable — losing it
   would cost real work, so back the database up.
@@ -107,15 +112,15 @@ stays shared because the price series are converted into it on write. The Update
 
 A portfolio's `type` says where its transactions come from, and nothing else may change them:
 `parqet` — refreshed by REFRESH_PARQET_DATA.md (`import_parqet.py`), never imported into otherwise;
-`manual` — fed by Trade Republic exports (`import_tr.py`) and/or buys and sells entered by hand
-(`manual_tx.py`; booked under depot "Manual", so never merged with a real position), both on the
-Transactions tab, never refreshed from Parqet; `game` — trades made with `trade.py` under
-`trading-rules.md` alone, cash moved only by `manage-portfolios.py` (see **Game portfolios**
-below). The page creates parqet and manual ones; a game starts with cash, so the command line
+`manual` — fed by Trade Republic exports (`import_tr.py`), Portfolioviz CSV pastes
+(`import_csv.py`) and/or buys and sells entered by hand (`manual_tx.py`; booked under depot
+"Manual", so never merged with a real position), all on the Transactions tab, never refreshed
+from Parqet; `game` — trades made with `trade.py` under `trading-rules.md` alone, cash moved
+only by `manage-portfolios.py` (see **Game portfolios** below). The page creates parqet and manual ones; a game starts with cash, so the command line
 does. That tab's "+ New instrument…" writes to the registry (via `add_instrument.py`), the shared
-catalog. server.py, `import_tr.py`, `manual_tx.py`, `import_parqet.py`, `trade.py` and the page all
-check the type, so `main` cannot be overwritten by a stray import, nor a game's rules bent from the
-page. The TR conversion follows Parqet's conventions and was checked against Parqet's own import of
+catalog. server.py, `import_tr.py`, `import_csv.py`, `manual_tx.py`, `import_parqet.py`, `trade.py`
+and the page all check the type, so `main` cannot be overwritten by a stray import, nor a game's
+rules bent from the page. The TR conversion follows Parqet's conventions and was checked against Parqet's own import of
 the same depot; its docstring lists them.
 
 **Users.** server.py wants a login for every route but the page's own files (no data in them) and
@@ -126,7 +131,9 @@ to one they have. Anyone who reaches the page can create a user; it sees nothing
 creates a portfolio (granted to its creator) or is granted one — `scripts/manage-users.py grant`,
 which is also how every portfolio made by a script gets an owner. Update fetches one granted
 portfolio's instruments, never the whole registry; registering an instrument takes write access to
-some portfolio. The Config tab lists the user's other portfolios and deletes one they may change —
+some portfolio. An admin — a user named in the global `admins` setting (a list; never sent to
+the page) — gets a red "Restart Server" button under Update whenever server.py or a module it
+imports changed on disk since it started; the server then replaces itself in place. The Config tab lists the user's other portfolios and deletes one they may change —
 `manage-portfolios.py purge`, with no backup. These tables (`user`, `user_portfolio`, `session`) are a
 fourth lifecycle — people, neither a portfolio's own nor the registry — and an older database gets
 them like any other schema change (below). It is for convenience and keeping people apart, not

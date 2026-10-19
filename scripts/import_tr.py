@@ -13,8 +13,9 @@ with a `transaction_id`. Every row ever imported is kept, untouched, in the data
 ranges overlap, adds only the rows not seen before. What the page reads — the portfolio's
 positions, activities and cash — is then rebuilt from the whole ledger on every run, in exactly
 the schema REFRESH_PARQET_DATA.md imports from Parqet. Rows entered by hand (manual_tx.py — a
-virtual demo portfolio, say) are in the same ledger (origin 'manual'), in the same TR row format,
-and the rebuild reads both. Positions, activities and cash are output, never input: a fix to the
+virtual demo portfolio, say) are in the same ledger (origin 'manual'), and so are rows pasted in
+the Portfolioviz CSV format (import_csv.py, origin 'csv'), all in the same TR row format, and the
+rebuild reads them all. Positions, activities and cash are output, never input: a fix to the
 conversion below is applied by re-running this, not by repairing data.
 
 The conventions are Parqet's, matched against Parqet's own import of the same depot:
@@ -44,6 +45,11 @@ import db
 
 DEPOT = "Trade Republic"
 MANUAL_DEPOT = "Manual"                  # where hand-entered rows (account_type MANUAL) book
+
+
+def depot_of(t):
+    """A ledger row's depot: its own, if it names one (a pasted row does), else by where it came from."""
+    return t.get("depot") or (MANUAL_DEPOT if t.get("account_type") == "MANUAL" else DEPOT)
 REQUIRED = {"transaction_id", "datetime", "date", "category", "type", "asset_class", "name",
             "symbol", "shares", "price", "amount", "fee", "tax", "currency"}
 
@@ -73,7 +79,7 @@ def cash_rows(ledger):
         if abs(delta) < 0.005:
             continue
         kind = "income" if t["type"] in DIVIDEND_TYPES else CASH_KIND.get(t["type"], "other")
-        out.append({"depot": MANUAL_DEPOT if t.get("account_type") == "MANUAL" else DEPOT,
+        out.append({"depot": depot_of(t),
                     "datetime": t["datetime"], "date": t["date"], "kind": kind,
                     "amount": fmt(delta, 2), "transactionId": t["transaction_id"]})
     return out
@@ -137,8 +143,8 @@ def convert(ledger):
     """Ledger rows → (activities, positions, notes). Walks each position's history once, FIFO.
 
     A position is (depot, ISIN), as on the page: TR rows book under "Trade Republic", rows
-    entered by hand under "Manual" — so a virtual position never mixes with a real one in the
-    same instrument."""
+    entered by hand under "Manual", pasted rows under the depot they name — so a virtual position
+    never mixes with a real one in the same instrument."""
     registry = registry_names()
     names = {}                                  # ISIN → the name to print, registry first
     activities, notes = [], defaultdict(int)
@@ -183,7 +189,7 @@ def convert(ledger):
 
     for t in ledger:
         kind, isin = t["type"], t["symbol"]
-        k = (MANUAL_DEPOT if t.get("account_type") == "MANUAL" else DEPOT, isin)
+        k = (depot_of(t), isin)
         if isin:
             names.setdefault(isin, (registry.get(isin) or {}).get("name") or t["name"])
         if kind == "BUY":
@@ -279,23 +285,51 @@ def require_manual(portfolio, types=("manual",)):
     return portfolio
 
 
+HOLDING = ("BUY", "SELL", "SPLIT", "WARRANT_EXERCISE")    # the types that change shares held
+
+
+def short_at(rows, depot, isin):
+    """The first of these ledger rows (oldest first) at which the depot's holding of `isin` goes
+    below zero, or None."""
+    held = 0.0
+    for t in rows:
+        if t["symbol"] == isin and depot_of(t) == depot and t["type"] in HOLDING:
+            held += num(t["shares"])
+            if held < -1e-6:
+                return t
+    return None
+
+
+def active_ledger(portfolio):
+    """Every row the portfolio's positions are built from, oldest first: the TR and pasted imports
+    (less the rows deleted on the page) and the hand-entered rows."""
+    rows = db.ledger(portfolio, "tr", deleted=False) + db.ledger(portfolio, "csv", deleted=False) \
+        + db.ledger(portfolio, "manual")
+    return sorted(rows, key=lambda r: (r["datetime"], r["transaction_id"]))
+
+
 def rebuild(portfolio):
-    """Positions, activities and cash from both ledgers — the TR imports (less the rows deleted on
-    the page) and the hand-entered rows (manual_tx.py), which share one row format and so one
-    conversion. One transaction: the page never sees half of a rebuild."""
-    tr_rows = db.ledger(portfolio, "tr", deleted=False)
-    manual = db.ledger(portfolio, "manual")
-    ledger = sorted(tr_rows + manual, key=lambda r: (r["datetime"], r["transaction_id"]))
+    """Positions, activities and cash from the ledgers — the TR imports, the pasted rows
+    (import_csv.py) and the hand-entered ones (manual_tx.py), less the rows deleted on the page —
+    which share one row format and so one conversion. Each activity and cash booking says whether
+    its row is verified: only a pasted one not yet accepted is not. One transaction: the page
+    never sees half of a rebuild."""
+    ledger = active_ledger(portfolio)
     activities, positions, notes = convert(ledger)
     cash = cash_rows(ledger)
+    new = db.unverified(portfolio)
+    for r in activities + cash:
+        r["verified"] = "0" if r["transactionId"] in new else "1"
     with db.tx():
         db.replace_portfolio_rows(portfolio, "activity", activities)
         db.replace_portfolio_rows(portfolio, "position", positions)
         db.replace_portfolio_rows(portfolio, "cash", cash)
 
     open_n = sum(1 for p in positions if p["isSold"] == "0")
-    print(f"{portfolio}: {len(tr_rows)} imported + {len(manual)} hand-entered rows → "
-          f"{len(activities)} activities, {open_n} open and {len(positions) - open_n} closed positions")
+    hand = sum(1 for r in ledger if r.get("account_type") == "MANUAL")
+    print(f"{portfolio}: {len(ledger) - hand} imported + {hand} hand-entered rows → "
+          f"{len(activities)} activities, {open_n} open and {len(positions) - open_n} closed positions"
+          + (f" ({len(new)} new, not yet accepted)" if new else ""))
     for note, n in sorted(notes.items()):
         print(f"  {note}" + (f" (×{n})" if n > 1 else ""))
     for depot in sorted({c["depot"] for c in cash}):

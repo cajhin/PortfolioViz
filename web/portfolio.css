@@ -168,7 +168,8 @@
                text-align: right; align-self: flex-end; padding-bottom: 4px; margin-left: auto; }
   /* the portfolio picker over the Update button, one column, both the same width */
   .updatecol { align-self: flex-end; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
-  .updatecol select[hidden] { display: none; }
+  .updatecol select[hidden], .updatecol button[hidden] { display: none; }
+  .dt-addsel.restartbtn, .dt-addsel.restartbtn:hover { color: #fff; background: var(--loss); border-color: var(--loss); }
 
   .chartwrap { position: relative; overflow: visible; }
   .chartbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin: -4px 0 4px; }
@@ -532,11 +533,24 @@
   .txtools .importlog { align-self: stretch; }
   .txnote { margin: 6px 0 2px; font-size: 0.85rem; color: var(--text-secondary); }
   .txdel .dt-addsel { padding: 1px 10px; font-size: 0.75rem; }
+  /* the Portfolioviz CSV paste: a textarea that grows with what is pasted (see csvGrow) */
+  .csvform { align-items: flex-start; align-self: stretch; }
+  /* a typical line is ~60 characters ("2026-06-04,Trade Republic,sell,US0378331005,…"): 72 fit it
+     with room to spare, in the textarea's own monospace */
+  .csvform textarea { flex: 0 1 72ch; width: 72ch; max-width: 100%; min-width: 0; min-height: 4.5em; max-height: 60vh; resize: vertical;
+                      font: 0.8rem/1.4 ui-monospace, Menlo, monospace; padding: 6px 8px; color: var(--text-primary);
+                      background: transparent; border: 1px solid var(--border); border-radius: 6px; }
+  .csvform .csvhelp { flex: 1 1 100%; font-size: 0.78rem; color: var(--text-muted); }
+  .txver { text-align: center; }
+  td.txver { color: var(--text-muted); }
+  td.txver.new { color: var(--series-3); font-weight: 600; }
+  tr.unverified td { background: color-mix(in srgb, var(--series-3) 10%, transparent); }
   /* the add row at the list's foot: compact fields, sized to sit in the columns above */
   #txAddRow td { border-top: 2px solid var(--border); border-bottom: none; padding: 7px 4px; }
   #txAddRow input { font: inherit; font-size: 0.82rem; color: var(--text-primary); background: transparent;
                     border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
   #txAddRow input[type="number"] { width: 6.5em; text-align: right; }
+  #txDepot { width: 8.5em; }
   #txAddRow .pick { padding-top: 3px; padding-bottom: 3px; }
   #txIsin { max-width: 15em; }
   #txAddRow :disabled { opacity: 0.35; }

@@ -99,13 +99,16 @@ CREATE TABLE IF NOT EXISTS portfolio (
 
 -- A manual portfolio's source of truth: every Trade Republic row imported (origin 'tr', kept even
 -- when deleted on the page, so a re-import does not revive it) and every hand-entered or traded
--- row (origin 'manual'). `data` is the row as JSON, every column of the export kept.
+-- row (origin 'manual'), and every row pasted in the Portfolioviz CSV format (origin 'csv',
+-- import_csv.py). `data` is the row as JSON, every column of the export kept. A pasted row starts
+-- unverified (`verified` 0) until accepted on the page, and until then can be rolled back.
 CREATE TABLE IF NOT EXISTS ledger (
   portfolio      TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
   transaction_id TEXT NOT NULL,
-  origin         TEXT NOT NULL CHECK (origin IN ('tr', 'manual')),
+  origin         TEXT NOT NULL CHECK (origin IN ('tr', 'manual', 'csv')),
   datetime       TEXT NOT NULL,
   deleted        INTEGER NOT NULL DEFAULT 0,
+  verified       INTEGER NOT NULL DEFAULT 1,
   data           TEXT NOT NULL,
   PRIMARY KEY (portfolio, transaction_id)
 );
@@ -124,14 +127,14 @@ CREATE TABLE IF NOT EXISTS activity (
   portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
   depot TEXT, name TEXT, identifier TEXT, type TEXT, datetime TEXT, shares TEXT, price TEXT,
   amount TEXT, amountNet TEXT, fee TEXT, tax TEXT, realizedGains TEXT, realizedGainsNet TEXT,
-  currency TEXT, transactionId TEXT
+  currency TEXT, transactionId TEXT, verified TEXT
 );
 CREATE INDEX IF NOT EXISTS activity_portfolio ON activity (portfolio);
 
 -- each booking's effect on its depot's cash (manual portfolios only)
 CREATE TABLE IF NOT EXISTS cash (
   portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE,
-  depot TEXT, datetime TEXT, date TEXT, kind TEXT, amount TEXT, transactionId TEXT
+  depot TEXT, datetime TEXT, date TEXT, kind TEXT, amount TEXT, transactionId TEXT, verified TEXT
 );
 CREATE INDEX IF NOT EXISTS cash_portfolio ON cash (portfolio);
 

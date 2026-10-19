@@ -921,15 +921,23 @@ function renderTrades() {
   // money in, out and interest are listed among the trades, shaped like an activity row
   const cashRows = CASH.filter(c => CASH_LISTED.has(c.kind)).map(c => ({
     depot: c.depot, name: '', type: c.kind, datetime: c.datetime, shares: '', price: '',
-    amount: c.amount, amountNet: c.amount, fee: 0, tax: 0, transactionId: c.transactionId, cash: true }));
+    amount: c.amount, amountNet: c.amount, fee: 0, tax: 0, transactionId: c.transactionId,
+    verified: c.verified, cash: true }));
   const rows = [...TRADES, ...cashRows].sort((a, b) => a.datetime < b.datetime ? 1 : -1);   // newest first
   const feesTotal = TRADES.reduce((t, r) => t + num(r.fee), 0);
   document.getElementById('tradesHead').textContent =
     `${TRADES.length} Trades (${fmtMoney(feesTotal)} Fees)` +
     (cashRows.length ? ` · ${cashRows.length} cash bookings` : '');
-  // a manual portfolio's rows each name the ledger row they came from, and can be edited by it
+  // a manual portfolio's rows each name the ledger row they came from, and can be edited by it;
+  // each says whether it is verified — only a pasted CSV row not yet accepted is not ("0")
   const deletable = PORTFOLIO_TYPE === 'manual';
   document.getElementById('txDelHead').hidden = !deletable;
+  document.getElementById('txVerHead').hidden = !deletable;
+  const isNew = t => t.verified === '0';
+  const fresh = rows.filter(isNew).length;
+  document.getElementById('csvPending').hidden = !(deletable && fresh);
+  document.getElementById('csvPendingText').textContent =
+    `${fresh} new transaction${fresh === 1 ? '' : 's'}, not yet verified`;
   const tb = document.querySelector('#tblTrades tbody');
   tb.replaceChildren(...rows.map(t => {
     const tr = document.createElement('tr');
@@ -946,6 +954,8 @@ function renderTrades() {
       `<td>${num(t.fee) > 0.005 ? fmtMoney2(num(t.fee)) : '–'}</td>` +
       `<td>${num(t.tax) > 0.005 ? fmtMoney2(num(t.tax)) : '–'}</td>`;
     if (deletable) {
+      tr.classList.toggle('unverified', isNew(t));
+      tr.insertAdjacentHTML('beforeend', isNew(t) ? '<td class="txver new">new</td>' : '<td class="txver">✓</td>');
       const td = document.createElement('td');
       td.className = 'txdel';
       if (t.transactionId) {
@@ -3587,7 +3597,7 @@ function renderPortfolioPicker() {
 let PORTFOLIO_TYPE = null;
 const TYPE_TEXT = {
   manual: { note: '', tag: '· manual — transactions entered or imported here',
-            how: 'Import a Trade Republic transaction export, or add transactions by hand, below.' },
+            how: 'Add transactions by hand, import a Trade Republic export, or paste them as CSV, below.' },
   parqet: { note: label => `All ${label} transactions are imported from Parqet. Create a 'manual' ` +
                            'portfolio to edit transactions or import Trade Republic exports.',
             tag: '· controlled by Parqet — no manual changes',
@@ -3670,11 +3680,36 @@ const routeFailure = r => r.status === 404 ? STALE_MSG : r.status === 401 ? 'Log
 // logins (the regression check) there is nobody, and the row stays hidden.
 fetch('me', { cache: 'no-store' })
   .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-  .then(({ user }) => {
+  .then(({ user, restart }) => {
     document.getElementById('userName').textContent = user;
     document.getElementById('logoutForm').hidden = false;
+    document.getElementById('btnRestart').hidden = !restart;
   })
   .catch(() => { /* not logged in, or not server.py */ });
+
+// "Restart Server": shown to an admin while the server runs older code than is on disk (/me's
+// restart). The server answers, then replaces itself; the page waits until it answers again —
+// with its new code, so restart is false — and reloads.
+document.getElementById('btnRestart').addEventListener('click', async e => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  btn.textContent = 'Restarting…';
+  try {
+    const r = await fetch('restart', { method: 'POST' });
+    const text = (await r.text()).trim();
+    if (!r.ok) throw new Error(text && !text.startsWith('<') ? text : routeFailure(r));
+    for (let i = 0; i < 40; i++) {
+      await new Promise(done => setTimeout(done, 500));
+      const me = await fetch('me', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null);
+      if (me && !me.restart) { location.reload(); return; }
+    }
+    throw new Error('the server did not come back within 20 s — see its terminal');
+  } catch (err) {
+    reportError('restart server', err);
+    btn.disabled = false;
+    btn.textContent = 'Restart Server';
+  }
+});
 document.getElementById('logoutForm').addEventListener('submit', async e => {
   e.preventDefault();
   await fetch('logout', { method: 'POST' }).catch(() => {});
@@ -3755,10 +3790,10 @@ function showEmptyPortfolio() {
   if (!PORTFOLIO_TYPE) document.getElementById('emptyPortfolioHow').textContent = 'Fill it, then reload.';
   const slot = document.getElementById('emptyPortfolioSlot');
   slot.appendChild(document.getElementById('portfolioSel'));
-  slot.appendChild(document.getElementById('txImport'));
   // the list itself, empty: its header and add row are how the first transaction gets in
   slot.appendChild(document.getElementById('tblTrades'));
   slot.appendChild(document.getElementById('txAdd'));
+  slot.appendChild(document.getElementById('txImport'));
   refreshManualTools();
   document.getElementById('emptyPortfolio').hidden = false;
 }
@@ -3791,6 +3826,55 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
 });
 document.getElementById('manualReload').addEventListener('click', () => reloadOnTransactions());
 
+// The Transactions tab's "Import CSV (Portfolioviz format)": the pasted lines go to server.py's
+// /import-csv route, which runs import_csv.py on them — all checked first, nothing imported on any
+// problem, duplicates skipped. Its report is shown as-is; whatever it imported is new (unverified)
+// until #csvPending accepts it or deletes it again. The textarea grows with what is pasted.
+const csvText = document.getElementById('csvImportText');
+function csvGrow() {
+  csvText.style.height = 'auto';
+  csvText.style.height = `${csvText.scrollHeight + 2}px`;
+}
+csvText.addEventListener('input', csvGrow);
+async function postImportCsv(query, body, log, btn) {
+  btn.disabled = true;
+  log.hidden = false;
+  log.textContent = 'Working…';
+  try {
+    const r = await fetch(`import-csv?portfolio=${encodeURIComponent(PORTFOLIO)}${query}`,
+                          { method: 'POST', headers: { 'Content-Type': 'text/csv; charset=utf-8' }, body });
+    const text = (await r.text()).trim();
+    log.textContent = r.ok || !text.startsWith('<') ? text : routeFailure(r);
+    return r.ok;
+  } catch (err) {
+    log.textContent = `Import failed: ${err.message}`;
+    return false;
+  } finally {
+    btn.disabled = false;
+  }
+}
+document.getElementById('csvImportForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = e.submitter || e.target.querySelector('button[type="submit"]');
+  const log = document.getElementById('csvImportLog');
+  if (await postImportCsv('', csvText.value, log, btn) && !/\b0 new\b/.test(log.textContent)) {
+    csvText.value = '';
+    csvGrow();
+    document.getElementById('manualReload').hidden = false;
+  }
+});
+// accept: the new rows become ordinary transactions; delete: every row not yet accepted is gone —
+// the rollback of a bad paste, so it asks first. Either reloads, so the list shows it.
+async function settleCsv(action, btn) {
+  const log = document.getElementById('csvImportLog');
+  if (await postImportCsv(`&action=${action}`, '', log, btn)) reloadOnTransactions();
+}
+document.getElementById('csvAccept').addEventListener('click', e => settleCsv('accept', e.currentTarget));
+document.getElementById('csvDiscard').addEventListener('click', e => {
+  if (confirm(`${document.getElementById('csvPendingText').textContent}: delete them all? ` +
+              'Accepted transactions are not touched.')) settleCsv('discard', e.currentTarget);
+});
+
 // Every change to a manual portfolio rebuilds its CSVs on the server, and a reload is what brings
 // them in (the same as after Update) — back onto this tab, so the list shows the change at once.
 function reloadOnTransactions() {
@@ -3811,7 +3895,7 @@ function reloadOnTransactions() {
 // applyPortfolioType) and the registry (from ingest). Either can land first, so both call this and
 // it simply waits for the other.
 const NEW_INSTRUMENT = '+new';            // not an ISIN, so never confused with one
-const TX_FORM_KEY = 'portfolioviz.txForm';   // date and type, kept across the reload an add causes
+const TX_FORM_KEY = 'portfolioviz.txForm';   // date, type and depot, kept across the reload an add causes
 let TX_ISIN_PREV = '';
 function txOption(inst) {
   const o = document.createElement('option');
@@ -3841,12 +3925,18 @@ function refreshManualTools() {
   document.getElementById('txPrice').title = `Price per share in ${CCY}`;
   document.getElementById('txFee').placeholder = `Fee (${CCY})`;
   document.getElementById('txCashAmount').placeholder = `Amount (${CCY})`;
+  // the depots offered: every one the portfolio's transactions and cash name, and "Manual" — the
+  // field takes any other name too, for a depot with nothing in it yet
+  const depots = new Set(['Manual', ...TRADES.map(t => t.depot), ...CASH.map(c => c.depot)].filter(Boolean));
+  document.getElementById('txDepots').replaceChildren(...[...depots].sort().map(name =>
+    Object.assign(document.createElement('option'), { value: name })));
   const day = document.getElementById('txDate');
   day.max = TODAY;
   let kept = {};
   try { kept = JSON.parse(sessionStorage.getItem(TX_FORM_KEY) || '{}'); } catch { /* none */ }
   day.value = kept.date || TODAY;
   if (kept.type) document.getElementById('txType').value = kept.type;
+  if (kept.depot) document.getElementById('txDepot').value = kept.depot;
   TX_ISIN_PREV = '';
   txCashMode();
 }
@@ -3925,11 +4015,12 @@ document.getElementById('txForm').addEventListener('submit', e => {
   const val = id => document.getElementById(id).value;
   if (!isCashType() && val('txIsin') === NEW_INSTRUMENT) return;
   try {
-    sessionStorage.setItem(TX_FORM_KEY, JSON.stringify({ date: val('txDate'), type: val('txType') }));
+    sessionStorage.setItem(TX_FORM_KEY, JSON.stringify({ date: val('txDate'), type: val('txType'),
+                                                         depot: val('txDepot') }));
   } catch { /* the form just starts fresh after the reload */ }
   postManualTx('', isCashType()
-    ? { date: val('txDate'), type: val('txType'), amount: val('txCashAmount') }
-    : { date: val('txDate'), isin: val('txIsin'), type: val('txType'),
+    ? { date: val('txDate'), depot: val('txDepot'), type: val('txType'), amount: val('txCashAmount') }
+    : { date: val('txDate'), depot: val('txDepot'), isin: val('txIsin'), type: val('txType'),
         shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
 });
 

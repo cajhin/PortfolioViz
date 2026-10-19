@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Enter buys and sells by hand into a manual portfolio — a virtual demo portfolio, say.
 
-    python3 scripts/manual_tx.py <portfolio> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>]
+    python3 scripts/manual_tx.py <portfolio> add <YYYY-MM-DD> <id> buy|sell <shares> <price> [<fee>] [--depot D]
     python3 scripts/manual_tx.py <portfolio> edit <transaction_id> <YYYY-MM-DD> buy|sell <shares> <price> [<fee>]
     python3 scripts/manual_tx.py <portfolio> delete <transaction_id>
-    python3 scripts/manual_tx.py <portfolio> cash <YYYY-MM-DD> deposit|withdrawal <amount>
+    python3 scripts/manual_tx.py <portfolio> cash <YYYY-MM-DD> deposit|withdrawal <amount> [--depot D]
     python3 scripts/manual_tx.py <portfolio> edit-cash <transaction_id> <YYYY-MM-DD> deposit|withdrawal <amount>
 
 Rows go to the portfolio's ledger (origin 'manual') in the same format as a Trade Republic export
 row, so import_tr.py's one conversion turns both ledgers into the portfolio's positions,
 activities and cash — which every change here rebuilds, in the same transaction. Prices are per share in the portfolio
 currency, the fee is on top (a buy costs shares × price + fee, a sale brings shares × price − fee).
+A row books under depot "Manual" unless --depot names another — the depot a real trade was made
+in, say, entered by hand rather than imported; an edit keeps the row's depot.
 
 The instrument must be in the registry: a virtual position is only worth tracking if
-it has a price series to track it by. No change — add, edit or delete — may leave the holding
+it has a price series to track it by. No change — add, edit or delete — may leave the depot's holding
 short at any point in its history. Cash, on the other hand, may go negative: a buy is never
 refused for want of a deposit, the balance just shows what was overspent.
 """
@@ -21,25 +23,36 @@ import sys, uuid
 from datetime import date, datetime, timedelta
 
 import db
-from import_tr import num, rebuild, registry_names, require_manual
+from import_tr import MANUAL_DEPOT, depot_of, num, rebuild, registry_names, require_manual, short_at
 
 FIELDS = ["datetime", "date", "account_type", "category", "type", "asset_class", "name", "symbol",
           "shares", "price", "amount", "fee", "tax", "currency", "original_amount",
           "original_currency", "fx_rate", "description", "transaction_id"]
 
 
-def never_short(rows, isin):
-    """Exit unless the "Manual" depot's holding of `isin` stays at or above zero throughout.
+def never_short(portfolio, rows, isin, depot):
+    """Exit unless the depot's holding of `isin` stays at or above zero throughout — with the
+    hand-entered rows as they would now stand (`rows`), and the imported ones the depot also has
+    (a hand-entered sale from a depot that imports cover). Replaying the whole history, not just
+    the date of the change, is what catches a buy edited down — or deleted — under a later sale."""
+    every = db.ledger(portfolio, "tr", deleted=False) + db.ledger(portfolio, "csv", deleted=False) + rows
+    r = short_at(sorted(every, key=lambda t: (t["datetime"], t["transaction_id"])), depot, isin)
+    if r:
+        sys.exit(f"that would sell more {isin} than {depot} holds on {r['date']}")
 
-    Hand-entered rows alone: that is where a hand-entered sale books, and shares imported from TR
-    sit in a depot of their own and cannot cover it. Replaying the whole history, not just the
-    date of the change, is what catches a buy edited down — or deleted — under a later sale."""
-    held = 0.0
-    for r in sorted((r for r in rows if r["symbol"] == isin), key=lambda r: r["datetime"]):
-        held += num(r["shares"])
-        if held < -1e-9:
-            sys.exit(f"that would sell more than is held on {r['date']} "
-                     f"({-num(r['shares']):g} sold, only {held - num(r['shares']):g} held)")
+
+def checked_depot(depot):
+    depot = " ".join((depot or "").split())
+    if not depot or len(depot) > 40:
+        sys.exit("the depot needs a name, of at most 40 characters")
+    return depot
+
+
+def booked_in(row, depot):
+    """The row, booked under `depot` — "Manual" is a hand-entered row's own and needs no saying."""
+    if depot != MANUAL_DEPOT:
+        row["depot"] = depot
+    return row
 
 
 def make_row(rows, day, isin, kind, shares, price, fee, tid=None, keep_at=None):
@@ -99,9 +112,9 @@ def make_cash_row(rows, day, kind, amount, tid=None, keep_at=None):
             "transaction_id": tid or f"manual-{uuid.uuid4()}"}
 
 
-def cash(portfolio, day, kind, amount):
+def cash(portfolio, day, kind, amount, depot=MANUAL_DEPOT):
     rows = manual_rows(portfolio)
-    rows.append(make_cash_row(rows, day, kind, amount))
+    rows.append(booked_in(make_cash_row(rows, day, kind, amount), checked_depot(depot)))
     save(portfolio, rows)
     print(f"added: {day} {kind} {num(amount):g}")
 
@@ -112,8 +125,9 @@ def edit_cash(portfolio, tid, day, kind, amount):
     if not old:
         sys.exit("only deposits and withdrawals entered by hand can be edited this way")
     rest = [r for r in rows if r is not old]
-    rest.append(make_cash_row(rest, day, kind, amount, tid=tid,
-                              keep_at=old["datetime"] if old["date"] == day else None))
+    rest.append(booked_in(make_cash_row(rest, day, kind, amount, tid=tid,
+                                        keep_at=old["datetime"] if old["date"] == day else None),
+                          depot_of(old)))
     save(portfolio, rest)
     print(f"edited: {day} {kind} {num(amount):g}")
 
@@ -128,11 +142,12 @@ def save(portfolio, rows):
     db.replace_ledger(portfolio, "manual", sorted(rows, key=lambda r: r["datetime"]))
 
 
-def add(portfolio, day, isin, kind, shares, price, fee):
+def add(portfolio, day, isin, kind, shares, price, fee, depot=MANUAL_DEPOT):
     rows = manual_rows(portfolio)
+    depot = checked_depot(depot)
     row, inst = make_row(rows, day, isin, kind, shares, price, fee)
-    rows.append(row)
-    never_short(rows, isin)
+    rows.append(booked_in(row, depot))
+    never_short(portfolio, rows, isin, depot)
     save(portfolio, rows)
     print(f"added: {day} {kind} {num(shares):g} × {inst.get('display') or isin} at {num(price):g}"
           + (f" + fee {num(fee):g}" if num(fee) else ""))
@@ -148,8 +163,8 @@ def edit(portfolio, tid, day, kind, shares, price, fee):
     rest = [r for r in rows if r is not old]
     row, inst = make_row(rest, day, old["symbol"], kind, shares, price, fee, tid=tid,
                          keep_at=old["datetime"] if old["date"] == day else None)
-    rest.append(row)
-    never_short(rest, old["symbol"])
+    rest.append(booked_in(row, depot_of(old)))
+    never_short(portfolio, rest, old["symbol"], depot_of(old))
     save(portfolio, rest)
     print(f"edited: {day} {kind} {num(shares):g} × {inst.get('display') or old['symbol']} at {num(price):g}"
           + (f" + fee {num(fee):g}" if num(fee) else ""))
@@ -163,7 +178,8 @@ def delete(portfolio, tid):
     keep = [r for r in rows if r["transaction_id"] != tid]
     if len(keep) < len(rows):
         gone = next(r for r in rows if r["transaction_id"] == tid)
-        never_short(keep, gone["symbol"])          # a buy that a later sale still needs stays
+        if gone["symbol"]:                         # a buy that a later sale still needs stays
+            never_short(portfolio, keep, gone["symbol"], depot_of(gone))
         save(portfolio, keep)
         print(f"deleted {tid}")
         return
@@ -175,16 +191,23 @@ def delete(portfolio, tid):
 
 def main():
     args = sys.argv[1:]
+    depot = {}
+    if "--depot" in args:
+        i = args.index("--depot")
+        if i + 1 >= len(args):
+            sys.exit("--depot needs a name")
+        depot = {"depot": args[i + 1]}
+        del args[i:i + 2]
     commands = {("add", 7): add, ("add", 8): add, ("edit", 7): edit, ("edit", 8): edit,
                 ("cash", 5): cash, ("edit-cash", 6): edit_cash, ("delete", 3): delete}
     fn = commands.get((args[1], len(args))) if len(args) >= 2 else None
-    if not fn:
+    if not fn or (depot and fn not in (add, cash)):
         sys.exit(__doc__.strip().split("\n\n")[1])
     rest = args[2:] + (["0"] if fn in (add, edit) and len(args) == 7 else [])   # no fee given
     # the change and the rebuild it causes land together, or (on any refusal) not at all
     with db.tx():
         portfolio = require_manual(args[0])
-        fn(portfolio, *rest)
+        fn(portfolio, *rest, **depot)
         rebuild(portfolio)
 
 

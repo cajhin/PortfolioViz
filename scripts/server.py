@@ -12,8 +12,8 @@ session cookie, see USERS below — and a user sees and changes only the portfol
 That is for convenience and to keep people apart, not hardened security: a script run on this
 machine needs no login at all.
 """
-import functools, http.cookies, http.server, json, os, re, socket, sqlite3, subprocess, sys, tempfile
-import urllib.parse, urllib.request
+import functools, http.cookies, http.server, json, os, py_compile, re, socket, sqlite3, subprocess, sys
+import tempfile, threading, urllib.parse, urllib.request
 
 import api
 import db
@@ -27,7 +27,12 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # POST /login {user, password}, POST /register {user, password}, POST /logout — login.html's.
 # Register is open to anyone who reaches the page: the new user sees nothing until they create a
 # portfolio (or are granted one with scripts/manage-users.py). Both answer with the session cookie.
-# GET /me — {user}, who is logged in.
+# GET /me — {user, admin, restart}: who is logged in, whether they are an admin (the global
+# `admins` setting, a list of user names — never sent to the page with the other settings), and,
+# for an admin, whether this server's code changed on disk since it started (see RESTART).
+# POST /restart — an admin's "Restart server": the server replaces itself (same process, port and
+# terminal) with a fresh copy of its code, after checking that code compiles; else 500, and the
+# running one stays.
 #
 # POST /update-prices?portfolio=NAME — the page's "Update prices" button, instead of you running
 # update_prices.py by hand. Runs it with just --portfolio — the instruments that portfolio holds,
@@ -63,8 +68,14 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # after it — the export stays on the user's disk, its rows in the database.
 # Manual portfolios only — any other gets a 403 before anything is written.
 #
-# POST /manual-tx?portfolio=NAME {date, isin, type, shares, price, fee} — the Config tab's "Add
-# transaction", for building a virtual demo portfolio by hand; with &edit=ID, rewrites that
+# POST /import-csv?portfolio=NAME — the Transactions tab's "Import CSV (Portfolioviz format)": the
+# body is the pasted text, which import_csv.py checks whole (any problem: nothing imported, every
+# problem listed), skipping duplicates. Its rows land unverified. With &action=accept they are
+# accepted, with &action=discard all rows not yet accepted are deleted again — the rollback.
+# Manual portfolios only, like the import above.
+#
+# POST /manual-tx?portfolio=NAME {date, depot, isin, type, shares, price, fee} — the Config tab's
+# "Add transaction", for building a virtual demo portfolio by hand (depot "Manual" if none named); with &edit=ID, rewrites that
 # hand-entered row (same body, instrument ignored); with &delete=ID, removes one. A body of
 # {date, type: deposit|withdrawal, amount} books cash instead. Both run manual_tx.py, which
 # validates, writes the ledger and rebuilds the portfolio.
@@ -88,6 +99,30 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 #
 
 PORTFOLIO_NAME = re.compile(r"^[A-Za-z0-9_-]+$")   # a directory name, never a path
+
+# RESTART. The routes that run a script get its current code every time; this server's own code —
+# itself and what it imports from scripts/ (api.py, db.py) — is what it read when it started. A
+# change to one of those needs a restart, which an admin can do from the page (/restart).
+LOADED = {f: os.path.getmtime(f) for f in
+          {os.path.abspath(getattr(m, "__file__", None) or "") for m in list(sys.modules.values())}
+          | {os.path.abspath(__file__)}
+          if os.path.dirname(f) == SCRIPTS and f.endswith(".py")}
+
+
+def code_changed():
+    return any(not os.path.exists(f) or os.path.getmtime(f) != t for f, t in LOADED.items())
+
+
+def is_admin(user):
+    return user in (db.settings("").get("admins") or [])
+
+
+def restart():
+    """This process, replaced by a fresh one of the same command line — the listening socket closes
+    with it (it is not inherited), and the new one binds the same port again."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 # A portfolio's type says where its transactions come from: parqet (REFRESH_PARQET_DATA.md imports
 # its positions and activities), manual (imports and hand entries on the page) or game (trade.py
@@ -121,6 +156,21 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             super().finish()
         finally:
             db.close()
+
+    # The page's own files carry only Last-Modified, which lets a browser guess they are still fresh
+    # and reuse an old portfolio.html with a new portfolio.view.js — whose elements it then lacks.
+    # "no-cache" makes it ask every time (an unchanged file is a cheap 304), unless a route has said
+    # otherwise.
+    def send_header(self, keyword, value):
+        if keyword.lower() == "cache-control":
+            self._cache_control = True
+        super().send_header(keyword, value)
+
+    def end_headers(self):
+        if not getattr(self, "_cache_control", False):
+            super().send_header("Cache-Control", "no-cache")
+        self._cache_control = False
+        super().end_headers()
 
     def handle_error(self, request, client_address):
         # A client that vanished mid-response (tab closed, laptop slept/resumed) shows up here
@@ -271,6 +321,12 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/import-tr":
             self.import_tr(urllib.parse.parse_qs(parsed.query))
             return
+        if parsed.path == "/import-csv":
+            self.import_csv(urllib.parse.parse_qs(parsed.query))
+            return
+        if parsed.path == "/restart":
+            self.restart()
+            return
         if parsed.path != "/update-prices":
             self.send_error(404)
             return
@@ -315,6 +371,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         status, ctype, text = api.get(self.path)
         if url.path == "/api/config" and status == 200:
             cfg = json.loads(text)
+            cfg.pop("admins", None)                 # who the admins are is not the page's business
             mine = [p["name"] for p in db.user_portfolios(self.user)]
             if cfg.get("defaultPortfolio") not in mine:
                 cfg.pop("defaultPortfolio", None)
@@ -400,6 +457,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                          + [str(tx.get("fee") or 0)]
                 # an edit keeps its instrument: the id names the row, the rest is what it becomes
                 args = ["edit", edit] + fields[:1] + fields[2:] if edit else ["add"] + fields
+            # a new row books in the depot named (else "Manual"); an edit keeps its own
+            if tx.get("depot") and not edit:
+                args += ["--depot", str(tx["depot"])]
         proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manual_tx.py"), portfolio] + args,
                               capture_output=True, text=True, timeout=60)
         self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
@@ -440,6 +500,41 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def restart(self):
+        if not is_admin(self.user):
+            self.send_error(403, "admins only")
+            return
+        try:
+            for f in LOADED:
+                py_compile.compile(f, doraise=True)
+        except py_compile.PyCompileError as e:
+            self.send_text(500, f"not restarted - the code does not compile:\n{e.msg}")
+            return
+        self.send_text(200, "restarting")
+        threading.Timer(0.3, restart).start()      # once this answer is on its way
+
+    def import_csv(self, query):
+        size = int(self.headers.get("Content-Length") or 0)
+        if size > 5 * 1024 * 1024:
+            self.send_error(400, "oversized paste")
+            return
+        data = self.rfile.read(size)                # before any refusal, as in import_tr
+        portfolio = (query.get("portfolio") or [""])[0]
+        if not self.may_change(portfolio):
+            self.send_error(404 if not self.may_open(portfolio) else 403, f"you may not change {portfolio}")
+            return
+        if not is_manual(portfolio):
+            self.send_error(403, f"{portfolio} is not a manual portfolio - no imports")
+            return
+        action = (query.get("action") or [""])[0]
+        if action not in ("", "accept", "discard"):
+            self.send_error(400, "action must be accept or discard")
+            return
+        proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "import_csv.py"), portfolio, action or "-"],
+                              input="" if action else data.decode("utf-8", "replace"),
+                              capture_output=True, text=True, timeout=120)
+        self.send_text(200 if proc.returncode == 0 else 400, proc.stdout + proc.stderr)
+
     def do_GET(self):
         # The bare directory means the page, not a listing of it. Relative, so it resolves
         # correctly behind a proxy that mounts this server under a sub-path.
@@ -458,7 +553,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not self.user:
             return
         if path == "/me":
-            self.send_json({"user": self.user})
+            admin = is_admin(self.user)
+            self.send_json({"user": self.user, "admin": admin, "restart": admin and code_changed()})
             return
         if path.startswith("/api/"):
             status, ctype, text = self.api_get()

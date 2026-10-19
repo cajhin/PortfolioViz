@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _columns(c, table):
@@ -117,7 +117,27 @@ def _to_4(c):
     c.execute("ALTER TABLE portfolio_new RENAME TO portfolio")
 
 
-MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4}
+def _to_5(c):
+    """Pasted CSV rows: the ledger takes origin 'csv' and a verified flag (a new CHECK, so a new
+    table), and what is rebuilt from it — activities and cash — carries that flag to the page."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ledger'").fetchone() \
+            and "verified" not in _columns(c, "ledger"):
+        c.execute("CREATE TABLE ledger_new (portfolio TEXT NOT NULL REFERENCES portfolio (name) ON DELETE CASCADE, "
+                  "transaction_id TEXT NOT NULL, "
+                  "origin TEXT NOT NULL CHECK (origin IN ('tr', 'manual', 'csv')), datetime TEXT NOT NULL, "
+                  "deleted INTEGER NOT NULL DEFAULT 0, verified INTEGER NOT NULL DEFAULT 1, "
+                  "data TEXT NOT NULL, PRIMARY KEY (portfolio, transaction_id))")
+        c.execute("INSERT INTO ledger_new (portfolio, transaction_id, origin, datetime, deleted, data) "
+                  "SELECT portfolio, transaction_id, origin, datetime, deleted, data FROM ledger ORDER BY rowid")
+        c.execute("DROP TABLE ledger")
+        c.execute("ALTER TABLE ledger_new RENAME TO ledger")
+    for table in ("activity", "cash"):
+        if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone() \
+                and "verified" not in _columns(c, table):
+            c.execute(f"ALTER TABLE {table} ADD COLUMN verified TEXT")
+
+
+MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5}
 
 
 def migrate(c):
@@ -323,8 +343,10 @@ POSITION_FIELDS = ["depot", "name", "identifier", "assetType", "isSold", "shares
                    "unrealizedGainNet", "earliestActivityDate", "activityCount"]
 ACTIVITY_FIELDS = ["depot", "name", "identifier", "type", "datetime", "shares", "price", "amount",
                    "amountNet", "fee", "tax", "realizedGains", "realizedGainsNet", "currency",
-                   "transactionId"]
-CASH_FIELDS = ["depot", "datetime", "date", "kind", "amount", "transactionId"]
+                   "transactionId", "verified"]
+# verified: "0" for a pasted row not yet accepted (import_csv.py), "1" for any other ledger row,
+# empty for a Parqet portfolio's — which has no ledger, and nothing to accept
+CASH_FIELDS = ["depot", "datetime", "date", "kind", "amount", "transactionId", "verified"]
 PORTFOLIO_TABLES = {"position": POSITION_FIELDS, "activity": ACTIVITY_FIELDS, "cash": CASH_FIELDS}
 
 
@@ -385,8 +407,9 @@ def replace_portfolio_rows(name, table, new):
 
 
 # ---------- ledgers ----------
-# A manual portfolio's source of truth: the Trade Republic rows it imported (origin 'tr') and the
-# rows entered by hand or traded (origin 'manual'), each the TR export's row as a dict.
+# A manual portfolio's source of truth: the Trade Republic rows it imported (origin 'tr'), the
+# rows entered by hand or traded (origin 'manual') and the rows pasted in the Portfolioviz CSV
+# format (origin 'csv'), each the TR export's row as a dict.
 
 def ledger(name, origin, deleted=True):
     """One origin's rows, oldest first (same-time rows in the order they were written). An
@@ -396,11 +419,12 @@ def ledger(name, origin, deleted=True):
         + " ORDER BY datetime, rowid", (name, origin))]
 
 
-def add_ledger_rows(name, origin, new):
+def add_ledger_rows(name, origin, new, verified=True):
     with tx() as c:
-        c.executemany("INSERT INTO ledger (portfolio, transaction_id, origin, datetime, data) VALUES (?, ?, ?, ?, ?)",
-                      [(name, r["transaction_id"], origin, r["datetime"], json.dumps(r, ensure_ascii=False))
-                       for r in new])
+        c.executemany("INSERT INTO ledger (portfolio, transaction_id, origin, datetime, verified, data) "
+                      "VALUES (?, ?, ?, ?, ?, ?)",
+                      [(name, r["transaction_id"], origin, r["datetime"], int(verified),
+                        json.dumps(r, ensure_ascii=False)) for r in new])
 
 
 def replace_ledger(name, origin, new):
@@ -413,8 +437,26 @@ def replace_ledger(name, origin, new):
 def mark_deleted(name, tid):
     """An imported row deleted on the page: kept, so a re-import still knows it, but left out."""
     with tx() as c:
-        return c.execute("UPDATE ledger SET deleted = 1 WHERE portfolio = ? AND transaction_id = ? AND origin = 'tr'",
-                         (name, tid)).rowcount
+        return c.execute("UPDATE ledger SET deleted = 1 WHERE portfolio = ? AND transaction_id = ? "
+                         "AND origin IN ('tr', 'csv')", (name, tid)).rowcount
+
+
+def unverified(name):
+    """The transaction ids of the rows pasted but not yet accepted."""
+    return {r[0] for r in conn().execute(
+        "SELECT transaction_id FROM ledger WHERE portfolio = ? AND NOT verified", (name,))}
+
+
+def accept_unverified(name):
+    """Every pasted row not yet accepted, accepted: no longer new, no longer rolled back."""
+    with tx() as c:
+        return c.execute("UPDATE ledger SET verified = 1 WHERE portfolio = ? AND NOT verified", (name,)).rowcount
+
+
+def discard_unverified(name):
+    """Every pasted row not yet accepted, gone — the rollback of a bad paste."""
+    with tx() as c:
+        return c.execute("DELETE FROM ledger WHERE portfolio = ? AND NOT verified", (name,)).rowcount
 
 
 # ---------- access ----------
