@@ -75,10 +75,11 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # Manual portfolios only, like the import above.
 #
 # POST /manual-tx?portfolio=NAME {date, depot, isin, type, shares, price, fee} — the Config tab's
-# "Add transaction", for building a virtual demo portfolio by hand (depot "Manual" if none named); with &edit=ID, rewrites that
-# hand-entered row (same body, instrument ignored); with &delete=ID, removes one. A body of
-# {date, type: deposit|withdrawal, amount} books cash instead. Both run manual_tx.py, which
-# validates, writes the ledger and rebuilds the portfolio.
+# "Add transaction", for building a virtual demo portfolio by hand (depot "Manual" if none named);
+# with &edit=ID, rewrites that row, whatever its origin (same body plus tax, instrument ignored);
+# with &delete=ID, removes one. A body of {date, depot, type: deposit|withdrawal|interest, amount}
+# books cash instead. Both run manual_tx.py, which validates, writes the ledger and rebuilds the
+# portfolio.
 # Manual portfolios only, like the import.
 #
 # GET /instrument-search?find=NAME | ?symbols=ISIN and POST /instrument {isin, symbol, name,
@@ -449,7 +450,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 self.send_error(400, "body must be JSON")
                 return
-            if tx.get("type") in ("deposit", "withdrawal"):
+            if tx.get("type") in ("deposit", "withdrawal", "interest"):
                 cash = [str(tx.get("date", "")), str(tx["type"]), str(tx.get("amount", ""))]
                 args = ["edit-cash", edit] + cash if edit else ["cash"] + cash
             else:
@@ -457,8 +458,10 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                          + [str(tx.get("fee") or 0)]
                 # an edit keeps its instrument: the id names the row, the rest is what it becomes
                 args = ["edit", edit] + fields[:1] + fields[2:] if edit else ["add"] + fields
-            # a new row books in the depot named (else "Manual"); an edit keeps its own
-            if tx.get("depot") and not edit:
+                if tx.get("tax"):
+                    args += ["--tax", str(tx["tax"])]
+            # a new row books in the depot named (else "Manual"); an edit moves to it, if named
+            if tx.get("depot"):
                 args += ["--depot", str(tx["depot"])]
         proc = subprocess.run([sys.executable, os.path.join(SCRIPTS, "manual_tx.py"), portfolio] + args,
                               capture_output=True, text=True, timeout=60)

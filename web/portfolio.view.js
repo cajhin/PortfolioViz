@@ -944,7 +944,9 @@ function renderTrades() {
     const cls = t.type === 'sell' ? 'pos' : t.type === 'dividend' || t.type === 'interest' ? 'income' : '';
     tr.innerHTML =
       `<td>${t.datetime.slice(0, 10)}</td><td>${t.depot}</td>` +
-      `<td>${t.cash ? '<span class="muted">cash</span>' : NAMES.get(t.name) || tidyName(t.name)}</td>` +
+      // the short name the Positions tab uses; the full one (registry or export) on hover
+      (t.cash ? '<td><span class="muted">cash</span></td>'
+              : `<td title="${String(t.name).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}">${displayName(t)}</td>`) +
       `<td>${TYPE_LABEL[t.type] || t.type}</td>` +
       `<td>${num(t.shares) ? num(t.shares).toLocaleString('de-DE') : '–'}</td>` +
       `<td>${num(t.price) ? fmtMoney2(num(t.price)) : '–'}</td>` +
@@ -3801,7 +3803,7 @@ function showEmptyPortfolio() {
 // The Transactions tab's "Import Trade Republic file": the export goes to server.py's /import-tr route,
 // which runs import_tr.py on it and keeps no copy. That script's own
 // report — how many rows were new, how many already imported, anything it could not place — is
-// shown as-is; a reload then picks up the rebuilt CSVs, the same as after Update.
+// shown as-is, and kept across the reload that then picks up the rebuilt portfolio.
 document.getElementById('trImportForm').addEventListener('submit', async e => {
   e.preventDefault();
   const file = document.getElementById('trImportFile').files[0];
@@ -3817,14 +3819,13 @@ document.getElementById('trImportForm').addEventListener('submit', async e => {
     const text = (await r.text()).trim();
     // a route-level refusal (send_error) comes back as an HTML page — its status line says it
     log.textContent = r.ok || !text.startsWith('<') ? text : routeFailure(r);
-    if (r.ok) document.getElementById('manualReload').hidden = false;
+    if (r.ok) reloadKeepingLog(log);
   } catch (err) {
     log.textContent = `Import failed: ${err.message}`;
   } finally {
     btn.disabled = false;
   }
 });
-document.getElementById('manualReload').addEventListener('click', () => reloadOnTransactions());
 
 // The Transactions tab's "Import CSV (Portfolioviz format)": the pasted lines go to server.py's
 // /import-csv route, which runs import_csv.py on them — all checked first, nothing imported on any
@@ -3857,17 +3858,14 @@ document.getElementById('csvImportForm').addEventListener('submit', async e => {
   e.preventDefault();
   const btn = e.submitter || e.target.querySelector('button[type="submit"]');
   const log = document.getElementById('csvImportLog');
-  if (await postImportCsv('', csvText.value, log, btn) && !/\b0 new\b/.test(log.textContent)) {
-    csvText.value = '';
-    csvGrow();
-    document.getElementById('manualReload').hidden = false;
-  }
+  // nothing new (all duplicates) changed nothing: no reload, and the paste stays to be looked at
+  if (await postImportCsv('', csvText.value, log, btn) && !/\b0 new\b/.test(log.textContent)) reloadKeepingLog(log);
 });
 // accept: the new rows become ordinary transactions; delete: every row not yet accepted is gone —
 // the rollback of a bad paste, so it asks first. Either reloads, so the list shows it.
 async function settleCsv(action, btn) {
   const log = document.getElementById('csvImportLog');
-  if (await postImportCsv(`&action=${action}`, '', log, btn)) reloadOnTransactions();
+  if (await postImportCsv(`&action=${action}`, '', log, btn)) reloadKeepingLog(log);
 }
 document.getElementById('csvAccept').addEventListener('click', e => settleCsv('accept', e.currentTarget));
 document.getElementById('csvDiscard').addEventListener('click', e => {
@@ -3883,6 +3881,20 @@ function reloadOnTransactions() {
   if ('?' + q.toString() === location.search) location.reload();
   else location.search = q.toString();
 }
+// An import's report, carried across that reload: put back into the same log box, once.
+const IMPORT_LOG_KEY = 'portfolioviz.importLog';
+function reloadKeepingLog(log) {
+  try {
+    sessionStorage.setItem(IMPORT_LOG_KEY, JSON.stringify({ id: log.id, text: log.textContent }));
+  } catch { /* the report is just not shown again */ }
+  reloadOnTransactions();
+}
+try {
+  const kept = JSON.parse(sessionStorage.getItem(IMPORT_LOG_KEY) || 'null');
+  sessionStorage.removeItem(IMPORT_LOG_KEY);
+  const log = kept && document.getElementById(kept.id);
+  if (log) Object.assign(log, { textContent: kept.text, hidden: false });
+} catch { /* nothing kept */ }
 
 // "Add transaction": buys and sells entered by hand, for a virtual demo portfolio. server.py's
 // /manual-tx route runs manual_tx.py, which validates (instrument in the registry, no sale beyond
@@ -3952,7 +3964,7 @@ async function prefillTxPrice() {
   const i = series ? lastIndexAtOrBefore(series.rows, day) : -1;
   if (i < 0) { hint.textContent = 'no price on file for that date'; return; }
   const row = series.rows[i];
-  document.getElementById('txPrice').value = +row.close.toFixed(4);
+  document.getElementById('txPrice').value = deNum(+row.close.toFixed(4));
   // every stored close is already in the portfolio currency (update_prices.py converts on write);
   // when the listing quotes in another, say so and show the quote it came from, so nobody types a
   // dollar price into a euro field
@@ -3962,10 +3974,32 @@ async function prefillTxPrice() {
   txFigures();
 }
 
+// A number as typed — or pasted — into a transaction field, as the server reads it. Both German
+// and English grouping go: with both separators the last one is the decimal point ("1.234,56",
+// "1,234.56"); a separator repeated ("1.234.567"), or a single one with exactly three digits after
+// it and a group of 1–3 before ("1.234", "1,234"), groups thousands; any other single one is the
+// decimal point ("12,5", "12.5", "0,125"). deNum is the way back, for a field filled in from a
+// stored figure: a comma, and never exactly three decimals, which would read back as thousands.
+function decimal(s) {
+  s = String(s).trim();
+  const sign = s.startsWith('-') ? '-' : '';
+  s = s.slice(sign.length);
+  const last = Math.max(s.lastIndexOf('.'), s.lastIndexOf(','));
+  if (last < 0) return sign + s;
+  const parts = s.split(s[last]);
+  const grouped = !(s.includes('.') && s.includes(',')) &&
+    (parts.length > 2 || (parts[1].length === 3 && /^[1-9][0-9]{0,2}$/.test(parts[0])));
+  if (grouped) return sign + s.replace(/[.,]/g, '');
+  return sign + s.slice(0, last).replace(/[.,]/g, '') + '.' + s.slice(last + 1);
+}
+const deNum = x => String(x).replace(/\.([0-9]{3})$/, '.$10').replace('.', ',');
+const DEC_PATTERN = '[0-9]{1,3}(\\.[0-9]{3})+(,[0-9]+)?|[0-9]{1,3}(,[0-9]{3})+(\\.[0-9]+)?|[0-9]+([.,][0-9]+)?';
+const DEC_INPUT = `type="text" inputmode="decimal" class="dec" pattern="${DEC_PATTERN}"`;
+
 // Amount and Net in the add row, as the list would show them once added: gross, then with the
 // fee on top of a buy or off a sale
 function txFigures() {
-  const v = id => num(document.getElementById(id).value);
+  const v = id => num(decimal(document.getElementById(id).value));
   const gross = v('txShares') * v('txPrice');
   const net = document.getElementById('txType').value === 'sell' ? gross - v('txFee') : gross + v('txFee');
   document.getElementById('txAmount').textContent = gross ? fmtMoney2(gross) : '';
@@ -4019,56 +4053,67 @@ document.getElementById('txForm').addEventListener('submit', e => {
                                                          depot: val('txDepot') }));
   } catch { /* the form just starts fresh after the reload */ }
   postManualTx('', isCashType()
-    ? { date: val('txDate'), depot: val('txDepot'), type: val('txType'), amount: val('txCashAmount') }
+    ? { date: val('txDate'), depot: val('txDepot'), type: val('txType'), amount: decimal(val('txCashAmount')) }
     : { date: val('txDate'), depot: val('txDepot'), isin: val('txIsin'), type: val('txType'),
-        shares: val('txShares'), price: val('txPrice'), fee: val('txFee') || 0 });
+        shares: decimal(val('txShares')), price: decimal(val('txPrice')), fee: decimal(val('txFee')) || 0 });
 });
 
 // A row's Edit, in a manual portfolio's list (see renderTrades): an editor row opens under it, one
-// at a time. A buy or sell entered by hand can be changed — date, type, shares, price, fee; its
-// instrument stays (delete and add again for another). An imported row is what the broker booked,
-// so it can only be deleted — set aside, so re-importing the same export does not revive it.
+// at a time. Any buy, sale or dividend — hand-entered or imported, from Trade Republic or a CSV
+// paste — can be changed: date, depot, shares, price, fee and tax (a buy or sale may also become the
+// other); any deposit, withdrawal or interest: date, depot and amount. Its instrument stays (delete
+// and add again for another). Correcting what the broker booked is the user's call; manual_tx.py
+// keeps an imported row's id, so a re-import does not undo it. Anything else (a tax refund, a
+// warrant's exercise) can only be deleted.
 function openTxEditor(tr, t) {
   document.querySelectorAll('#tblTrades tr.txedit').forEach(r => r.remove());
   const what = `${t.datetime.slice(0, 10)} ${TYPE_LABEL[t.type] || t.type}` +
-    (t.cash ? ` of ${fmtMoney2(Math.abs(num(t.amount)))}` : ` of ${NAMES.get(t.name) || tidyName(t.name)}`);
-  const hand = t.transactionId.startsWith('manual-');
-  const editable = hand && (t.type === 'buy' || t.type === 'sell');
-  const cashEditable = hand && (t.type === 'deposit' || t.type === 'withdrawal');
+    (t.cash ? ` of ${fmtMoney2(Math.abs(num(t.amount)))}` : ` of ${displayName(t)}`);
+  const trade = !t.cash && (t.type === 'buy' || t.type === 'sell');
+  const dividend = !t.cash && t.type === 'dividend';
+  const cash = t.cash && ['deposit', 'withdrawal', 'interest'].includes(t.type);
   const row = document.createElement('tr');
   row.className = 'txedit';
   const td = document.createElement('td');
   td.colSpan = tr.children.length;
   const form = document.createElement('form');
   form.className = 'configrow';
-  form.innerHTML = cashEditable
-    ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
-      `<select name="type" class="pick" aria-label="Type"><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option></select>` +
-      `<input type="number" name="amount" min="0" step="any" required placeholder="Amount (${CCY})" value="${Math.abs(num(t.amount))}">` +
-      `<button type="submit" class="dt-addsel">Save</button>`
-    : editable
-    ? `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
-      `<select name="type" class="pick" aria-label="Type"><option value="buy">Buy</option><option value="sell">Sell</option></select>` +
-      `<input type="number" name="shares" min="0" step="any" required placeholder="Shares" value="${num(t.shares)}">` +
-      `<input type="number" name="price" min="0" step="any" required placeholder="Price (${CCY})" title="Price per share in ${CCY}" value="${num(t.price)}">` +
-      `<input type="number" name="fee" min="0" step="any" placeholder="Fee (${CCY})" aria-label="Fee" value="${num(t.fee) || ''}">` +
-      `<button type="submit" class="dt-addsel">Save</button>`
-    : hand
-    ? `<span class="muted">Booked with its trade — edit the trade instead.</span>`
-    : `<span class="muted">Imported from Trade Republic — it can be deleted, not edited.</span>`;
+  // a sale's tax may be negative: a refund
+  const dec = (name, placeholder, value, required = true) =>
+    `<input ${name === 'tax' ? DEC_INPUT.replace(DEC_PATTERN, `-?(${DEC_PATTERN})`) : DEC_INPUT} name="${name}" ` +
+    `${required ? 'required ' : ''}placeholder="${placeholder}" ` +
+    `aria-label="${placeholder}" value="${value ? deNum(value) : ''}">`;
+  const head = `<input type="date" name="date" required max="${TODAY}" value="${t.datetime.slice(0, 10)}">` +
+    `<input type="text" name="depot" list="txDepots" required maxlength="40" aria-label="Depot" autocomplete="off">`;
+  const typeSel = options =>
+    `<select name="type" class="pick" aria-label="Type">${options.map(o =>
+      `<option value="${o}">${TYPE_LABEL[o]}</option>`).join('')}</select>`;
+  const save = `<button type="submit" class="dt-addsel">Save</button>`;
+  form.innerHTML = cash
+    ? head + typeSel(t.type === 'interest' ? ['interest'] : ['deposit', 'withdrawal']) +
+      dec('amount', `Amount (${CCY})`, Math.abs(num(t.amount))) + save
+    : trade || dividend
+    ? head + typeSel(dividend ? ['dividend'] : ['buy', 'sell']) +
+      dec('shares', 'Shares', num(t.shares)) +
+      dec('price', dividend ? `Gross per share (${CCY})` : `Price (${CCY})`, num(t.price)) +
+      (dividend ? '' : dec('fee', `Fee (${CCY})`, num(t.fee), false)) +
+      dec('tax', `Tax (${CCY})`, num(t.tax), false) + save
+    : `<span class="muted">This kind of transaction can be deleted, not edited.</span>`;
   form.insertAdjacentHTML('beforeend',
     `<button type="button" class="dt-addsel txdanger" data-act="delete">Delete</button>` +
     `<button type="button" class="dt-addsel" data-act="cancel">Cancel</button><span class="err"></span>`);
-  if (editable || cashEditable) form.elements.type.value = t.type;
+  const f = form.elements;
+  if (f.type) f.type.value = t.type;
+  if (f.depot) f.depot.value = t.depot;
   const msg = form.querySelector('.err');
   const id = encodeURIComponent(t.transactionId);
   form.addEventListener('submit', e => {
     e.preventDefault();
-    const f = form.elements;
-    postManualTx(`&edit=${id}`, cashEditable
-      ? { date: f.date.value, type: f.type.value, amount: f.amount.value }
-      : { date: f.date.value, type: f.type.value, shares: f.shares.value,
-          price: f.price.value, fee: f.fee.value || 0 }, msg);
+    postManualTx(`&edit=${id}`, cash
+      ? { date: f.date.value, depot: f.depot.value, type: f.type.value, amount: decimal(f.amount.value) }
+      : { date: f.date.value, depot: f.depot.value, type: f.type.value, shares: decimal(f.shares.value),
+          price: decimal(f.price.value), fee: f.fee ? decimal(f.fee.value) || 0 : 0,
+          tax: decimal(f.tax.value) || 0 }, msg);
   });
   form.querySelector('[data-act="delete"]').addEventListener('click', () => {
     if (confirm(`Delete ${what}?`)) postManualTx(`&delete=${id}`, null, msg);

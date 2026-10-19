@@ -549,7 +549,7 @@
   #txAddRow td { border-top: 2px solid var(--border); border-bottom: none; padding: 7px 4px; }
   #txAddRow input { font: inherit; font-size: 0.82rem; color: var(--text-primary); background: transparent;
                     border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
-  #txAddRow input[type="number"] { width: 6.5em; text-align: right; }
+  #txAddRow input.dec { width: 6.5em; text-align: right; }
   #txDepot { width: 8.5em; }
   #txAddRow .pick { padding-top: 3px; padding-bottom: 3px; }
   #txIsin { max-width: 15em; }
@@ -582,7 +582,7 @@
     font: inherit; color: var(--text-primary); background: transparent;
     border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
   .configrow input[type="text"] { min-width: 16em; }
-  .configrow input[type="number"] { width: 7em; }
+  .configrow input[type="number"], .configrow input.dec { width: 7em; }
   /* the file field's own text ("No file chosen", or a long export name) must not push Import
      onto a line of its own */
   #trImportForm { flex-wrap: nowrap; }

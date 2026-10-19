@@ -36,8 +36,8 @@ reported and skipped, not an error, so pasting the same lines twice is harmless.
 
 What is imported lands in the ledger (origin 'csv') *unverified*: the page lists it as new, and
 `accept` makes it a transaction like any other, or `discard` removes every row not yet accepted —
-the rollback for a bad paste. An accepted row can still be deleted one at a time, like a Trade
-Republic row (manual_tx.py delete): kept, marked deleted, so a re-paste does not revive it.
+the rollback for a bad paste. Any row can still be edited or deleted one at a time, like a Trade
+Republic row (manual_tx.py): a deleted one is kept, marked deleted, so a re-paste does not revive it.
 """
 import csv, re, sys, uuid
 from collections import defaultdict

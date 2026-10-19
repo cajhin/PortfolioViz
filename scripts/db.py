@@ -434,6 +434,20 @@ def replace_ledger(name, origin, new):
         add_ledger_rows(name, origin, new)
 
 
+def ledger_entry(name, tid):
+    """(origin, row) of one ledger row, whatever its origin, or None."""
+    r = conn().execute("SELECT origin, data FROM ledger WHERE portfolio = ? AND transaction_id = ?",
+                       (name, tid)).fetchone()
+    return (r[0], json.loads(r[1])) if r else None
+
+
+def update_ledger_row(name, tid, row):
+    """One row rewritten in place — same id, same origin, its flags (deleted, verified) kept."""
+    with tx() as c:
+        c.execute("UPDATE ledger SET datetime = ?, data = ? WHERE portfolio = ? AND transaction_id = ?",
+                  (row["datetime"], json.dumps(row, ensure_ascii=False), name, tid))
+
+
 def mark_deleted(name, tid):
     """An imported row deleted on the page: kept, so a re-import still knows it, but left out."""
     with tx() as c:

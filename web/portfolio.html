@@ -306,14 +306,16 @@
             <option value="buy">Buy</option><option value="sell">Sell</option>
             <option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option>
           </select></td>
-          <td><input type="number" id="txShares" form="txForm" min="0" step="any" placeholder="Shares" required></td>
-          <td><input type="number" id="txPrice" form="txForm" min="0" step="any" placeholder="Price" required></td>
+          <td><input type="text" inputmode="decimal" class="dec" pattern="[0-9]{1,3}(\.[0-9]{3})+(,[0-9]+)?|[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?|[0-9]+([.,][0-9]+)?" id="txShares" form="txForm" placeholder="Shares" required></td>
+          <td><input type="text" inputmode="decimal" class="dec" pattern="[0-9]{1,3}(\.[0-9]{3})+(,[0-9]+)?|[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?|[0-9]+([.,][0-9]+)?" id="txPrice" form="txForm" placeholder="Price" required></td>
           <td class="muted" id="txHint"></td>
-          <!-- computed for a buy or sell; typed in for a deposit or withdrawal (see txCashMode) -->
-          <td><span id="txAmount"></span><input type="number" id="txCashAmount" form="txForm" min="0"
-            step="any" placeholder="Amount" aria-label="Amount" hidden></td>
+          <!-- computed for a buy or sell; typed in for a deposit or withdrawal (see txCashMode).
+               Numbers are text fields, not type="number" — which takes only the browser's own
+               decimal separator — so 12,5 and 12.5, 1.234 and 1,234 all go (see decimal()) -->
+          <td><span id="txAmount"></span><input type="text" inputmode="decimal" class="dec" pattern="[0-9]{1,3}(\.[0-9]{3})+(,[0-9]+)?|[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?|[0-9]+([.,][0-9]+)?" id="txCashAmount" form="txForm"
+            placeholder="Amount" aria-label="Amount" hidden></td>
           <td id="txNet"></td>
-          <td><input type="number" id="txFee" form="txForm" min="0" step="any" placeholder="Fee" aria-label="Fee"></td>
+          <td><input type="text" inputmode="decimal" class="dec" pattern="[0-9]{1,3}(\.[0-9]{3})+(,[0-9]+)?|[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?|[0-9]+([.,][0-9]+)?" id="txFee" form="txForm" placeholder="Fee" aria-label="Fee"></td>
           <td></td>
           <td class="txver"></td>
           <td class="txdel"><button type="submit" form="txForm" class="dt-addsel">Add</button></td>
@@ -336,7 +338,6 @@
           <label for="trImportFile">Import Trade Republic file</label>
           <input type="file" id="trImportFile" accept=".csv,text/csv" required>
           <button type="submit" class="dt-addsel">Import</button>
-          <button type="button" id="manualReload" class="dt-addsel" hidden>Reload</button>
         </form>
         <pre class="importlog" id="trImportLog" hidden></pre>
         <form id="csvImportForm" class="configrow csvform">
