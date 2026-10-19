@@ -541,6 +541,27 @@
   .txdel .dt-addsel { padding: 1px 10px; font-size: 0.75rem; }
   /* the Config tab's AI checkbox and API tokens */
   .check { display: inline-flex; align-items: center; gap: 6px; }
+  /* the Config tab's special agent instructions: ~120 characters wide, no wider than the row */
+  .brieftext { width: 120ch; max-width: 100%; box-sizing: border-box; font: 0.8rem/1.4 ui-monospace, Menlo, monospace;
+               padding: 6px 8px; color: var(--text-primary); background: transparent; border: 1px solid var(--border);
+               border-radius: 6px; resize: vertical; }
+  /* an agent's notes (#notesCard) */
+  .notesec { margin-top: 14px; }
+  .notesec h4 { margin: 0 0 6px; font-size: 0.9rem; font-weight: 600; }
+  .notesec h4 .muted { font-weight: 400; font-size: 0.8rem; }
+  .notesec textarea { width: 100%; box-sizing: border-box; font: 0.8rem/1.4 ui-monospace, Menlo, monospace;
+                      padding: 6px 8px; color: var(--text-primary); background: transparent;
+                      border: 1px solid var(--border); border-radius: 6px; resize: vertical; }
+  .notetext { margin: 0; padding: 8px 10px; font-size: 0.8rem; white-space: pre-wrap; color: var(--text-primary);
+              border: 1px solid var(--border); border-radius: 6px; max-height: 40em; overflow: auto; }
+  .notetext:empty::before { content: "—"; color: var(--text-muted); }
+  .notetext .add { background: color-mix(in srgb, var(--realized) 18%, transparent); display: block; }
+  .notetext .del { background: color-mix(in srgb, var(--loss) 18%, transparent); display: block;
+                   text-decoration: line-through; color: var(--text-secondary); }
+  .notejournal { display: flex; flex-direction: column; gap: 8px; max-height: 40em; overflow: auto; }
+  .notejournal > div { border-left: 3px solid var(--border); padding: 2px 0 2px 10px; font-size: 0.82rem;
+                       white-space: pre-wrap; }
+  .notejournal time { display: block; color: var(--text-muted); font-size: 0.75rem; }
   /* the Watch tab's public portfolios, one line per owner */
   .publist { display: flex; flex-direction: column; gap: 6px; font-size: 0.9rem; margin-top: 6px; }
   .publist a { color: var(--text-primary); margin-right: 14px; }

@@ -86,7 +86,7 @@ def portfolio(pid):
 
 
 def require_game(pid):
-    # an agent's session is bound to its own portfolio: its start script sets TRADE_PORTFOLIO, and
+    # an agent's session is bound to its own portfolio: whoever starts it sets TRADE_PORTFOLIO, and
     # another portfolio — someone else's game, to look at or to trade — is refused. (The variable cannot
     # be changed from inside the session: a command not starting with this script is not allowed.)
     bound = os.environ.get("TRADE_PORTFOLIO")
@@ -360,8 +360,8 @@ def require_ai_access(pid):
     """An agent's session (TRADE_PORTFOLIO set) trades only where the portfolio allows AI access —
     its owner's checkbox on the Config tab. The owner trading it themselves, from the page or this
     command line, needs no such leave."""
-    if os.environ.get("TRADE_PORTFOLIO") and not (db.portfolio(pid) or {}).get("ai_access"):
-        raise Refusal(f"portfolio {pid!r} does not allow AI access",
+    if os.environ.get("TRADE_PORTFOLIO") and ((db.portfolio(pid) or {}).get("ai_access") or 0) < db.AI_WRITE:
+        raise Refusal(f"portfolio {pid!r} does not allow AI read-write access",
                       "its owner can allow it on the page's Config tab")
 
 

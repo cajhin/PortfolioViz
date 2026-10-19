@@ -37,8 +37,10 @@ scripts/                every Python script; each finds the repo as its own fold
   manage-users.py         the page's users: add, passwd, grant/revoke portfolios, delete, list-users,
                             list-portfolios — same style, admin only
   agents.py               the instructions agents elsewhere read (/agents.md, /agents/csv,
-                            /agents/game-rules) — built from import_csv.py's docstring and
-                            trading-rules.md
+                            /agents/game-rules, /agents/game-agent) — built from import_csv.py's
+                            docstring and trading-rules.md
+  notes.py                an agent's notes on a portfolio — brief, memory, journal, and its strategy
+                            in versions; the CLI of what server.py's /notes serves
   add_instrument.py       registers a new instrument (registry rows + price fetch) — the page's
                             "+ New instrument…"; also looks up Yahoo symbols for an ISIN
 data/portfolio.db       ALL the data — gitignored; backed up by hand (`scripts/db.py backup`)
@@ -51,7 +53,8 @@ The database's tables (`scripts/schema.sql`) fall into three groups that differ 
 **lifecycle**, and that is the distinction to preserve:
 
 - **a portfolio's own** (IMPORTED) — `portfolio` (id, label, type, ai_access, public), its keys in `setting`,
-  `ledger`, and `position`/`activity`/`cash`. The `ledger` is its real source — every TR
+  `ledger`, `position`/`activity`/`cash`, and an agent's notes on it (`agent_note`, `agent_journal`,
+  `strategy_version`). The `ledger` is its real source — every TR
   row imported (origin `tr`, kept even when deleted on the page, flagged `deleted`) and every
   hand-entered or traded row (origin `manual`), and every row pasted as Portfolioviz CSV (origin
   `csv`, booked in the depot it names, `verified` 0 until accepted on the page, and until then
@@ -130,15 +133,15 @@ same depot; its docstring lists them. Parqet itself is no longer a source: a por
 refresh once filled becomes `normal` on migration, and `import_tr.rebuild` refuses to throw its
 data away — purge it and import its transactions anew.
 
-**AI access.** A portfolio's `ai_access` — the Config tab's "Allow AI (API) access", off for a new
-one — says whether a script or an AI may use it at all. Over HTTP that means an API token: a user
-makes, copies and revokes theirs on the Config tab, shown there while the box is ticked
+**AI access.** A portfolio's `ai_access` — the Config tab's "Allow AI (API) access, read-only" and
+"…, read-write", one level: 0 none (a new portfolio's), 1 read, 2 read and write — says what a script
+or an AI may do with it. Over HTTP that means an API token: a user makes, copies and revokes theirs
+on the Config tab, shown there while access is allowed
 (`api_token`: 10 letters and digits, looked up by hash but kept as is too, so it can be copied
 again — convenience over hardening), and sends it as `Authorization: Bearer …` in place of the
 session cookie. A token is bound to the portfolio whose Config tab made it: every route acts on
 that one (`?portfolio=` may be left out; another is refused). It is refused outright while that
-portfolio's `ai_access` is off; it reads otherwise, and writes only with its own `can_write` (the
-token's "allow writing", off for a new one), only through server.py's `TOKEN_WRITES`
+portfolio's `ai_access` is 0; it reads at 1, and at 2 writes too, only through server.py's `TOKEN_WRITES`
 (transactions, imports, trades, instruments, Update) — never accepting its own CSV import, which
 is its user's check of it, and never anything about portfolios, users, tokens or the server.
 Whatever a token writes to a normal portfolio lands **unverified** (`manual_tx.py`/`import_tr.py`
@@ -150,7 +153,16 @@ token gets points to; the Config tab's "Copy agent prompt" hands it the URL and 
 the global `publicUrl` setting as the server's address — where others reach it — else the address the
 request came in on, which from this machine is only localhost (the Config tab says so). On
 the command line, an agent's `trade.py` session (`TRADE_PORTFOLIO` set) trades only a game with
-`ai_access` on (`manage-portfolios.py create --ai`, or the checkbox).
+`ai_access` read-write (`manage-portfolios.py create --ai`, or the boxes).
+
+**Agents anywhere.** An agent needs no access to this repo: a token, the server's `publicUrl` and
+`/agents.md` are enough; a game's agent also reads `/agents/game-agent` (its role: the session
+routine and the default goals, which the owner's per-portfolio *special instructions* override —
+the notes' `brief`, edited on the Config tab under the AI checkbox, binding on the agent above
+everything but the rules). What it keeps
+between sessions lives on the server, per portfolio (`notes.py`, `/notes`): its memory (replaced
+each session), its journal (appended), its strategy (every save a new version with its reason —
+the Transactions tab shows any version and what changed since another).
 
 **Users.** server.py wants a login for every route but the page's own files (no data in them) and
 login.html's: an HttpOnly session cookie, its token's hash in the `session` table. A user sees and
@@ -172,8 +184,9 @@ lists the user's other portfolios and deletes one they may change — `manage-po
 with no backup. These tables (`user`, `user_portfolio`, `session`, `api_token`) are a
 fourth lifecycle — people, neither a portfolio's own nor the registry — and an older database gets
 them like any other schema change (below). It is for convenience and keeping people apart, not
-hardened: the registry, prices and every script stay shared and unchecked, and an agent's boundary
-is still the `game` type and `TRADE_PORTFOLIO` below.
+hardened: the registry, prices and every script stay shared and unchecked. An agent's boundary is
+its token — one portfolio, while that allows AI access, writing only if the token may — or, given
+nothing but `trade.py` on this machine, the `game` type and `TRADE_PORTFOLIO` below.
 
 **Game portfolios.** `scripts/manage-portfolios.py` creates game portfolios, moves their cash and
 lists them; `scripts/trade.py` trades them — and so does the page's "Trade now", through server.py's
@@ -183,10 +196,10 @@ create` makes, the page through it); that type is the boundary — and splitting
 agent be handed trading alone: `manage-portfolios.py` is admin only. Its
 `purge` removes any obsolete portfolio (not the default one), after backing the database up to
 `--backup-dir` — or, said explicitly, `--no-backup`. An agent's session is also bound to its own
-portfolio: its `start-agent` sets `TRADE_PORTFOLIO`, and `trade.py` refuses any other (the agent
-cannot override it — a command not starting with trade.py's path is not allowed). Each agent folder
-under `agents/` has its own config dir, so agents share no memory. It is **live only**: no date can
-be given. A trade executes at once at a live price: gettex's ask (buy) or bid (sell) while gettex is
+portfolio: whoever starts a command-line agent sets `TRADE_PORTFOLIO`, and `trade.py` refuses any
+other — which holds only while the agent cannot change its environment, i.e. may run nothing but
+`trade.py`. An agent elsewhere uses HTTP and a token instead (**Agents anywhere** above). It is
+**live only**: no date can be given. A trade executes at once at a live price: gettex's ask (buy) or bid (sell) while gettex is
 open (weekdays 08:00–22:00 German time) and its quote is under 15 minutes old — read from onvista's
 unofficial API — else the home exchange via Yahoo while that is open and its price under 30 minutes
 old, else not at all. `status`/`list-games` value a position at gettex's bid while its home market

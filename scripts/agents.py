@@ -6,6 +6,7 @@ has a token.
     /agents.md   (and /llms.txt)  what the system is, how to get access, the routes, how to behave
     /agents/csv                   the PViz CSV format — import_csv.py's own docstring
     /agents/game-rules            a game's trading rules — trading-rules.md
+    /agents/game-agent            the role of an agent trading a game: its session, its notes
 
 The two specs are fetched on demand, so an agent reads only the one its work needs; both come from
 the text the scripts themselves are written to, so they cannot drift from what is enforced. The
@@ -30,8 +31,8 @@ portfolio** of **one user**, over HTTP at {base}/ — every path below is relati
 ## Access
 
 You need a **token** from your user. Ask them to open the portfolio on the page, go to Config,
-tick **Allow AI (API) access**, create a token there and press **Copy token** — and, if you are to
-change anything, tick that token's **allow writing**. Send it on every request:
+tick **Allow AI (API) access, read-only** — or **read-write**, if you are to change anything — then
+create a token there and press **Copy token**. Send it on every request:
 
     Authorization: Bearer <token>
 
@@ -42,6 +43,9 @@ The token is bound to that one portfolio: leave `?portfolio=` out, every route a
   **Tell your user what they would have to allow. Never try to get around it.**
 
 Start with `GET portfolios` — one entry: its `id`, `label`, `type` (`normal` or `game`), `write`.
+Then `GET notes`: its `brief` is your user's **special instructions** for this portfolio. They come
+before everything else here — only the trading rules and the limits above are above them. Follow
+them.
 
 ## Reading (any portfolio)
 
@@ -85,10 +89,25 @@ No past and no edits — only buying and selling now, at a live price. **Read {b
 before your first trade.**
 
 - `GET quote?instrument=<ISIN>` — what a buy and a sale would get right now, or why no trade is possible
-- `POST trade` — `{{"side": "buy", "isin": "…", "eur": 2000, "id": "<a fresh id>"}}`; `eur` is all that
-  leaves the cash, fee included; or `"shares": 10`; a sale also `"all": true`. **Always send a fresh
-  `id`**: resending the same one never trades twice, so a retry after a timeout is safe.
+- `POST trade` — `{{"side": "buy", "isin": "…", "eur": 2000, "reason": "…", "id": "<a fresh id>"}}`;
+  `eur` is all that leaves the cash, fee included; or `"shares": 10`; a sale also `"all": true`.
+  **Always send a fresh `id`**: resending the same one never trades twice, so a retry after a
+  timeout is safe. The `reason` is kept with the trade.
 - `GET game-status` — cash, positions valued live, result against the money put in
+- `GET chart?instrument=<ISIN, ticker or name>` — returns over 1 month to 3 years, the 52-week range,
+  volatility, the deepest drops, two years of month-end closes; several `instrument=` at once, for
+  `quote` too
+- **If you trade a game as its agent**, read {base}/agents/game-agent: how a session goes, and how
+  you keep your memory, strategy and journal here.
+
+## Notes (any portfolio)
+
+What you keep between sessions lives on the server, so you can run anywhere: `GET notes` gives the
+owner's special instructions (`brief` — read only, and binding), your **strategy** (versioned), your
+**memory** and the newest **journal** entries. Write with `POST notes/memory {{"text"}}` (replaces it),
+`POST notes/strategy {{"text", "reason"}}` (a new version; the reason says what changed and why),
+`POST notes/journal {{"text"}}` (appends). `GET notes/strategy?history=1` lists the versions,
+`?version=N` reads one; `GET notes/journal?limit=N`. Each at most 64,000 characters.
 
 ## How to behave
 
@@ -96,6 +115,51 @@ before your first trade.**
   ambiguous, ask your user.
 - Read the server's answer and report it — what was imported, skipped or refused, in its own words.
 - Do only what your user asked, or what your role (e.g. a game) is for.
+"""
+
+
+def game_agent(base):
+    return f"""# The game agent — how to trade a game portfolio
+
+You manage a simulated portfolio: a **game**, with virtual cash, at {base}/ (read {base}/agents.md
+for access and routes, and {base}/agents/game-rules for the rules). You run now and then — maybe daily,
+maybe after three weeks — and remember nothing between sessions but what you keep in your notes here.
+
+## Goals
+
+Your owner's **special instructions** (`GET notes`, `brief`) say what you are for — e.g. "be
+aggressive", "trade only tech". They take precedence over everything on this page; only the trading
+rules stand above them. Where they say nothing:
+- invest the cash in equities — stocks, bonds, ETFs; no options or futures
+- aim beyond the common benchmarks (typically ~7–15% a year): +20% annualised is good, +50% very
+  good, +100% great. Losses are accepted risk, but not catastrophic ones: −30% acceptable, −50% bad,
+  −70% unacceptable
+- develop strategies that could be applied to a real portfolio — this is not about winning a game.
+  Exploiting flaws of the simulation teaches nothing; use it as intended
+
+## How you work
+
+- How you research and decide is yours to develop. Your universe is every listed equity and ETF
+  worldwide, of any size — not only what you know or what makes headlines; `quote` and `chart` work
+  for any ISIN, held or not, and you may research on the internet
+- There is no time pressure: thorough work matters more than speed. Make decisions you could defend
+  to an investment committee
+- Explain every decision in writing — every trade carries its `reason`, and the journal the rest
+- At each session, compare your earlier decisions with what has happened since, and improve your
+  process
+
+## A session
+
+1. `GET notes` — your owner's special instructions, your strategy, memory and recent journal
+2. `GET game-status` — cash, positions, result so far
+3. Look back: what did you decide, and what has happened since?
+4. Research; `GET quote` before any trade; `POST trade` with a `reason` and a fresh `id`
+5. `POST notes/journal` — this session's decisions, including what you chose not to do, and why
+6. `POST notes/memory` — what you want to recall next time (it replaces the last one)
+7. Only when your strategy changes: `POST notes/strategy` with the whole new text and a `reason` —
+   every version is kept, so the way it developed can be followed
+
+Your owner sees your notes and trades on the page.
 """
 
 
@@ -127,4 +191,5 @@ def rules():
 if __name__ == "__main__":
     args = sys.argv[1:]
     what, base = (args[0] if args else "md"), (args[1] if len(args) > 1 else "<server>")
-    sys.stdout.write({"md": lambda: entry(base), "csv": csv_spec, "game-rules": rules}[what]())
+    sys.stdout.write({"md": lambda: entry(base), "csv": csv_spec, "game-rules": rules,
+                      "game-agent": lambda: game_agent(base)}[what]())

@@ -68,7 +68,7 @@ def conn():
 # time a script opens it. Each step takes one version to the next, and holds back on what is not
 # there (a table a much older database never had is simply created, by schema.sql, afterwards).
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 13
 
 
 def _columns(c, table):
@@ -192,8 +192,21 @@ def _to_11(c):
         c.execute("ALTER TABLE portfolio ADD COLUMN public INTEGER NOT NULL DEFAULT 0")
 
 
+def _to_12(c):
+    """An agent's notes: new tables, which schema.sql creates."""
+
+
+def _to_13(c):
+    """AI access is a level per portfolio — 0 none, 1 read-only, 2 read-write — in place of a flag
+    plus each token's own "allow writing". Where access was allowed, its tokens could all write, so
+    it becomes read-write."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'portfolio'").fetchone() \
+            and "ai_access" in _columns(c, "portfolio"):
+        c.execute("UPDATE portfolio SET ai_access = 2 WHERE ai_access = 1")
+
+
 MIGRATIONS = {2: _to_2, 3: _to_3, 4: _to_4, 5: _to_5, 6: _to_6, 7: _to_7, 8: _to_8, 9: _to_9, 10: _to_10,
-              11: _to_11}
+              11: _to_11, 12: _to_12, 13: _to_13}
 
 
 def migrate(c):
@@ -437,7 +450,7 @@ def next_portfolio_id(c):
     return f"pid{n}"
 
 
-def create_portfolio(label, type_, ai_access=False):
+def create_portfolio(label, type_, ai_access=0):
     """A new, empty portfolio with an empty watchlist, under the next portfolio id; that id."""
     with tx() as c:
         pid = next_portfolio_id(c)
@@ -448,7 +461,8 @@ def create_portfolio(label, type_, ai_access=False):
 
 
 # every table with a `portfolio` column naming one by its id
-PORTFOLIO_COLUMNS = ("setting", "ledger", "position", "activity", "cash", "user_portfolio", "api_token")
+PORTFOLIO_COLUMNS = ("setting", "ledger", "position", "activity", "cash", "user_portfolio", "api_token",
+                     "agent_note", "agent_journal", "strategy_version")
 
 
 def renumber_portfolios():
@@ -486,9 +500,13 @@ def public_portfolios(name):
     return out
 
 
-def set_ai_access(pid, allow):
+AI_NONE, AI_READ, AI_WRITE = 0, 1, 2
+
+
+def set_ai_access(pid, level):
+    """0 no API access, 1 read-only, 2 read-write."""
     with tx() as c:
-        return c.execute("UPDATE portfolio SET ai_access = ? WHERE id = ?", (int(allow), pid)).rowcount
+        return c.execute("UPDATE portfolio SET ai_access = ? WHERE id = ?", (int(level), pid)).rowcount
 
 
 def set_label(pid, label):
@@ -597,6 +615,67 @@ def discard_unverified(pid):
     """Every pasted row not yet accepted, gone — the rollback of a bad paste."""
     with tx() as c:
         return c.execute("DELETE FROM ledger WHERE portfolio = ? AND NOT verified", (pid,)).rowcount
+
+
+# ---------- an agent's notes ----------
+# What an agent working on a portfolio keeps between sessions, wherever it runs: memory and the
+# owner's brief (overwritten), the journal (appended), the strategy (versioned, each with its reason).
+
+NOTE_MAX = 64 * 1024                  # characters, per note, strategy version or journal entry
+STRATEGY_KEEP = 200                   # versions kept per portfolio, the newest
+JOURNAL_KEEP = 2000                   # journal entries kept per portfolio, the newest
+
+
+def _now():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def note(pid, name):
+    r = conn().execute("SELECT text, updated FROM agent_note WHERE portfolio = ? AND name = ?", (pid, name)).fetchone()
+    return {"text": r[0], "updated": r[1]} if r else None
+
+
+def set_note(pid, name, text):
+    with tx() as c:
+        c.execute("INSERT INTO agent_note (portfolio, name, text, updated) VALUES (?, ?, ?, ?) "
+                  "ON CONFLICT (portfolio, name) DO UPDATE SET text = excluded.text, updated = excluded.updated",
+                  (pid, name, text, _now()))
+
+
+def add_journal(pid, text, at=None):
+    with tx() as c:
+        c.execute("INSERT INTO agent_journal (portfolio, at, text) VALUES (?, ?, ?)", (pid, at or _now(), text))
+        c.execute("DELETE FROM agent_journal WHERE portfolio = ? AND rowid NOT IN (SELECT rowid FROM agent_journal "
+                  "WHERE portfolio = ? ORDER BY at DESC, rowid DESC LIMIT ?)", (pid, pid, JOURNAL_KEEP))
+
+
+def journal(pid, limit=50):
+    """The newest `limit` entries, oldest first."""
+    return list(reversed(rows("SELECT at, text FROM agent_journal WHERE portfolio = ? ORDER BY at DESC, rowid DESC "
+                              "LIMIT ?", (pid, limit))))
+
+
+def add_strategy(pid, text, reason, saved=None):
+    """A new version of the portfolio's strategy; its number."""
+    with tx() as c:
+        n = (c.execute("SELECT max(version) FROM strategy_version WHERE portfolio = ?", (pid,)).fetchone()[0] or 0) + 1
+        c.execute("INSERT INTO strategy_version (portfolio, version, text, reason, saved) VALUES (?, ?, ?, ?, ?)",
+                  (pid, n, text, reason, saved or _now()))
+        c.execute("DELETE FROM strategy_version WHERE portfolio = ? AND version <= ?", (pid, n - STRATEGY_KEEP))
+    return n
+
+
+def strategy(pid, version=None):
+    """One version, the newest unless named: {version, text, reason, saved}, or None."""
+    r = conn().execute("SELECT version, text, reason, saved FROM strategy_version WHERE portfolio = ? "
+                       + ("AND version = ?" if version else "ORDER BY version DESC LIMIT 1"),
+                       (pid, version) if version else (pid,)).fetchone()
+    return dict(r) if r else None
+
+
+def strategy_history(pid):
+    """Every version kept, newest first, without its text: {version, reason, saved}."""
+    return rows("SELECT version, reason, saved FROM strategy_version WHERE portfolio = ? ORDER BY version DESC", (pid,))
 
 
 # ---------- access ----------
@@ -730,8 +809,7 @@ def api_tokens(name, portfolio):
     """The user's tokens for the portfolio, each with the token itself (None for one made before
     tokens were kept) — and any of theirs bound to none, made before tokens were bound."""
     return [{"id": r["token_hash"][:12], "label": r["label"], "created": r["created"],
-             "last_used": r["last_used"], "token": r["token"], "portfolio": r["portfolio"],
-             "write": bool(r["can_write"])}
+             "last_used": r["last_used"], "token": r["token"], "portfolio": r["portfolio"]}
             for r in rows("SELECT * FROM api_token WHERE user = ? AND (portfolio = ? OR portfolio IS NULL) "
                           "ORDER BY created", (name, portfolio))]
 
@@ -742,15 +820,6 @@ def revoke_api_token(name, token_id):
     with tx() as c:
         return c.execute("DELETE FROM api_token WHERE user = ? AND substr(token_hash, 1, 12) = ?",
                          (name, token_id)).rowcount
-
-
-def set_token_write(name, token_id, allow):
-    """A token's own "allow writing"; how many it changed (0 or 1)."""
-    if len(token_id or "") != 12:
-        return 0
-    with tx() as c:
-        return c.execute("UPDATE api_token SET can_write = ? WHERE user = ? AND substr(token_hash, 1, 12) = ?",
-                         (int(allow), name, token_id)).rowcount
 
 
 def token_login(token):

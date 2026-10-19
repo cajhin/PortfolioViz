@@ -93,8 +93,8 @@ CREATE TABLE IF NOT EXISTS fx_rate (
 -- type: normal — a regular portfolio, editable: Trade Republic imports, CSV pastes and hand
 -- entries (import_tr.py, import_csv.py, manual_tx.py), any of them changed later; game — no past
 -- to edit, only trades now under trading-rules.md (trade.py), its cash moved by
--- manage-portfolios.py. ai_access: whether an API token (server.py) may use it at all, and an
--- agent's trade.py session trade it. public: whether every other logged-in user may view it —
+-- manage-portfolios.py. ai_access: what an API token (server.py) may do on it — 0 nothing, 1 read,
+-- 2 read and write; an agent's trade.py session trades only with 2. public: whether every other logged-in user may view it —
 -- all of it, read only.
 CREATE TABLE IF NOT EXISTS portfolio (
   id       TEXT PRIMARY KEY,
@@ -119,6 +119,31 @@ CREATE TABLE IF NOT EXISTS ledger (
   verified       INTEGER NOT NULL DEFAULT 1,
   data           TEXT NOT NULL,
   PRIMARY KEY (portfolio, transaction_id)
+);
+
+-- An agent's notes on the portfolio it works on (notes.py, server.py's /notes): memory and the
+-- owner's brief (overwritten), the journal (only appended to), and the strategy — every save a new
+-- version with its reason, so how it changed stays readable.
+CREATE TABLE IF NOT EXISTS agent_note (
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
+  name      TEXT NOT NULL CHECK (name IN ('memory', 'brief')),
+  text      TEXT NOT NULL,
+  updated   TEXT NOT NULL,
+  PRIMARY KEY (portfolio, name)
+);
+CREATE TABLE IF NOT EXISTS agent_journal (
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
+  at        TEXT NOT NULL,
+  text      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_journal_portfolio ON agent_journal (portfolio, at);
+CREATE TABLE IF NOT EXISTS strategy_version (
+  portfolio TEXT NOT NULL REFERENCES portfolio (id) ON DELETE CASCADE,
+  version   INTEGER NOT NULL,
+  text      TEXT NOT NULL,
+  reason    TEXT NOT NULL,
+  saved     TEXT NOT NULL,
+  PRIMARY KEY (portfolio, version)
 );
 
 -- What the page reads: what import_tr.py rebuilt from
@@ -172,9 +197,9 @@ CREATE TABLE IF NOT EXISTS session (
 
 -- a user's API tokens, for scripts and AI (server.py's Authorization: Bearer): made on a portfolio's
 -- Config tab and bound to that portfolio alone, looked up by their sha256, and kept as they are too
--- (token) so their user can copy one again from the page. A token works only while its portfolio
--- allows AI access (portfolio.ai_access), and writes only if can_write — its own "allow writing";
--- one with no portfolio (made before tokens were bound) is refused.
+-- (token) so their user can copy one again from the page. What a token may do is its portfolio's
+-- ai_access; can_write is unused since schema 13, when that moved there. One with no portfolio
+-- (made before tokens were bound) is refused.
 CREATE TABLE IF NOT EXISTS api_token (
   token_hash TEXT PRIMARY KEY,
   user       TEXT NOT NULL REFERENCES user (name) ON DELETE CASCADE,

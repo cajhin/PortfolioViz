@@ -14,8 +14,8 @@ answer is one JSON object; on error {"ok": false, "error": ..., "hint": ...}, ex
 
 A <portfolio> is its id: pid1, pid2, … `create` makes a game portfolio — the only type these scripts
 touch, and trade.py trades — under the next id (in its answer), and books the opening cash today.
---ai allows AI access: an agent's trade.py session trades only such a portfolio (the page's Config
-tab switches it, too). deposit and withdraw move cash today as well; there is no date to give. --id
+--ai allows AI read-write access: an agent's trade.py session trades only such a portfolio (the
+page's Config tab sets it, too). deposit and withdraw move cash today as well; there is no date to give. --id
 makes a call safe to repeat: a second call with the same id answers with the first one's result
 instead of moving the money twice. Cash can never go below zero: a withdrawal larger than the
 portfolio holds is refused.
@@ -28,7 +28,7 @@ portfolios by.
 (ledgers, positions, activities, cash, settings). The registry and the prices stay — they are
 shared. Where the backup goes is not guessed: --backup-dir DIR backs the database up there first
 (scripts/db.py backup; nothing is purged if that fails), --no-backup skips it. The default
-portfolio cannot be purged; an agent's own folder under agents/ is not touched.
+portfolio cannot be purged.
 
 `renumber` gives every portfolio still known by an older id (a name, before ids were numbers) the
 next pid, oldest first — its data, grants, tokens and the default setting follow — and answers with
@@ -71,7 +71,7 @@ def create(label, eur, ai=False):
         raise Refusal("give --label, the name the page shows")
     if not (eur or 0) >= 0:
         raise Refusal("give --cash as zero or more")
-    pid = db.create_portfolio(label, "game", ai_access=ai)
+    pid = db.create_portfolio(label, "game", ai_access=db.AI_WRITE if ai else db.AI_NONE)
     quiet(import_tr.rebuild, pid)
     if eur:
         move_cash(pid, "deposit", eur, "opening balance")

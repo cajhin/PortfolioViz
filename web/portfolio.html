@@ -380,6 +380,32 @@
       </div>
     </div>
 
+    <!-- an agent's notes on this portfolio (server.py's /notes): its strategy with every version and a
+         diff between any two, its memory and its journal (the owner's instructions to it are on the
+         Config tab). With the
+         Transactions tab, for a game — or any portfolio that has notes (see renderNotes) -->
+    <div class="card" id="notesCard" hidden>
+      <div class="closedhead"><b>Agent notes</b> <span class="muted">— what the agent working on
+        this portfolio keeps between sessions</span></div>
+      <div class="notesec">
+        <h4>Strategy <span class="muted" id="noteStrategyMeta"></span></h4>
+        <div class="configrow" id="noteStrategyPick" hidden>
+          <select id="noteVersion" class="pick" aria-label="Version"></select>
+          <span class="muted">compared with</span>
+          <select id="noteVersionBase" class="pick" aria-label="Compared with"></select>
+        </div>
+        <pre class="notetext" id="noteStrategy"></pre>
+      </div>
+      <div class="notesec">
+        <h4>Memory <span class="muted" id="noteMemoryMeta"></span></h4>
+        <pre class="notetext" id="noteMemory"></pre>
+      </div>
+      <div class="notesec">
+        <h4>Journal <span class="muted">· newest first</span></h4>
+        <div id="noteJournal" class="notejournal"></div>
+      </div>
+    </div>
+
     <!-- "+ New instrument…" in the add form: registers an ISIN with a Yahoo symbol (start.sh's
          /instrument route → add_instrument.py) so a demo portfolio can hold something the registry
          did not have. Type a name, Look up, pick one: ISIN, symbol and sector fill themselves in
@@ -460,10 +486,27 @@
           including its transactions</label>
         <span class="err" id="publicMsg"></span>
       </div>
+      <!-- what this portfolio's API tokens may do: read, or read and write — read-write implies
+           read-only, so the two boxes are one level (0 none, 1 read, 2 read-write; see setAiLevel) -->
       <div id="aiWriteRow" class="configrow" hidden>
-        <label for="aiWrite">AI access</label>
-        <label class="check"><input type="checkbox" id="aiWrite"> Allow AI (API) access</label>
+        <label for="aiRead">AI access</label>
+        <div class="proflist">
+          <label class="check"><input type="checkbox" id="aiRead"> Allow AI (API) access, read-only</label>
+          <label class="check"><input type="checkbox" id="aiWrite"> Allow AI (API) access, read-write</label>
+        </div>
         <span class="err" id="aiWriteMsg"></span>
+      </div>
+      <!-- what the owner tells agents working on this portfolio, above everything but the rules —
+           the notes' `brief` (server.py's /notes/brief); shown while AI access is allowed -->
+      <div id="briefRow" class="configrow" hidden>
+        <label></label>
+        <div class="tokensec">
+          <label for="noteBrief">Special agent instructions for games <span class="muted">(it already reads the general game rules)</span></label>
+          <textarea id="noteBrief" class="brieftext" rows="4" spellcheck="false"
+            placeholder="e.g. be aggressive · trade only tech · never more than 10 positions"></textarea>
+          <div class="configrow"><button type="button" id="noteBriefSave" class="dt-addsel">Save instructions</button>
+            <span class="muted" id="noteBriefMsg"></span></div>
+        </div>
       </div>
       <!-- the user's API tokens, shown while AI access is allowed: made here, copied from here to
            hand to an agent, allowed to write or not, revoked here (see renderTokens) -->

@@ -3140,6 +3140,7 @@ async function show(view) {
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('watchCard').hidden = view !== 'watch';
+  document.getElementById('notesCard').hidden = view !== 'trades' || !NOTES_SHOWN;
   document.getElementById('publicCard').hidden = view !== 'watch' || !PUBLIC_COUNT;
   document.getElementById('configCard').hidden = view !== 'config';
   document.getElementById('tip').classList.remove('on');
@@ -3728,14 +3729,22 @@ function applyPortfolioType(me) {
   const note = document.getElementById('txSourceNote');
   note.textContent = text.note(me.label || PORTFOLIO);
   note.hidden = !note.textContent;
+  // both need the portfolio, which is not known before this — a plain address only learns it from
+  // the default setting, after the page's first requests
+  renderNotes(me);
+  renderTokens();
   // so are Public and the AI flag; only who may change the portfolio may switch them
   const pub = document.getElementById('publicFlag');
   pub.checked = !!me.public;
   pub.disabled = me.write === false;
   document.getElementById('publicRow').hidden = false;
-  const ai = document.getElementById('aiWrite');
-  ai.checked = !!me.ai;
-  ai.disabled = me.write === false;
+  // AI access: 0 none, 1 read-only, 2 read-write (an older server said true for any access)
+  const level = me.ai === true ? 2 : +me.ai || 0;
+  ['aiRead', 'aiWrite'].forEach((id, i) => {
+    const box = document.getElementById(id);
+    box.checked = level > i;
+    box.disabled = me.write === false;
+  });
   document.getElementById('aiWriteRow').hidden = false;
   showTokenRow();
   // the edit column depends on this, and the list may already be drawn without it — the
@@ -3752,6 +3761,100 @@ function applyPortfolioType(me) {
   document.getElementById('emptyPortfolioHow').innerHTML = text.how;
 }
 
+// An agent's notes on this portfolio (server.py's /notes), under the Transactions tab: for a game —
+// what its agent works by — or any portfolio that has some: strategy, memory and journal, the
+// agent's, shown as they are. The brief — the owner's special instructions to it — is edited on the
+// Config tab, under the AI checkbox. Every strategy version is kept:
+// pick one, and what changed since the one before it (or any other) shows line by line.
+let NOTES_SHOWN = false, NOTES_WRITE = false;
+function renderNotes(me) {
+  NOTES_WRITE = me.write !== false;
+  fetch(`notes?portfolio=${encodeURIComponent(PORTFOLIO)}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null).catch(() => null)
+    .then(n => {
+      if (!n) return;
+      NOTES_SHOWN = me.type === 'game' || !!(n.strategy || n.memory || n.journal.length);
+      document.getElementById('notesCard').hidden = VIEW !== 'trades' || !NOTES_SHOWN;
+      const brief = document.getElementById('noteBrief');
+      brief.value = n.brief ? n.brief.text : '';
+      brief.readOnly = !NOTES_WRITE;
+      document.getElementById('noteBriefSave').hidden = !NOTES_WRITE;
+      BRIEF_LOADED = true;
+      showTokenRow();
+      document.getElementById('noteMemory').textContent = n.memory ? n.memory.text : '';
+      document.getElementById('noteMemoryMeta').textContent = n.memory ? `· the agent's · saved ${stamp(n.memory.updated)}` : "· the agent's";
+      document.getElementById('noteJournal').replaceChildren(...n.journal.slice().reverse().map(j => {
+        const div = document.createElement('div');
+        div.append(Object.assign(document.createElement('time'), { textContent: stamp(j.at) }), j.text.trim());
+        return div;
+      }));
+      if (!n.journal.length) document.getElementById('noteJournal').textContent = '—';
+      showStrategy(n.strategy);
+    });
+}
+const stamp = iso => `${deDate(iso.slice(0, 10))} ${iso.slice(11, 16)}`;
+async function showStrategy(newest) {
+  const meta = document.getElementById('noteStrategyMeta'), text = document.getElementById('noteStrategy');
+  if (!newest) { meta.textContent = "· the agent's · none yet"; text.textContent = ''; return; }
+  const history = await fetch(`notes/strategy?history=1&portfolio=${encodeURIComponent(PORTFOLIO)}`, { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : []).catch(() => []);
+  const pick = document.getElementById('noteVersion'), base = document.getElementById('noteVersionBase');
+  const label = v => `v${v.version} · ${deDate(v.saved.slice(0, 10))} · ${v.reason}`;
+  pick.replaceChildren(...history.map(v => new Option(label(v), v.version)));
+  base.replaceChildren(new Option('— nothing (the text alone)', ''), ...history.map(v => new Option(label(v), v.version)));
+  document.getElementById('noteStrategyPick').hidden = history.length < 2;
+  const cache = new Map([[newest.version, newest]]);
+  const get = async v => cache.get(v) || cache.set(v, await fetch(
+    `notes/strategy?version=${v}&portfolio=${encodeURIComponent(PORTFOLIO)}`, { cache: 'no-store' }).then(r => r.json())).get(v);
+  async function draw() {
+    const v = await get(+pick.value || newest.version);
+    meta.textContent = `· the agent's · version ${v.version} of ${history.length}, ${stamp(v.saved)} — ${v.reason}`;
+    const b = base.value ? await get(+base.value) : null;
+    text.replaceChildren(...(b ? lineDiff(b.text, v.text) : [document.createTextNode(v.text)]));
+  }
+  pick.onchange = () => {
+    // by default each version is compared with the one before it
+    const before = history.find(h => h.version < +pick.value);
+    base.value = before ? before.version : '';
+    draw();
+  };
+  base.onchange = draw;
+  pick.value = newest.version;
+  pick.onchange();
+}
+// Two texts line by line — the longest common run kept, what only the newer has marked added, what
+// only the older had struck through. Strategies are short, so the plain quadratic table is enough.
+function lineDiff(older, newer) {
+  const a = older.split('\n'), b = newer.split('\n');
+  const L = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--)
+    for (let j = b.length - 1; j >= 0; j--)
+      L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [], line = (t, cls) => cls
+    ? Object.assign(document.createElement('span'), { className: cls, textContent: t || ' ' })
+    : document.createTextNode(t + '\n');
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { out.push(line(a[i])); i++; j++; }
+    else if (j < b.length && (i >= a.length || L[i][j + 1] >= L[i + 1][j])) out.push(line(b[j++], 'add'));
+    else out.push(line(a[i++], 'del'));
+  }
+  return out;
+}
+document.getElementById('noteBriefSave').addEventListener('click', async () => {
+  const msg = document.getElementById('noteBriefMsg');
+  msg.textContent = '';
+  try {
+    const r = await fetch(`notes/brief?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: document.getElementById('noteBrief').value }) });
+    if (!r.ok) throw new Error(routeFailure(r));
+    msg.textContent = 'Saved';
+  } catch (err) {
+    msg.textContent = `Not saved: ${err.message}`;
+  }
+});
+
 // The Config tab's "Public": every other logged-in user may view this portfolio, read only. Switched
 // back if the server says no.
 document.getElementById('publicFlag').addEventListener('change', async e => {
@@ -3767,32 +3870,42 @@ document.getElementById('publicFlag').addEventListener('change', async e => {
   }
 });
 
-// The Config tab's "Allow AI (API) access": whether an API token may use this portfolio at all (and
-// write, if its own "allow writing" says so), and an agent's trade.py session trade it. Switched
-// back if the server says no.
-document.getElementById('aiWrite').addEventListener('change', async e => {
-  const box = e.currentTarget, msg = document.getElementById('aiWriteMsg');
+// The Config tab's "Allow AI (API) access, read-only" and "…, read-write": what every API token of
+// this portfolio may do, and whether an agent's trade.py session may trade it (read-write). The two
+// boxes are one level — read-write ticks read-only too, and unticking read-only unticks read-write.
+// Both switched back if the server says no.
+async function setAiLevel(read, write) {
+  const r = document.getElementById('aiRead'), w = document.getElementById('aiWrite');
+  const was = [r.checked, w.checked], msg = document.getElementById('aiWriteMsg');
+  [r.checked, w.checked] = [read || write, write];
   msg.textContent = '';
   try {
-    const r = await fetch(`portfolio-ai?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ allow: box.checked }) });
-    if (!r.ok) throw new Error(routeFailure(r));
+    const res = await fetch(`portfolio-ai?portfolio=${encodeURIComponent(PORTFOLIO)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: w.checked ? 2 : r.checked ? 1 : 0 }) });
+    if (!res.ok) throw new Error(routeFailure(res));
   } catch (err) {
-    box.checked = !box.checked;
+    [r.checked, w.checked] = was;
     msg.textContent = `Not changed: ${err.message}`;
   }
   showTokenRow();
-});
+}
+document.getElementById('aiRead').addEventListener('change', e => setAiLevel(e.currentTarget.checked, false));
+document.getElementById('aiWrite').addEventListener('change', e => setAiLevel(true, e.currentTarget.checked));
 
 // The Config tab's API tokens, for a script or an AI to call this server as the user
 // (Authorization: Bearer …) — each bound to this portfolio, and shown only while it allows AI access,
 // since that is when one is any use. Each is kept, so its Copy token hands it to an agent at any
-// time; its "allow writing" says whether it may change anything or only read; the list says what
+// time — what it may do is the portfolio's AI access, read-only or read-write; the list says what
 // each is for and when it was last used, with a Revoke. A token made before tokens were bound (no
 // portfolio) is listed too, to be revoked: it no longer works.
-let TOKENS_LOADED = false;
+let TOKENS_LOADED = false, BRIEF_LOADED = false;
+// both rows under the AI checkbox show while it is ticked: the tokens, and — for a game, whose agent
+// they are for — the special instructions
 const showTokenRow = () => {
-  document.getElementById('tokenRow').hidden = !(TOKENS_LOADED && document.getElementById('aiWrite').checked);
+  const ai = document.getElementById('aiRead').checked;
+  document.getElementById('tokenRow').hidden = !(TOKENS_LOADED && ai);
+  document.getElementById('briefRow').hidden = !(BRIEF_LOADED && ai && PORTFOLIO_TYPE === 'game');
 };
 // the Clipboard API wants a secure page (https, or localhost); served over plain http to another
 // machine, the old way still works
@@ -3813,6 +3926,12 @@ function renderTokens() {
     .then(list => {
       TOKENS_LOADED = true;
       showTokenRow();
+      // none yet: say what the boxes alone do not give an agent
+      if (!list.length) {
+        document.getElementById('tokenList').replaceChildren(Object.assign(document.createElement('div'),
+          { className: 'muted', textContent: 'For write access, you must create a token and give it to the agent' }));
+        return;
+      }
       document.getElementById('tokenList').replaceChildren(...list.map(t => {
         const row = document.createElement('div');
         const what = Object.assign(document.createElement('span'), { textContent: `Token: '${t.label}'` });
@@ -3829,16 +3948,6 @@ function renderTokens() {
           copy.textContent = await copyText(t.token) ? 'Copied' : 'Copy failed';
           setTimeout(() => { copy.textContent = 'Copy token'; }, 1500);
         });
-        const write = Object.assign(document.createElement('label'), { className: 'check' });
-        const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!t.write });
-        write.append(box, ' allow writing');
-        box.addEventListener('change', async () => {
-          const r = await fetch('token-write', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                                 body: JSON.stringify({ id: t.id, allow: box.checked }) }).catch(() => null);
-          if (r && r.ok) { t.write = box.checked; return; }    // the agent prompt says read only or not
-          box.checked = !box.checked;
-          document.getElementById('tokenMsg').textContent = r ? `Not changed: ${routeFailure(r)}` : 'Not changed';
-        });
         // everything an agent elsewhere needs to start: where, which portfolio, the token, and to read
         // the instructions first (server.py's /agents.md)
         const prompt = Object.assign(document.createElement('button'), { type: 'button', className: 'dt-addsel',
@@ -3848,8 +3957,10 @@ function renderTokens() {
           const base = PUBLIC_URL || location.href.replace(/[^/]*([?#].*)?$/, '');
           const label = document.getElementById('portfolioLabel').value || PORTFOLIO;
           const text = `You have access to my Portfolioviz portfolio "${label}" (a ${PORTFOLIO_TYPE} portfolio) ` +
-            `at ${base} with the API token ${t.token}` + (t.write ? '' : ' (read only)') +
-            `. Before anything else, read ${base}agents.md and follow it.`;
+            `at ${base} with the API token ${t.token}` +
+            (document.getElementById('aiWrite').checked ? '' : ' (read only)') +
+            `. Before anything else, read ${base}agents.md and follow it.` +
+            (PORTFOLIO_TYPE === 'game' ? ` You are the agent trading it: then read ${base}agents/game-agent and work by it.` : '');
           prompt.textContent = await copyText(text) ? 'Copied' : 'Copy failed';
           setTimeout(() => { prompt.textContent = 'Copy agent prompt'; }, 1500);
         });
@@ -3862,7 +3973,7 @@ function renderTokens() {
           if (r && r.ok) renderTokens();
           else document.getElementById('tokenMsg').textContent = r ? routeFailure(r) : 'Revoke failed';
         });
-        row.append(what, write, copy, prompt, btn, when);
+        row.append(what, copy, prompt, btn, when);
         return row;
       }));
     })
@@ -3882,7 +3993,6 @@ document.getElementById('tokenForm').addEventListener('submit', async e => {
     msg.textContent = `Not created: ${err.message}`;
   }
 });
-renderTokens();
 
 // The Config tab's "Create new portfolio": what the type picked means, beside it.
 const newType = document.getElementById('newPortfolioType');

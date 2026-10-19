@@ -62,7 +62,8 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # POST /portfolios {label, type} → {id} — the Config tab's "Create new portfolio", type "normal" or
 # "game": an empty portfolio with an empty watchlist under the next id (pid17), granted to its
 # creator — a game with GAME_CASH booked (manage-portfolios.py create).
-# POST /portfolio-ai?portfolio=ID {allow} — the Config tab's "Allow AI (API) access".
+# POST /portfolio-ai?portfolio=ID {level} — the Config tab's "Allow AI (API) access": 0 none,
+# 1 read-only, 2 read-write — what every token of the portfolio may do.
 # POST /portfolio-label?portfolio=ID {label} — the Config tab's rename: only the label changes. The
 # id never does — it is what URLs, scripts, tokens and baselines refer to the portfolio by.
 # POST /portfolio-delete?portfolio=ID — the Config tab's Delete, for a portfolio the user may change:
@@ -95,9 +96,9 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # all} — a game's "trade now" on the Transactions tab: trade.py quote, and trade.py buy or sell —
 # its JSON as it is, the rules (trading-rules.md) and the refusals all trade.py's own. Games only.
 #
-# GET /tokens?portfolio=ID, POST /tokens {label, portfolio} → {id, token}, POST /token-revoke {id},
-# POST /token-write {id, allow} — the Config tab's API tokens: the user's own for that portfolio, each
-# with the token itself, for its Copy button, and its "allow writing". See TOKENS.
+# GET /tokens?portfolio=ID, POST /tokens {label, portfolio} → {id, token}, POST /token-revoke {id} —
+# the Config tab's API tokens: the user's own for that portfolio, each with the token itself, for its
+# Copy button. See TOKENS.
 #
 # GET /instrument-search?find=NAME | ?symbols=ISIN and POST /instrument {isin, symbol, name,
 # sector} — the Transactions tab's "new instrument" dialog: instruments by name (with their
@@ -112,14 +113,20 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 # 404, the same as one that does not exist. api/config's defaultPortfolio is the user's: the global
 # one if they may open it, else the first they may.
 #
-# GET /agents.md (also /llms.txt), /agents/csv, /agents/game-rules — instructions for agents using a
-# portfolio over HTTP from elsewhere (scripts/agents.py): public, like login.html, so an agent can
+# GET /agents.md (also /llms.txt), /agents/csv, /agents/game-rules, /agents/game-agent — instructions
+# for agents using a portfolio over HTTP from elsewhere (scripts/agents.py): public, like login.html, so an agent can
 # read how to get a token before it has one. Every refusal a token gets points there. The address
 # they give is public_url(): the global `publicUrl` setting, which an admin sets to where others
 # reach this server (db.py config set publicUrl '"https://…"'), else where the request came in.
 # GET /instrument?isin=ISIN — {registered, id, name, display}: whether that one instrument is in the
 # registry — never the registry whole, which names what every other portfolio holds.
 # GET /game-status — a game's cash and positions valued live (trade.py status).
+# GET /chart?instrument=X[&instrument=Y…] — price history in figures (trade.py chart), to research by.
+# GET /notes — an agent's notes on the portfolio: {brief, strategy, memory, journal (the newest 50)};
+# GET /notes/strategy?history=1 its versions (no text), ?version=N one; GET /notes/journal?limit=N.
+# POST /notes/memory {text}, /notes/strategy {text, reason}, /notes/journal {text} — the agent's,
+# open to a token allowed to write; POST /notes/brief {text} — the owner's, on the page only.
+# See notes.py.
 #
 # GET /host — the machine this server runs on, so the page can tell the dev copy from the live one
 # (see markDevHost). Not knowable from the browser: both are reached through localhost or a proxy.
@@ -164,7 +171,7 @@ def portfolio_type(pid):
 
 def list_portfolios(user):
     return [{"id": p["id"], "label": p["label"], "type": p["type"], "write": bool(p["can_write"]),
-             "ai": bool(p["ai_access"]), "public": bool(p["public"])} for p in db.user_portfolios(user)]
+             "ai": p["ai_access"], "public": bool(p["public"])} for p in db.user_portfolios(user)]
 
 # TOKENS. A script or an AI logs in with one of its user's API tokens (Authorization: Bearer …) in
 # place of the session cookie. A token is bound to the portfolio it was made for: every route acts on
@@ -173,7 +180,7 @@ def list_portfolios(user):
 # ticked, and only through TOKEN_WRITES — never accepting its own CSV import (that is the user's
 # check of it), and never anything about portfolios, users, tokens or the server.
 TOKEN_WRITES = ("/manual-tx", "/import-csv", "/import-tr", "/trade", "/instrument", "/update-prices",
-                "/watchlist")
+                "/watchlist", "/notes/memory", "/notes/strategy", "/notes/journal")
 
 def script_env():
     """The environment a script runs in: never an agent's binding (TRADE_PORTFOLIO), which would
@@ -243,8 +250,10 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.send_text(401, "unknown API token, or one made before tokens were bound to a portfolio - "
                                 "ask your user for a new one; see agents.md")
             return None
-        user, self.token_portfolio, self.token_write = found
-        if not (db.portfolio(self.token_portfolio) or {}).get("ai_access"):
+        user, self.token_portfolio, _ = found
+        level = (db.portfolio(self.token_portfolio) or {}).get("ai_access") or db.AI_NONE
+        self.token_write = level >= db.AI_WRITE
+        if level == db.AI_NONE:
             self.send_text(403, f"portfolio {self.token_portfolio} does not allow AI (API) access - ask its "
                                 "owner to allow it on the Config tab; see agents.md")
             return None
@@ -267,7 +276,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         return db.access(self.user, portfolio) is not None or bool((db.portfolio(portfolio) or {}).get("public"))
 
     def may_change(self, portfolio):
-        """Granted with write access — and, for an API token, the token's own "allow writing"."""
+        """Granted with write access — and, for an API token, the portfolio's AI access read-write."""
         return (self.may_open(portfolio) and db.access(self.user, portfolio) is True
                 and (not self.via_token or self.token_write))
 
@@ -275,8 +284,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not self.may_open(portfolio):
             self.send_error(404, f"no portfolio {portfolio} for you")
         elif self.via_token and db.access(self.user, portfolio):
-            self.send_error(403, "this token may not write - ask portfolio owner to 'allow writing' on the "
-                                 "Config tab (see agents.md)")
+            self.send_error(403, "this portfolio allows AI read-only access - ask its owner to allow read-write "
+                                 "on the Config tab (see agents.md)")
         else:
             self.send_error(403, f"you may not {what} {portfolio}")
 
@@ -423,6 +432,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/restart":
             self.restart()
             return
+        if parsed.path.startswith("/notes/"):
+            self.notes_post(parsed.path[len("/notes/"):], (urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
+            return
         if parsed.path == "/watchlist":
             self.watchlist((urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
             return
@@ -441,7 +453,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/trade":
             self.trade((urllib.parse.parse_qs(parsed.query).get("portfolio") or [""])[0])
             return
-        if parsed.path in ("/tokens", "/token-revoke", "/token-write"):
+        if parsed.path in ("/tokens", "/token-revoke"):
             self.tokens_post(parsed.path)
             return
         if parsed.path != "/update-prices":
@@ -639,6 +651,34 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             return {}
 
+    def notes_post(self, what, portfolio):
+        req = self.read_json()
+        if what not in ("memory", "strategy", "journal", "brief"):
+            self.send_error(404)
+            return
+        if not self.may_change(portfolio):
+            self.refuse_change(portfolio)
+            return
+        text = str(req.get("text") or "")
+        if not text.strip() and what != "brief":            # a brief may be cleared
+            self.send_error(400, "give the text")
+            return
+        if len(text) > db.NOTE_MAX:
+            self.send_error(400, f"{len(text)} characters - at most {db.NOTE_MAX}")
+            return
+        if what == "strategy":
+            reason = " ".join(str(req.get("reason") or "").split())
+            if not reason:
+                self.send_error(400, "a strategy version needs a reason: what changed, and why")
+                return
+            self.send_json({"strategy": db.add_strategy(portfolio, text, reason[:500])})
+        elif what == "journal":
+            db.add_journal(portfolio, text)
+            self.send_json({"journal": "added"})
+        else:
+            db.set_note(portfolio, what, text)
+            self.send_json({what: "saved"})
+
     def watchlist(self, portfolio):
         req = self.read_json()
         if not self.may_change(portfolio):
@@ -662,8 +702,12 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         if not self.may_change(portfolio):
             self.refuse_change(portfolio)
             return
-        db.set_ai_access(portfolio, bool(req.get("allow")))
-        self.send_json({"portfolio": portfolio, "ai": bool(req.get("allow"))})
+        level = req.get("level")
+        if level not in (db.AI_NONE, db.AI_READ, db.AI_WRITE):
+            self.send_error(400, "level must be 0 (none), 1 (read-only) or 2 (read-write)")
+            return
+        db.set_ai_access(portfolio, level)
+        self.send_json({"portfolio": portfolio, "ai": level})
 
     def trade(self, portfolio):
         req = self.read_json()
@@ -683,7 +727,9 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 args += ["--" + key, str(req[key])]
         if side == "sell" and req.get("all"):
             args.append("--all")
-        args += ["--reason", "traded on the page" if not self.via_token else "traded through the API"]
+        # the agent's own reason, kept with the trade; else where it came from
+        reason = " ".join(str(req.get("reason") or "").split())[:1000]
+        args += ["--reason", reason or ("traded on the page" if not self.via_token else "traded through the API")]
         if req.get("id"):
             args += ["--id", str(req["id"])]
         out = self.run_json(args)
@@ -702,12 +748,6 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 return
             token = db.new_api_token(self.user, label, portfolio)
             self.send_json({"token": token, "label": label, "portfolio": portfolio})
-            return
-        if path == "/token-write":
-            if not db.set_token_write(self.user, str(req.get("id") or ""), bool(req.get("allow"))):
-                self.send_error(404, "no such token")
-                return
-            self.send_json({"id": req.get("id"), "write": bool(req.get("allow"))})
             return
         if not db.revoke_api_token(self.user, str(req.get("id") or "")):
             self.send_error(404, "no such token")
@@ -762,10 +802,11 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             return
         path = urllib.parse.urlparse(self.path).path
-        docs = {"/agents.md": "md", "/llms.txt": "md", "/agents/csv": "csv", "/agents/game-rules": "rules"}
+        docs = {"/agents.md": "md", "/llms.txt": "md", "/agents/csv": "csv", "/agents/game-rules": "rules",
+                "/agents/game-agent": "agent"}
         if path in docs:                    # public: how an agent gets in is no secret
-            text = {"md": lambda: agents.entry(self.public_url()), "csv": agents.csv_spec,
-                    "rules": agents.rules}[docs[path]]()
+            text = {"md": lambda: agents.entry(self.public_url()), "csv": agents.csv_spec, "rules": agents.rules,
+                    "agent": lambda: agents.game_agent(self.public_url())}[docs[path]]()
             body = text.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/markdown; charset=utf-8")
@@ -775,7 +816,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             return
         if not (path.startswith("/api/") or path in ("/me", "/portfolios", "/host", "/instrument-search",
                                                     "/live-index", "/quote", "/tokens", "/export-csv",
-                                                    "/game-status", "/instrument", "/public-portfolios")):
+                                                    "/game-status", "/instrument", "/public-portfolios",
+                                                    "/chart", "/notes", "/notes/strategy", "/notes/journal")):
             super().do_GET()       # the page's own files: no data in them, and login.html is one
             return
         self.user = self.login_user()
@@ -822,6 +864,24 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                 return
             self.send_json(db.api_tokens(self.user, portfolio))
             return
+        if path.startswith("/notes"):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            portfolio = (q.get("portfolio") or [""])[0]
+            if not self.may_open(portfolio):
+                self.send_error(404, f"no portfolio {portfolio} for you")
+                return
+            if path == "/notes":
+                self.send_json({"brief": db.note(portfolio, "brief"), "strategy": db.strategy(portfolio),
+                                "memory": db.note(portfolio, "memory"), "journal": db.journal(portfolio)})
+            elif path == "/notes/journal":
+                limit = (q.get("limit") or ["50"])[0]
+                self.send_json(db.journal(portfolio, max(1, min(int(limit) if limit.isdigit() else 50, db.JOURNAL_KEEP))))
+            elif (q.get("version") or [""])[0].isdigit():
+                found = db.strategy(portfolio, int(q["version"][0]))
+                self.send_json(found) if found else self.send_error(404, "no such version")
+            else:
+                self.send_json(db.strategy_history(portfolio) if q.get("history") else db.strategy(portfolio))
+            return
         if path == "/public-portfolios":
             self.send_json([] if self.via_token else
                            [{k: p[k] for k in ("id", "label", "type", "owners")} for p in db.public_portfolios(self.user)])
@@ -852,9 +912,11 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
                                   capture_output=True, text=True, timeout=60)
             self.send_text(200 if proc.returncode == 0 else 500, proc.stdout if proc.returncode == 0 else proc.stderr)
             return
-        if path == "/quote":
-            what = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("instrument") or [""])[0]
-            out = self.run_json(["trade.py", "quote", what], timeout=60) if what else {"ok": False, "error": "missing ?instrument="}
+        if path in ("/quote", "/chart"):
+            # one instrument or several, as trade.py takes them; anything with a name, a ticker or an ISIN
+            what = [w for w in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("instrument", []) if w][:20]
+            out = (self.run_json(["trade.py", path[1:]] + what, timeout=120) if what
+                   else {"ok": False, "error": "missing ?instrument="})
             self.send_text(200 if out.get("ok") else 400, json.dumps(out, ensure_ascii=False))
             return
         if path in ("/portfolios", "/host"):
