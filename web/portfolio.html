@@ -272,6 +272,27 @@
       </table>
     </div>
 
+    <!-- a game's only way in, in a frame of its own above its transactions: a trade now, at a live
+       price, under the trading rules — trade.py's quote and buy/sell, through server.py's /quote and
+       /trade (see the game trade script). With the Transactions tab, for a game its user may trade -->
+    <div class="card" id="gameTrade" hidden>
+      <form id="gameTradeForm" class="configrow">
+        <label for="gtIsin">Trade now</label>
+        <select id="gtSide" class="pick" aria-label="Buy or sell">
+          <option value="buy">Buy</option><option value="sell">Sell</option>
+        </select>
+        <select id="gtIsin" class="pick" required aria-label="Instrument"></select>
+        <span class="muted" id="gtIsinText"></span>
+        <input type="text" inputmode="decimal" class="dec" id="gtAmount" required aria-label="Amount">
+        <select id="gtUnit" class="pick" aria-label="Unit">
+          <option value="eur">€ (fee included)</option><option value="shares">shares</option>
+          <option value="all">all held</option>
+        </select>
+        <button type="button" id="gtQuote" class="dt-addsel">Quote</button>
+        <button type="submit" class="dt-addsel" id="gtGo">Buy now</button>
+      </form>
+      <pre class="importlog" id="gameTradeLog" hidden></pre>
+    </div>
     <div class="card tablescroll" id="tradesCard" hidden>
       <!-- which of the two kinds of portfolio this is decides what else this tab offers (see
            applyPortfolioType): a normal one gets an Edit and a Verified flag per row, the add row at
@@ -323,25 +344,6 @@
       <div id="txAdd" class="txtools" hidden>
         <form id="txForm"></form>
         <div class="err" id="txMsg"></div>
-      </div>
-      <!-- a game's only way in: a trade now, at a live price, under trading-rules.md — trade.py's
-           quote and buy/sell, through server.py's /quote and /trade (see the game trade script) -->
-      <div id="gameTrade" class="txtools" hidden>
-        <form id="gameTradeForm" class="configrow">
-          <label for="gtIsin">Trade now</label>
-          <select id="gtSide" class="pick" aria-label="Buy or sell">
-            <option value="buy">Buy</option><option value="sell">Sell</option>
-          </select>
-          <select id="gtIsin" class="pick" required aria-label="Instrument"></select>
-          <input type="text" inputmode="decimal" class="dec" id="gtAmount" required aria-label="Amount">
-          <select id="gtUnit" class="pick" aria-label="Unit">
-            <option value="eur">€ (fee included)</option><option value="shares">shares</option>
-            <option value="all">all held</option>
-          </select>
-          <button type="button" id="gtQuote" class="dt-addsel">Quote</button>
-          <button type="submit" class="dt-addsel" id="gtGo">Buy now</button>
-        </form>
-        <pre class="importlog" id="gameTradeLog" hidden></pre>
       </div>
       <!-- the imports, at the tab's foot: a Trade Republic export, or lines pasted in the
            Portfolioviz CSV format (scripts/import_csv.py — its docstring is the format's spec).
@@ -410,6 +412,16 @@
          /instrument route → add_instrument.py) so a demo portfolio can hold something the registry
          did not have. Type a name, Look up, pick one: ISIN, symbol and sector fill themselves in
          (see the dialog's own script), and stay editable. -->
+    <!-- a game's trading rules, as the agents read them (server.py's /agents/game-rules), opened from
+         the game note's "trading rules" link — see openRules -->
+    <dialog id="rulesDialog" class="liveedit rulesdlg">
+      <header>
+        <div class="cp-title">Trading rules for game portfolios</div>
+        <button type="button" id="rulesClose" aria-label="Close">✕</button>
+      </header>
+      <div id="rulesBody" class="rulesbody"></div>
+    </dialog>
+
     <dialog id="instDialog" class="liveedit">
       <header>
         <div class="cp-title">New instrument</div>

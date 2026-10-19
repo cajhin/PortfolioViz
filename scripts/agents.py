@@ -42,7 +42,8 @@ The token is bound to that one portfolio: leave `?portfolio=` out, every route a
 - **403**: the portfolio's owner has not allowed this (AI access, writing, or this kind of change).
   **Tell your user what they would have to allow. Never try to get around it.**
 
-Start with `GET portfolios` — one entry: its `id`, `label`, `type` (`normal` or `game`), `write`.
+Start with `GET portfolios` — one entry: its `id`, `label`, `type` (`normal` or `game`), `write`
+(whether your user may change it) and `ai` — what you may do: `1` read only, `2` read and write.
 Then `GET notes`: its `brief` is your user's **special instructions** for this portfolio. They come
 before everything else here — only the trading rules and the limits above are above them. Follow
 them.
@@ -79,7 +80,8 @@ they are still unverified; an accepted transaction is your user's — ask them t
   `{{"add": "<ISIN>"}}` or `{{"remove": "<ISIN>"}}` (registered instruments only).
 - **Instruments** must be registered before a transaction can name them. Find the ISIN with
   `instrument-search`, check it with `instrument?isin=`; if it is not registered, ask your user
-  before registering it
+  before registering it (this is for a normal portfolio — in a game, a buy registers an unknown
+  ISIN by itself)
   (`POST instrument` `{{"isin", "symbol" (Yahoo), "name", "sector"}}`; `instrument-search?symbols=<ISIN>`
   lists the Yahoo symbols).
 
@@ -91,12 +93,14 @@ before your first trade.**
 - `GET quote?instrument=<ISIN>` — what a buy and a sale would get right now, or why no trade is possible
 - `POST trade` — `{{"side": "buy", "isin": "…", "eur": 2000, "reason": "…", "id": "<a fresh id>"}}`;
   `eur` is all that leaves the cash, fee included; or `"shares": 10`; a sale also `"all": true`.
-  **Always send a fresh `id`**: resending the same one never trades twice, so a retry after a
-  timeout is safe. The `reason` is kept with the trade.
+  **Always send a fresh `id`** — any string unique to this trade, e.g. a UUID: resending the same
+  one never trades twice, so a retry after a timeout is safe. The `reason` is kept with the trade.
+  An ISIN the system does not know yet is registered by the buy itself — no need to ask.
 - `GET game-status` — cash, positions valued live, result against the money put in
 - `GET chart?instrument=<ISIN, ticker or name>` — returns over 1 month to 3 years, the 52-week range,
-  volatility, the deepest drops, two years of month-end closes; several `instrument=` at once, for
-  `quote` too
+  volatility, the deepest drops, two years of month-end closes. Several `instrument=` at once, for
+  `quote` too: then the answer is `{{"quotes": [...]}}` or `{{"charts": [...]}}`, one entry each, an
+  instrument that failed with its own `"ok": false`
 - **If you trade a game as its agent**, read {base}/agents/game-agent: how a session goes, and how
   you keep your memory, strategy and journal here.
 
@@ -104,10 +108,11 @@ before your first trade.**
 
 What you keep between sessions lives on the server, so you can run anywhere: `GET notes` gives the
 owner's special instructions (`brief` — read only, and binding), your **strategy** (versioned), your
-**memory** and the newest **journal** entries. Write with `POST notes/memory {{"text"}}` (replaces it),
-`POST notes/strategy {{"text", "reason"}}` (a new version; the reason says what changed and why),
-`POST notes/journal {{"text"}}` (appends). `GET notes/strategy?history=1` lists the versions,
-`?version=N` reads one; `GET notes/journal?limit=N`. Each at most 64,000 characters.
+**memory** and the newest **journal** entries. Write with `POST notes/memory` `{{"text": "…"}}`
+(replaces it), `POST notes/strategy` `{{"text": "…", "reason": "…"}}` (a new version — the whole
+text; the reason says what changed and why), `POST notes/journal` `{{"text": "…"}}` (appends).
+`GET notes/strategy?history=1` lists the versions, `?version=N` reads one;
+`GET notes/journal?limit=N`. Each at most 64,000 characters.
 
 ## How to behave
 
@@ -150,6 +155,11 @@ rules stand above them. Where they say nothing:
 
 ## A session
 
+**Only during market hours.** Trading is live, so a session is only worth running while something
+can be traded: gettex is open weekdays 08:00–22:00 German time (home exchanges only in their own
+sessions — `quote` says whether an instrument can be traded now, and when). Outside those hours, do
+nothing — no research, no trades, no notes — and end the session.
+
 1. `GET notes` — your owner's special instructions, your strategy, memory and recent journal
 2. `GET game-status` — cash, positions, result so far
 3. Look back: what did you decide, and what has happened since?
@@ -179,13 +189,32 @@ on the page; `POST import-csv?action=discard` withdraws every row not yet accept
 """
 
 
+# trading-rules.md is written for trade.py's command line; an agent over HTTP reads it in its own
+# terms. Every phrase must still be in the file — a reworded rule would otherwise stay in trade.py's
+# words without anyone noticing, so a miss fails loudly instead.
+HTTP_TERMS = [
+    ("The rules `trade.py` enforces on every game portfolio.", "The rules every trade on a game portfolio is held to."),
+    ("**`trade.py quote <instrument> [<instrument> ...]`** shows", "**`GET quote?instrument=<ISIN>`** (several `instrument=` at once) shows"),
+    ("`trade.py status` says which", "`GET game-status` says which"),
+    ("`buy --eur X` spends exactly X", "`\"eur\": X` spends exactly X"),
+    ("`--eur 2000` buys €1,990", "`\"eur\": 2000` buys €1,990"),
+    ("`buy --shares N` buys N shares", "`\"shares\": N` buys N shares"),
+    ("| `buy --eur 2000` |", "| buy, `\"eur\": 2000` |"),
+    ("| `buy --shares 10` at €150 |", "| buy, `\"shares\": 10` at €150 |"),
+    ("`trade.py status` reports the portfolio's **result**", "`GET game-status` reports the portfolio's **result**"),
+]
+
+
 def rules():
-    """trading-rules.md, with what its trade.py commands are over HTTP."""
+    """trading-rules.md, in HTTP's terms: GET quote and game-status, POST trade's "eur" and "shares"."""
     with open(os.path.join(ROOT, "trading-rules.md"), encoding="utf-8") as fh:
         text = fh.read()
+    for cli, http in HTTP_TERMS:
+        if cli not in text:
+            raise ValueError(f"trading-rules.md no longer says {cli!r} — update agents.HTTP_TERMS")
+        text = text.replace(cli, http)
     title, _, rest = text.partition("\n")
-    return (f"{title}\n\nOver HTTP: `trade.py quote` is `GET quote?instrument=<ISIN>`, `trade.py status` "
-            "is `GET game-status`, and a buy or sell is `POST trade` (see agents.md).\n" + rest)
+    return (f"{title}\n\nA buy or sell is `POST trade` (see agents.md); the amounts below are its fields.\n" + rest)
 
 
 if __name__ == "__main__":

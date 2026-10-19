@@ -425,6 +425,22 @@
     background: var(--surface-1); color: var(--text-primary); width: min(360px, calc(100vw - 32px));
   }
   .liveedit { width: min(400px, calc(100vw - 32px)); }
+  .liveedit.rulesdlg { width: min(860px, calc(100vw - 32px)); max-height: 86vh; }
+  #rulesClose { appearance: none; border: 0; background: transparent; cursor: pointer;
+                color: var(--text-secondary); font-size: 1rem; line-height: 1; padding: 4px; }
+  /* the rules' Markdown, as renderMarkdown makes it */
+  .rulesbody { padding: 0 22px 20px; overflow: auto; max-height: calc(86vh - 60px); font-size: 0.9rem;
+               line-height: 1.5; color: var(--text-primary); }
+  .rulesbody h1 { display: none; }                       /* the dialog's own title says it */
+  .rulesbody h2 { font-size: 1rem; margin: 18px 0 6px; }
+  .rulesbody h3 { font-size: 0.92rem; margin: 14px 0 4px; }
+  .rulesbody p, .rulesbody ul, .rulesbody ol { margin: 6px 0; }
+  .rulesbody li { margin: 3px 0; }
+  .rulesbody code { font-size: 0.85em; padding: 0 3px; border: 1px solid var(--border); border-radius: 4px; }
+  .rulesbody table { border-collapse: collapse; margin: 8px 0; font-size: 0.85rem; }
+  .rulesbody th, .rulesbody td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+  .rulesbody th:empty { display: none; }
+  .rulelink { color: inherit; text-decoration: underline; cursor: pointer; }
   .colorpicker::backdrop, .liveedit::backdrop { background: rgba(0, 0, 0, .45); }
   .colorpicker header, .liveedit header { display: flex; align-items: flex-start; justify-content: space-between;
                         gap: 16px; padding: 16px 18px 6px; }

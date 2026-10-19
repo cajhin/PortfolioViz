@@ -207,7 +207,9 @@ is closed and gettex is open; otherwise at Yahoo's latest price. Charts, history
 on Yahoo's closes. A trade costs a €10 fee, on top of the spread — gettex's own, or 1% each way at
 the home exchange, which has no bid/ask; a sale also pays 20% tax on its gain. Cash can never go
 below zero: buys (fee included) and withdrawals are refused past it. The rules, with examples, are
-`trading-rules.md` — keep it in step with `trade.py`'s FEE_FIXED/TAX_RATE. `buy --eur` is the total
+`trading-rules.md` — keep it in step with `trade.py`'s FEE_FIXED/TAX_RATE, and its command-line
+wording with `agents.py`'s HTTP_TERMS, which turns it into `/agents/game-rules` (a miss fails
+loudly). `buy --eur` is the total
 that leaves the portfolio's cash, fee included. Trades land in the ledger like hand-entered ones
 (their `--reason` in its description), and the page shows them, but neither it nor `manual_tx.py`
 can change them: a game's only way in is these two scripts.

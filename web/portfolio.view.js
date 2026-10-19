@@ -3140,6 +3140,7 @@ async function show(view) {
   document.getElementById('closedPositionsCard').hidden = view !== 'positions';
   document.getElementById('tradesCard').hidden = view !== 'trades';
   document.getElementById('watchCard').hidden = view !== 'watch';
+  document.getElementById('gameTrade').hidden = view !== 'trades' || !GAME_TRADE;
   document.getElementById('notesCard').hidden = view !== 'trades' || !NOTES_SHOWN;
   document.getElementById('publicCard').hidden = view !== 'watch' || !PUBLIC_COUNT;
   document.getElementById('configCard').hidden = view !== 'config';
@@ -3714,7 +3715,7 @@ const TYPE_TEXT = {
             create: 'Regular portfolio, editable',
             how: 'Add transactions by hand, import a Trade Republic export, or paste them as CSV, below.' },
   game:   { note: label => `${label} is a game: you cannot edit the past, only buy and sell now, at a live ` +
-                           'price under trading-rules.md.',
+                           'price under the RULES.',
             tag: '· game — no edits, only buy and sell now',
             create: 'You cannot edit the past, only buy and sell now — starts with €10.000',
             how: 'It is a game: buy and sell now, below.' },
@@ -3725,9 +3726,17 @@ function applyPortfolioType(me) {
   document.getElementById('txImport').hidden = !normal;
   document.getElementById('txAdd').hidden = !normal;
   document.getElementById('txAddRow').hidden = !normal;
-  document.getElementById('gameTrade').hidden = normal || me.write === false;
+  GAME_TRADE = !normal && me.write !== false;
+  document.getElementById('gameTrade').hidden = VIEW !== 'trades' || !GAME_TRADE;
   const note = document.getElementById('txSourceNote');
-  note.textContent = text.note(me.label || PORTFOLIO);
+  // the game note's "trading rules" is a link to them (see openRules), so it is built, not set as text
+  const [before, after] = text.note(me.label || PORTFOLIO).split('RULES');
+  note.replaceChildren(before);
+  if (after !== undefined) {
+    const a = Object.assign(document.createElement('a'), { href: '#', className: 'rulelink', textContent: 'trading rules' });
+    a.addEventListener('click', e => { e.preventDefault(); openRules(); });
+    note.append(a, after);
+  }
   note.hidden = !note.textContent;
   // both need the portfolio, which is not known before this — a plain address only learns it from
   // the default setting, after the page's first requests
@@ -3738,8 +3747,7 @@ function applyPortfolioType(me) {
   pub.checked = !!me.public;
   pub.disabled = me.write === false;
   document.getElementById('publicRow').hidden = false;
-  // AI access: 0 none, 1 read-only, 2 read-write (an older server said true for any access)
-  const level = me.ai === true ? 2 : +me.ai || 0;
+  const level = aiLevel(me);
   ['aiRead', 'aiWrite'].forEach((id, i) => {
     const box = document.getElementById(id);
     box.checked = level > i;
@@ -3766,14 +3774,18 @@ function applyPortfolioType(me) {
 // agent's, shown as they are. The brief — the owner's special instructions to it — is edited on the
 // Config tab, under the AI checkbox. Every strategy version is kept:
 // pick one, and what changed since the one before it (or any other) shows line by line.
-let NOTES_SHOWN = false, NOTES_WRITE = false;
+let NOTES_SHOWN = false, NOTES_WRITE = false, NOTES_ME = null;
+// AI access as a level — 0 none, 1 read-only, 2 read-write (an older server said true for any)
+const aiLevel = me => me.ai === true ? 2 : +me.ai || 0;
 function renderNotes(me) {
+  NOTES_ME = me;
   NOTES_WRITE = me.write !== false;
   fetch(`notes?portfolio=${encodeURIComponent(PORTFOLIO)}`, { cache: 'no-store' })
     .then(r => r.ok ? r.json() : null).catch(() => null)
     .then(n => {
       if (!n) return;
-      NOTES_SHOWN = me.type === 'game' || !!(n.strategy || n.memory || n.journal.length);
+      // an agent's section, so only while an agent may work here: AI access read-write
+      NOTES_SHOWN = aiLevel(me) >= 2 && (me.type === 'game' || !!(n.strategy || n.memory || n.journal.length));
       document.getElementById('notesCard').hidden = VIEW !== 'trades' || !NOTES_SHOWN;
       const brief = document.getElementById('noteBrief');
       brief.value = n.brief ? n.brief.text : '';
@@ -3855,6 +3867,87 @@ document.getElementById('noteBriefSave').addEventListener('click', async () => {
   }
 });
 
+// A game's trading rules in a large dialog: the text the agents read (server.py's /agents/game-rules,
+// trading-rules.md in HTTP's terms), less its one line for agents, as formatted Markdown.
+const rulesDialog = document.getElementById('rulesDialog');
+document.getElementById('rulesClose').addEventListener('click', () => rulesDialog.close());
+async function openRules() {
+  const body = document.getElementById('rulesBody');
+  if (!body.childElementCount) {
+    try {
+      const r = await fetch('agents/game-rules', { cache: 'no-store' });
+      if (!r.ok) throw new Error(routeFailure(r));
+      const md = (await r.text()).split('\n').filter(l => !l.includes('`POST trade`')).join('\n');
+      body.replaceChildren(...renderMarkdown(md));
+    } catch (err) {
+      body.textContent = `The rules could not be loaded: ${err.message}`;
+    }
+  }
+  rulesDialog.showModal();
+}
+// Just the Markdown the rules are written in: # headings, paragraphs, - and 1. lists (nested by
+// indent), | tables |, **bold** and `code`. Text goes in as text — markup only from what is parsed.
+function renderMarkdown(md) {
+  const inline = text => {
+    const out = [];
+    for (const part of text.split(/(\*\*[^*]+\*\*|`[^`]+`)/)) {
+      if (part.startsWith('**') && part.endsWith('**') && part.length > 4)
+        out.push(Object.assign(document.createElement('b'), { textContent: part.slice(2, -2) }));
+      else if (part.startsWith('`') && part.endsWith('`') && part.length > 2)
+        out.push(Object.assign(document.createElement('code'), { textContent: part.slice(1, -1) }));
+      else if (part) out.push(document.createTextNode(part));
+    }
+    return out;
+  };
+  const el = (tag, text) => { const e = document.createElement(tag); if (text !== undefined) e.append(...inline(text)); return e; };
+  const blocks = [], lines = md.split('\n');
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    const h = line.match(/^(#{1,3})\s+(.*)/);
+    if (h) { blocks.push(el(`h${h[1].length}`, h[2])); i++; continue; }
+    if (line.trim().startsWith('|')) {                       // a table: header, separator, rows
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) rows.push(lines[i++]);
+      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      const table = document.createElement('table');
+      rows.forEach((r, n) => {
+        if (n === 1 && /^[\s|:-]+$/.test(r)) return;
+        const tr = document.createElement('tr');
+        cells(r).forEach(c => tr.append(el(n === 0 ? 'th' : 'td', c)));
+        table.append(tr);
+      });
+      blocks.push(table);
+      continue;
+    }
+    if (/^\s*([-*]|\d+\.)\s/.test(line)) {                  // a list, nested by indentation
+      // the items first, each with its continuation lines — a **bold** may run across a line break
+      const items = [];
+      while (i < lines.length && lines[i].trim() && (/^\s*([-*]|\d+\.)\s/.test(lines[i]) || /^\s{2,}\S/.test(lines[i]))) {
+        const l = lines[i++], item = l.match(/^\s*([-*]|\d+\.)\s+(.*)/);
+        if (item) items.push({ indent: l.search(/\S/), ordered: /\d/.test(item[1]), text: item[2] });
+        else if (items.length) items[items.length - 1].text += ' ' + l.trim();
+      }
+      const root = el(items[0].ordered ? 'ol' : 'ul'), stack = [{ list: root, indent: items[0].indent }];
+      for (const it of items) {
+        while (stack.length > 1 && it.indent < stack[stack.length - 1].indent) stack.pop();
+        if (it.indent > stack[stack.length - 1].indent) {
+          const sub = el(it.ordered ? 'ol' : 'ul');
+          (stack[stack.length - 1].list.lastChild || stack[stack.length - 1].list).append(sub);
+          stack.push({ list: sub, indent: it.indent });
+        }
+        stack[stack.length - 1].list.append(el('li', it.text));
+      }
+      blocks.push(root);
+      continue;
+    }
+    const para = [];                                         // a paragraph: until a blank line or a block
+    while (i < lines.length && lines[i].trim() && !/^(#|\s*\||\s*([-*]|\d+\.)\s)/.test(lines[i])) para.push(lines[i++].trim());
+    blocks.push(el('p', para.join(' ')));
+  }
+  return blocks;
+}
+
 // The Config tab's "Public": every other logged-in user may view this portfolio, read only. Switched
 // back if the server says no.
 document.getElementById('publicFlag').addEventListener('change', async e => {
@@ -3884,6 +3977,8 @@ async function setAiLevel(read, write) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ level: w.checked ? 2 : r.checked ? 1 : 0 }) });
     if (!res.ok) throw new Error(routeFailure(res));
+    // the agent notes under the Transactions tab show only at read-write
+    if (NOTES_ME) renderNotes({ ...NOTES_ME, ai: w.checked ? 2 : r.checked ? 1 : 0 });
   } catch (err) {
     [r.checked, w.checked] = was;
     msg.textContent = `Not changed: ${err.message}`;
@@ -4534,6 +4629,8 @@ function openTxEditor(tr, t) {
   tr.after(row);
 }
 
+// whether this portfolio gets the "Trade now" frame — a game its user may trade (applyPortfolioType)
+let GAME_TRADE = false;
 // A game's "Trade now" (see #gameTrade): no date, no price to type — trade.py's own quote and its
 // buy or sell, at a live price under trading-rules.md, through server.py's /quote and /trade. Its
 // refusals (market closed, not enough cash, more than is held) are shown as they come; a trade done
@@ -4553,8 +4650,10 @@ function refreshGameTools() {
   };
   const none = Object.assign(document.createElement('option'), { value: '', textContent: 'Choose instrument…' });
   none.disabled = none.selected = true;
+  // one the registry does not have yet: the same dialog as the Transactions tab's registers it
+  const add = Object.assign(document.createElement('option'), { value: NEW_INSTRUMENT, textContent: '+ New instrument…' });
   const mine = priced.filter(inst => held.has(inst.id));
-  sel.replaceChildren(none, ...(mine.length ? [group('Held', mine)] : []),
+  sel.replaceChildren(none, add, ...(mine.length ? [group('Held', mine)] : []),
                       group('All', priced.filter(inst => !held.has(inst.id))));
   gtModes();
 }
@@ -4571,6 +4670,18 @@ function gtModes() {
   document.getElementById('gtGo').textContent = sell ? 'Sell now' : 'Buy now';
 }
 ['gtSide', 'gtUnit'].forEach(id => document.getElementById(id).addEventListener('change', gtModes));
+let GT_PREV = '';                      // the pick before "+ New instrument…", to go back to on cancel
+// the ISIN of what is picked, beside the picker — the names alone can be alike
+const gtShowIsin = () => {
+  const v = document.getElementById('gtIsin').value;
+  document.getElementById('gtIsinText').textContent = v && v !== NEW_INSTRUMENT ? `ISIN: ${v}` : '';
+};
+document.getElementById('gtIsin').addEventListener('change', e => {
+  gtShowIsin();
+  if (e.target.value !== NEW_INSTRUMENT) { GT_PREV = e.target.value; return; }
+  INST_FOR = 'game';
+  openInstrumentDialog();
+});
 const gtLog = document.getElementById('gameTradeLog');
 const gtName = () => document.getElementById('gtIsin').selectedOptions[0]?.textContent || '';
 async function gtCall(url, init) {
@@ -4666,7 +4777,8 @@ document.getElementById('instSector').addEventListener('change', e => {
   if (![...e.target.options].some(o => o.value === name)) e.target.insertBefore(new Option(name, name), e.target.lastChild);
   e.target.value = name;
 });
-// who opened the dialog: the Transactions tab's add row ('tx') or the watchlist's ('watch')
+// who opened the dialog: the Transactions tab's add row ('tx'), the watchlist's ('watch') or a
+// game's "Trade now" ('game')
 let INST_FOR = 'tx';
 // however the dialog closes, an instrument select left on "+ New instrument…" goes back
 instDialog.addEventListener('close', () => {
@@ -4674,6 +4786,9 @@ instDialog.addEventListener('close', () => {
   if (sel.value === NEW_INSTRUMENT) sel.value = TX_ISIN_PREV;
   const watch = document.getElementById('watchIsin');
   if (watch.value === NEW_INSTRUMENT) watch.value = '';
+  const game = document.getElementById('gtIsin');
+  if (game.value === NEW_INSTRUMENT) game.value = GT_PREV;
+  gtShowIsin();
 });
 ['instClose', 'instCancel'].forEach(id =>
   document.getElementById(id).addEventListener('click', () => instDialog.close()));
@@ -4756,6 +4871,15 @@ document.getElementById('instForm').addEventListener('submit', async e => {
     if (INST_FOR === 'watch') {                       // registered for the watchlist: add it there
       instDialog.close();
       postWatch({ add: inst.id });
+      return;
+    }
+    if (INST_FOR === 'game') {                        // registered to trade: picked, ready to quote
+      const game = document.getElementById('gtIsin');
+      // after "+ New instrument…", ahead of the Held/All groups — a direct child of the picker, as
+      // insertBefore needs (the third option sits inside a group)
+      game.insertBefore(txOption(inst), game.children[2] || null);
+      game.value = GT_PREV = inst.id;
+      instDialog.close();
       return;
     }
     const sel = document.getElementById('txIsin');
