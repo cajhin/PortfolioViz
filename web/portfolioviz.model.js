@@ -1,11 +1,11 @@
 /* =============================================================================================
-   portfolio.model.js — the data and the arithmetic behind the page.
+   portfolioviz.model.js — the data and the arithmetic behind the page.
 
    NOTHING IN THIS FILE TOUCHES THE DOM. That is the line between the two scripts, and it is what
    lets the model be exercised headlessly (see check_portfolio.js). If a change here needs an
-   element, it belongs in portfolio.view.js instead.
+   element, it belongs in portfolioviz.view.js instead.
 
-   Loaded first; portfolio.view.js runs after and reads what is declared here. Both are classic
+   Loaded first; portfolioviz.view.js runs after and reads what is declared here. Both are classic
    scripts sharing one global scope — no modules, no imports, no build step.
 
    Sections, in order:
@@ -69,7 +69,7 @@ const CASH_PATH = () => portfolioPath('cash');
 const INSTRUMENTS_PATH = 'api/instruments';
 const PRICE_SOURCES_PATH = 'api/price-sources';
 // Hand- or picker-assigned sector colours — an override layer, not a full palette: a sector
-// absent from this table still gets the built-in golden-angle/hand-picked hue in portfolio.view.js.
+// absent from this table still gets the built-in golden-angle/hand-picked hue in portfolioviz.view.js.
 // Read there, not by ingest() below, since colour is a view concern, not model state.
 const SECTOR_COLORS_PATH = 'api/sector-colors';
 // Prices are derived: reproducible from the registry's price sources by update_prices.py.
@@ -87,7 +87,7 @@ const LIVE_PATH = 'api/live';
 
 /* ---------- state ----------
    Every mutable global on the page. Only ingest() and build() below, and the control handlers
-   in portfolio.view.js, ever write them; everything else reads.
+   in portfolioviz.view.js, ever write them; everything else reads.
 
    ITEMS / CLOSED are the open and sold positions — the objects every renderer consumes.
    TRADES is the raw activity log, and the three Maps are lookup tables read straight off their
@@ -1294,7 +1294,7 @@ const EMPTY_PORTFOLIO_MSG = 'no rows with a positive value';
 /* ---------- ingest ----------
    the settings (already merged with the portfolio's own, see mergeConfig) plus the eight CSV texts
    in — cash the seventh, empty for a Parqet portfolio; live the eighth, empty outside a
-   pre-market or a European session — the whole model out. Called by load() in portfolio.view.js,
+   pre-market or a European session — the whole model out. Called by load() in portfolioviz.view.js,
    which renders what this leaves behind; nothing here touches the page. */
 function ingest(configText, text, tradesText, instrumentsText, sourcesText, benchText, latestText, cashText, liveText) {
   // malformed or missing settings keep the built-in defaults rather than failing the page —

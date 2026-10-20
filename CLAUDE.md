@@ -7,11 +7,11 @@ lives in one SQLite database, `data/portfolio.db`.
 
 ```
 web/                    the page — all the server serves besides its routes
-  portfolio.html          markup only; loads the css and the two scripts, in that order
+  portfolioviz.html       markup only; loads the css and the two scripts, in that order
   login.html              log in or create a user — server.py's login, see **Users**
-  portfolio.css
-  portfolio.model.js      data and arithmetic — never touches the DOM
-  portfolio.view.js       everything that reads or writes the page
+  portfolioviz.css
+  portfolioviz.model.js   data and arithmetic — never touches the DOM
+  portfolioviz.view.js    everything that reads or writes the page
 check_portfolio.js      regression check for both scripts (see below)
 start.sh                checks the port, runs scripts/server.py, opens the page
 scripts/                every Python script; each finds the repo as its own folder's parent, so it
@@ -241,7 +241,7 @@ schema change, try it on a copy of prod's latest backup here (`$PORTFOLIO_DB`, c
 Never copy dev's database to prod.
 
 The two scripts are classic `<script>` tags sharing one global scope — no modules, no imports.
-`portfolio.model.js` loads first and declares the state; `portfolio.view.js` reads it. The
+`portfolioviz.model.js` loads first and declares the state; `portfolioviz.view.js` reads it. The
 dependency arrow points one way: **the model never calls into the view.** Keep it that way — it
 is what lets the model be exercised without a browser.
 
@@ -250,7 +250,7 @@ is what lets the model be exercised without a browser.
 `fetch` is blocked on `file://`, so the page must be served:
 
 ```bash
-./start.sh                         # serves on 8000 and opens portfolio.html
+./start.sh                         # serves on 8000 and opens portfolioviz.html
 ./start.sh 8080 -n                 # another port, no browser
 ```
 

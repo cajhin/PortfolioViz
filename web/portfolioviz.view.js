@@ -1,7 +1,7 @@
 /* =============================================================================================
-   portfolio.view.js — everything that reads or writes the page.
+   portfolioviz.view.js — everything that reads or writes the page.
 
-   Runs after portfolio.model.js and reads its state and helpers directly (one shared global
+   Runs after portfolioviz.model.js and reads its state and helpers directly (one shared global
    scope; no modules). The model never calls into here — the arrow points one way.
 
    Sections, in order:
@@ -3516,7 +3516,7 @@ function load(...texts) {
   ['tbl', 'tblClosedPositions', 'tblTrades', 'tblWatch'].forEach(makeSortable);
   // the settings only ever change one thing a browser has no other way to pick up early: the date
   // pickers' own native floor — which syncAsOfControls writes, along with the rest of their state,
-  // from the range as it now stands. (The mode switch's own text is fixed; see portfolio.html.)
+  // from the range as it now stands. (The mode switch's own text is fixed; see portfolioviz.html.)
   syncAsOfControls();
   renderMeta(ITEMS, CLOSED);
   show(VIEW);

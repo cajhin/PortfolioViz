@@ -1,5 +1,5 @@
 #!/bin/sh
-# Serve the page (web/) so portfolio.html can fetch its data — fetch is blocked on file://.
+# Serve the page (web/) so portfolioviz.html can fetch its data — fetch is blocked on file://.
 #
 #   ./start.sh          serve on 8000 and open the page
 #   ./start.sh 8080     serve on another port
@@ -40,7 +40,7 @@ if command -v lsof >/dev/null 2>&1 && lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null
     exit 1
 fi
 
-url="http://localhost:$port/portfolio.html"
+url="http://localhost:$port/portfolioviz.html"
 echo "Serving $(pwd) at $url"
 
 if [ "$open_browser" -eq 1 ] && command -v open >/dev/null 2>&1; then

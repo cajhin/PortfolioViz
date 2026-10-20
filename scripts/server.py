@@ -48,7 +48,7 @@ WEB = os.path.join(ROOT, "web")                  # the static half: the page and
 #
 # GET /live-index?symbol=... — the header's live-index widget. A browser page cannot call
 # Yahoo's chart API directly (no CORS allowance there — the same reason update_prices.py runs
-# server-side rather than from portfolio.view.js), so this fetches it here and hands back just
+# server-side rather than from portfolioviz.view.js), so this fetches it here and hands back just
 # the day's 5-minute bars. Nothing is written to disk — the whole point of this route is that
 # it has no memory between requests, unlike every other price this page ever shows. Pre- and
 # post-market bars are included where Yahoo has them (US stocks and ETFs; not indices).
@@ -208,7 +208,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
             db.close()
 
     # The page's own files carry only Last-Modified, which lets a browser guess they are still fresh
-    # and reuse an old portfolio.html with a new portfolio.view.js — whose elements it then lacks.
+    # and reuse an old portfolioviz.html with a new portfolioviz.view.js — whose elements it then lacks.
     # "no-cache" makes it ask every time (an unchanged file is a cheap 304), unless a route has said
     # otherwise.
     def send_header(self, keyword, value):
@@ -816,7 +816,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
         # correctly behind a proxy that mounts this server under a sub-path.
         if urllib.parse.urlparse(self.path).path == "/":
             self.send_response(302)
-            self.send_header("Location", "portfolio.html")
+            self.send_header("Location", "portfolioviz.html")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

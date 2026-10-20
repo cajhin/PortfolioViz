@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /*
- * Regression check for portfolio.html. No dependencies — plain `node check_portfolio.js`.
+ * Regression check for portfolioviz.html. No dependencies — plain `node check_portfolio.js`.
  *
  *   node check_portfolio.js --save     record the current output as the baseline
  *   node check_portfolio.js            re-run and diff against that baseline
  *   node check_portfolio.js --portfolio test [--save]   the same, for another portfolio
  *
- * How it works: the scripts portfolio.html loads are concatenated in page order and run in a vm
+ * How it works: the scripts portfolioviz.html loads are concatenated in page order and run in a vm
  * context against a mini DOM defined below and the real data: data/portfolio.db, read through the same
  * scripts/api.py that server.py answers the page's api/ routes with. Add a
  * <script src> to the page and it is picked up here automatically. It then dumps
@@ -33,7 +33,7 @@ const { spawnSync } = require('child_process');
 
 const ROOT = __dirname;
 const WEB = path.join(ROOT, 'web');                         // the page and its scripts
-const PAGE = path.join(WEB, 'portfolio.html');
+const PAGE = path.join(WEB, 'portfolioviz.html');
 const SAVE = process.argv.includes('--save');
 // no --portfolio means the page's own default (config.json's defaultPortfolio), against the plain
 // baseline; a named one gets a baseline of its own, since each portfolio's figures differ
@@ -41,7 +41,7 @@ const PORTFOLIO_ARG = process.argv.includes('--portfolio') ? process.argv[proces
 const BASELINE = path.join(ROOT, 'baselines', PORTFOLIO_ARG ? `check_baseline.${PORTFOLIO_ARG}.json` : 'check_baseline.json');
 
 /* ---------- the page's scripts, plus a few hooks into their scope ----------
-   Concatenated in the order portfolio.html loads them, which is also the order they depend on.
+   Concatenated in the order portfolioviz.html loads them, which is also the order they depend on.
    `let`/`const` at the top level of a vm script are not reachable from outside it, so the hooks
    have to be appended to the source itself, where they close over everything. */
 const SCRIPTS = [...fs.readFileSync(PAGE, 'utf8').matchAll(/<script src="([^"]+)"><\/script>/g)]
