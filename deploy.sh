@@ -9,6 +9,7 @@
 # aren't in the transfer (including the database) are left in place.
 # Remote database commands run as jjj; restarting the system service needs sudo.
 # Uses the production service portfolioviz and its local port 8000.
+# All steps share one SSH login; the connection is closed when the script exits.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -23,6 +24,10 @@ case "${1:-}" in
 esac
 [ "$#" -le 1 ] || { echo "usage: $0 [-n|--dry-run]" >&2; exit 2; }
 
+printf "%s" "This script copies the dev system (only checked in files) to host 'cube' (any key to continue)"
+IFS= read -r -s -n 1 || exit 1
+printf '\n'
+
 echo "Checking the local Git working tree"
 status=$(git status --porcelain --untracked-files=all)
 if [ -n "$status" ]; then
@@ -32,15 +37,25 @@ if [ -n "$status" ]; then
 fi
 
 command -v rsync >/dev/null 2>&1 || { echo "deploy: rsync not found" >&2; exit 1; }
-manifest=$(mktemp)
-trap 'rm -f "$manifest"' EXIT
+# A short, private path keeps the SSH control socket within platform limits.
+deploy_tmp=$(mktemp -d /tmp/portfolioviz-deploy.XXXXXX)
+manifest="$deploy_tmp/files"
+ssh_args=(-o ControlMaster=auto -o ControlPersist=60 -o "ControlPath=$deploy_tmp/control")
+cleanup() {
+    result=$?
+    ssh "${ssh_args[@]}" -O exit jjj@cube >/dev/null 2>&1 || true
+    rm -f "$manifest" "$deploy_tmp/control"
+    rmdir "$deploy_tmp" || true
+    exit "$result"
+}
+trap cleanup EXIT
 # NUL separators also handle spaces and newlines in tracked filenames.
 git ls-files -z > "$manifest"
 [ -s "$manifest" ] || { echo "deploy: no tracked files found" >&2; exit 1; }
 
 if [ "$dry" = 0 ]; then
     echo "Backing up the production database before copying files"
-    ssh jjj@cube 'bash -se' <<'REMOTE_BACKUP'
+    ssh "${ssh_args[@]}" jjj@cube 'bash -se' <<'REMOTE_BACKUP'
 set -euo pipefail
 cd /mnt/data/web/portfolioviz
 backup=$(python3 scripts/db.py backup | tail -1)
@@ -51,7 +66,7 @@ fi
 
 printf 'Copying Git-tracked working files to %s\n' "$target"
 rsync -a --from0 --files-from="$manifest" \
-    -e ssh "${args[@]}" ./ "$target"
+    -e "ssh -o ControlMaster=auto -o ControlPersist=60 -o ControlPath=$deploy_tmp/control" "${args[@]}" ./ "$target"
 
 if [ "$dry" = 1 ]; then
     echo "Dry run: a real deploy backs up before copying, then migrates, restarts portfolioviz, and checks HTTP on cube."
@@ -59,7 +74,7 @@ if [ "$dry" = 1 ]; then
 fi
 
 echo "Migrating the production database"
-ssh jjj@cube 'bash -se' <<'REMOTE_MIGRATE'
+ssh "${ssh_args[@]}" jjj@cube 'bash -se' <<'REMOTE_MIGRATE'
 set -euo pipefail
 cd /mnt/data/web/portfolioviz
 python3 scripts/db.py config > /dev/null
@@ -67,11 +82,11 @@ REMOTE_MIGRATE
 
 echo "Restarting portfolioviz and checking production"
 # A terminal lets sudo prompt for a password when needed.
-ssh -t jjj@cube '
+ssh "${ssh_args[@]}" -t jjj@cube '
     set -eu
     sudo systemctl restart portfolioviz
     sleep 2
-    sudo systemctl is-active --quiet portfolioviz
+    systemctl is-active --quiet portfolioviz
     for path in login.html agents.md; do
         code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://127.0.0.1:8000/$path")
         printf "/%s: %s\n" "$path" "$code"

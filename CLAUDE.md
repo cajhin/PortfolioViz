@@ -240,7 +240,9 @@ Existing production files outside the transfer, including `data/portfolio.db`, r
 Before copying, the script backs up the production database with the existing production code
 and verifies the backup exists. After copying, it runs database migrations as `jjj`, restarts
 `portfolioviz` with sudo, then checks service activity and HTTP responses on cube's port 8000.
-Every step stops on failure. SSH allocates a terminal for sudo when restarting the service.
+Every step stops on failure. All steps reuse one SSH connection, closed on script exit, so
+password authentication requires one SSH password plus one sudo password. SSH allocates a
+terminal for sudo when restarting the service.
 Dry runs only preview the transfer; they do not back up, migrate, or restart.
 Before a deploy with a schema change, try it on a copy of prod's latest backup here
 (`$PORTFOLIO_DB`, check_portfolio.js). Never copy dev's database to prod.
