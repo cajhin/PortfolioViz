@@ -51,6 +51,7 @@ let SHOW_MONEY = true;              // the "Show €" switch; off replaces every
 const FMT_SHAPES = {
   money0:  () => ({ style: 'currency', currency: CCY, maximumFractionDigits: 0 }),
   money2:  () => ({ style: 'currency', currency: CCY, minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+  plain0:  () => ({ maximumFractionDigits: 0 }),
   plain2:  () => ({ minimumFractionDigits: 2, maximumFractionDigits: 2 }),
   percent: () => ({ style: 'percent', minimumFractionDigits: 1 }),
 };
@@ -87,6 +88,9 @@ const masked = () => `xxxx ${ccySymbol()}`;
 const fmtMoney = v => SHOW_MONEY ? fmt('money0').format(v) : masked();
 const fmtMoney2 = v => SHOW_MONEY ? fmt('money2').format(v) : masked();
 const fmtMoneyPre = v => SHOW_MONEY ? ccySymbol() + fmt('plain2').format(v) : masked();
+const fmtMoneyAdaptive = v => SHOW_MONEY
+  ? (Math.abs(v) > 100 ? fmt('money0') : fmt('money2')).format(v) : masked();
+const fmtSignedMoneyAdaptive = v => `${v >= 0 ? '+' : ''}${fmtMoneyAdaptive(v)}`;
 const fmtShare = v => fmt('percent').format(v);
 const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
 const fmtPP = v => (v >= 0 ? '+' : '') + v.toFixed(1) + ' pp';
@@ -385,10 +389,23 @@ function placeTip(tip, wrapEl, e) {
 function priceRows(d) {
   const rows = priceWindow(d, rangeFrom(), rangeTo());
   const paid = (d.purAbs > 0 && d.shares > 0) ? d.purAbs / d.shares : NaN;
-  return (Number.isFinite(paid) ? tipRow('Purchase price', fmtMoneyPre(paid)) : '') +
-         // "To" italicised to name the picker it comes from — this is the close on whatever the
-         // chart bar's `to` field says, not simply the latest one on file
-         (rows ? tipRow('<em>To</em> price', fmtClose(rows[rows.length - 1])) : '');
+  const end = rows && rows[rows.length - 1];
+  const priceOn = end ? end.close : NaN;
+  const priceText = end
+    ? `${fmtMoneyAdaptive(priceOn)}${SHOW_MONEY && end.raw > 0 && end.ccy && end.ccy !== CCY
+      ? ` (${foreignSymbol(end.ccy)}${(Math.abs(end.raw) > 100 ? fmt('plain0') : fmt('plain2')).format(end.raw)})`
+      : ''}`
+    : '';
+  const priceChange = Number.isFinite(paid) && Number.isFinite(priceOn) && paid > 0
+    ? tipRow('Price change', `${fmtSignedMoneyAdaptive(priceOn - paid)} (${fmtPct((priceOn - paid) / paid * 100)} ${fmtSignedMoneyAdaptive(d.gain)})`, posNeg(priceOn - paid))
+    : '';
+  if (VIEW !== 'map') {
+    return (Number.isFinite(paid) ? tipRow('Purchase price', fmtMoneyPre(paid)) : '') +
+      (end ? tipRow('<em>To</em> price', fmtClose(end)) : '');
+  }
+  return (Number.isFinite(paid) ? tipRow('Purchase price', fmtMoneyAdaptive(paid)) : '') +
+         (end ? tipRow(`Price on ${deDate(end.date)}`, priceText) : '') +
+         (VIEW === 'map' ? priceChange : '');
 }
 
 const SPARK = { w: 208, h: 46, pad: 3, max: 90 };
@@ -491,11 +508,11 @@ function attachTip(items, nodes) {
         tipRow('Share', fmtShare(d.share)) +
         tipRow(purLabel(true), fmtMoney2(d.pur)) +
         tipRow(posCurLabel(d), fmtMoney2(d.cur)) +
+        (d.state === 'flat' ? '' :
+          tipRow(VIEW === 'map' && rangeFrom() ? 'Change' : MODE === 'rel' ? 'Ahead by' : rangeFrom() ? 'Over the range' : 'Unrealised',
+                 `${fmtMoney2(d.gain)} (${fmtPct(d.ret)})`, posNeg(d.gain))) +
         priceRows(d) +
         (d.divHeld > 0 ? tipRow('Dividends', fmtMoney2(d.divHeld), 'income') : '') +
-        (d.state === 'flat' ? '' :
-          tipRow(MODE === 'rel' ? 'Ahead by' : rangeFrom() ? 'Over the range' : 'Unrealised',
-                 `${fmtMoney2(d.gain)} (${fmtPct(d.ret)})`, posNeg(d.gain))) +
         tipIrrRow(d, 'Annualised (CAGR)') +
         (Math.abs(d.relPre) > 0.005
           ? tipSaleRows(d) +
@@ -5038,6 +5055,7 @@ const liveRedraws = [];
 function renderLiveIndex(elId, symbol, name) {
   const el = document.getElementById(elId);
   const gainEl = el.querySelector('.liveindex-gain');
+  const statusEl = el.querySelector('.liveindex-status');
   const svg = el.querySelector('svg');
   const tip = document.getElementById('liveTip');
   // whichever card this tile actually lives in, not a hardcoded one — placeTip's math is
@@ -5061,9 +5079,13 @@ function renderLiveIndex(elId, symbol, name) {
       data = await r.json();
       if (data.error) throw new Error(data.error);
     } catch (err) {
-      reportError('live index', err);
+      statusEl.textContent = 'UPDATE FAILED';
+      statusEl.classList.add('failed');
+      console.error('live index', err);
       return;
     }
+    statusEl.textContent = 'LIVE';
+    statusEl.classList.remove('failed');
     // indices, not just the values — fromTime/toTime below need the same two ticks' own
     // timestamps, not just their closes
     const openIdx = data.closes.findIndex(c => c != null);
@@ -5249,6 +5271,7 @@ function rebuildLiveTickers() {
     tile.innerHTML =
       `<div class="liveindex-info">` +
         `<div class="liveindex-symbol">${t.label}</div>` +
+        `<span class="liveindex-status">LIVE</span>` +
         `<div class="liveindex-gain"></div>` +
       `</div>` +
       `<svg class="liveindex-chart" viewBox="0 0 100 28" preserveAspectRatio="none"></svg>`;

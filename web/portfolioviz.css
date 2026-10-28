@@ -147,6 +147,9 @@
   .liveindex { cursor: help; display: flex; align-items: center; gap: 10px; }
   .liveindex-info { flex: 0 0 auto; }
   .liveindex-symbol { font-size: 1rem; font-weight: 600; color: var(--text-primary); }
+  .liveindex-status { display: block; color: var(--text-muted); font-size: 0.62rem; font-weight: 600;
+                      letter-spacing: 0.04em; line-height: 1.2; }
+  .liveindex-status.failed { color: var(--loss); }
   .liveindex-gain { display: block; font-size: 0.78rem; font-weight: 500; font-variant-numeric: tabular-nums; }
   .liveindex-chart { display: block; flex: 1 1 auto; min-width: 0; height: 28px; }
   .liveindex-chart .zero { stroke: var(--border); stroke-width: 1; }
