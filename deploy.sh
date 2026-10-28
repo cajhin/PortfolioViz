@@ -1,96 +1,81 @@
 #!/usr/bin/env bash
-# Update this host's Portfolioviz to what is on origin/main — for prod, where the database must stay
-# intact. Code comes from git, fast-forward only; the data (data/portfolio.db) is never replaced,
-# only migrated in place, after a backup.
+# Run on dev to copy the working versions of Git-tracked files to production.
+# Requires rsync locally and on cube, and SSH access to jjj@cube.
 #
-#   ./deploy.sh            back up, pull, migrate, restart the service, check it answers
-#   ./deploy.sh -n         only show what would change (the commits), touch nothing
+#   ./deploy.sh       check clean Git, back up prod, copy, migrate, restart, check
+#   ./deploy.sh -n    preview the transfer
 #
-#   PORTFOLIOVIZ_SERVICE   the systemd unit to restart (default: portfolioviz)
-#   PORTFOLIOVIZ_SYSTEMCTL how to call systemctl (default: "sudo systemctl"; "systemctl --user" for a
-#                          user unit)
-#   PORTFOLIOVIZ_PORT      where the server listens, for the check afterwards (default: 8000)
-#   PORTFOLIO_BACKUP_DIR   where the backup goes, if not db.py's own NAS paths (on cube:
-#                          /mnt/data/nas/bkp/portfolioviz)
-#
-# Steps, each stopping the deploy on failure:
-#   1. refuse unless on main with no local changes to tracked files — prod is never edited in place
-#   2. git fetch; nothing new: done
-#   3. scripts/db.py backup — a consistent copy to the NAS, made by the *old* code, before anything
-#   4. git pull --ff-only
-#   5. migrate now (any script opening the database does it) — so a failure shows here, not on the
-#      first page request
-#   6. restart the service, check it is active and answers
-# Rollback — the old commit and that backup, together (migrations only go forward): printed at the end.
+# Git metadata and untracked files are excluded. Existing production files that
+# aren't in the transfer (including the database) are left in place.
+# Remote database commands run as jjj; restarting the system service needs sudo.
+# Uses the production service portfolioviz and its local port 8000.
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-service=${PORTFOLIOVIZ_SERVICE:-portfolioviz}
-systemctl=${PORTFOLIOVIZ_SYSTEMCTL:-sudo systemctl}
-port=${PORTFOLIOVIZ_PORT:-8000}
+target='jjj@cube:/mnt/data/web/portfolioviz/'
+args=(--itemize-changes)
 dry=0
 case "${1:-}" in
-    -n|--dry-run) dry=1 ;;
+    -n|--dry-run) args+=(--dry-run); dry=1 ;;
     "") ;;
-    *) echo "usage: $0 [-n]" >&2; exit 2 ;;
+    *) echo "usage: $0 [-n|--dry-run]" >&2; exit 2 ;;
 esac
+[ "$#" -le 1 ] || { echo "usage: $0 [-n|--dry-run]" >&2; exit 2; }
 
-say() { printf '\n== %s\n' "$*"; }
-schema() { python3 scripts/db.py query "SELECT value FROM meta WHERE key = 'schema_version'" 2>/dev/null \
-           | python3 -c 'import json, sys; r = json.load(sys.stdin); print(r[0]["value"] if r else "?")' 2>/dev/null || echo "?"; }
-
-say "checking the work tree"
-branch=$(git rev-parse --abbrev-ref HEAD)
-[ "$branch" = main ] || { echo "on branch $branch, not main — refusing" >&2; exit 1; }
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-    git status --short --untracked-files=no
-    echo "local changes to tracked files — prod is not edited in place; commit them elsewhere or" \
-         "'git restore' them, then deploy again" >&2
+echo "Checking the local Git working tree"
+status=$(git status --porcelain --untracked-files=all)
+if [ -n "$status" ]; then
+    printf '%s\n' "$status" >&2
+    echo "deploy: local Git working tree is not clean — commit or stash changes before deploying" >&2
     exit 1
 fi
 
-say "fetching"
-git fetch --quiet origin main
-old=$(git rev-parse HEAD)
-new=$(git rev-parse origin/main)
-if [ "$old" = "$new" ]; then echo "already at origin/main ($(git log -1 --format='%h %s'))"; exit 0; fi
-git merge-base --is-ancestor "$old" "$new" \
-    || { echo "origin/main is not ahead of this checkout (diverged?) — refusing" >&2; exit 1; }
-echo "$(git rev-list --count "$old..$new") new commit(s):"
-git log --oneline "$old..$new"
-[ "$dry" = 1 ] && { echo; echo "(dry run — nothing changed)"; exit 0; }
+command -v rsync >/dev/null 2>&1 || { echo "deploy: rsync not found" >&2; exit 1; }
+manifest=$(mktemp)
+trap 'rm -f "$manifest"' EXIT
+# NUL separators also handle spaces and newlines in tracked filenames.
+git ls-files -z > "$manifest"
+[ -s "$manifest" ] || { echo "deploy: no tracked files found" >&2; exit 1; }
 
-say "backing up the database"
-schema_old=$(schema)
-backup=$(python3 scripts/db.py backup | tail -1)      # db.py's BACKUP_DIRS, or $PORTFOLIO_BACKUP_DIR
-[ -s "$backup" ] || { echo "no backup made ($backup) — stopping before any change" >&2; exit 1; }
-echo "$backup  (schema $schema_old)"
+if [ "$dry" = 0 ]; then
+    echo "Backing up the production database before copying files"
+    ssh jjj@cube 'bash -se' <<'REMOTE_BACKUP'
+set -euo pipefail
+cd /mnt/data/web/portfolioviz
+backup=$(python3 scripts/db.py backup | tail -1)
+[ -s "$backup" ] || { echo "deploy: no production backup made — stopping" >&2; exit 1; }
+printf 'Production backup: %s\n' "$backup"
+REMOTE_BACKUP
+fi
 
-say "pulling"
-git pull --ff-only --quiet origin main
-echo "now at $(git log -1 --format='%h %s')"
+printf 'Copying Git-tracked working files to %s\n' "$target"
+rsync -a --from0 --files-from="$manifest" \
+    -e ssh "${args[@]}" ./ "$target"
 
-say "migrating"
-python3 scripts/db.py config > /dev/null        # opening the database migrates it
-schema_new=$(schema)
-echo "schema $schema_old -> $schema_new"
+if [ "$dry" = 1 ]; then
+    echo "Dry run: a real deploy backs up before copying, then migrates, restarts portfolioviz, and checks HTTP on cube."
+    exit 0
+fi
 
-say "restarting $service"
-$systemctl restart "$service"
-sleep 2
-$systemctl is-active --quiet "$service" || { $systemctl status "$service" --no-pager | tail -20; exit 1; }
-for path in login.html agents.md; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/$path" || true)
-    echo "/$path: $code"
-    [ "$code" = 200 ] || { echo "the server does not answer as it should — see: $systemctl status $service" >&2; exit 1; }
-done
+echo "Migrating the production database"
+ssh jjj@cube 'bash -se' <<'REMOTE_MIGRATE'
+set -euo pipefail
+cd /mnt/data/web/portfolioviz
+python3 scripts/db.py config > /dev/null
+REMOTE_MIGRATE
 
-say "done: ${old:0:7} -> ${new:0:7}, schema $schema_old -> $schema_new"
-cat <<EOF
-To roll back, code and data together (newer migrations cannot be undone by older code):
-  $systemctl stop $service
-  git reset --hard $old
-  cp '$backup' data/portfolio.db
-  $systemctl start $service
-EOF
+echo "Restarting portfolioviz and checking production"
+# A terminal lets sudo prompt for a password when needed.
+ssh -t jjj@cube '
+    set -eu
+    sudo systemctl restart portfolioviz
+    sleep 2
+    sudo systemctl is-active --quiet portfolioviz
+    for path in login.html agents.md; do
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://127.0.0.1:8000/$path")
+        printf "/%s: %s\n" "$path" "$code"
+        [ "$code" = 200 ] || exit 1
+    done
+'
+echo "Deploy complete."
